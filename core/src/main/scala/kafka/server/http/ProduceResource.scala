@@ -25,6 +25,7 @@ import jakarta.ws.rs.container.ContainerRequestContext
 import jakarta.ws.rs.core.{Context, MediaType, Response}
 import jakarta.ws.rs.{Consumes, POST, Path, PathParam, Produces}
 
+import org.apache.kafka.clients.producer.internals.BuiltInPartitioner
 import org.apache.kafka.common.TopicIdPartition
 import org.apache.kafka.common.acl.AclOperation
 import org.apache.kafka.common.compress.Compression
@@ -97,10 +98,13 @@ class ProduceResource(
     val keyBytes = Option(body).flatMap(b => Option(b.key)).map(_.getBytes(StandardCharsets.UTF_8)).orNull
     val valueBytes = Option(body).flatMap(b => Option(b.value)).map(_.getBytes(StandardCharsets.UTF_8)).orNull
 
+    // Match the binary-client default: BuiltInPartitioner uses murmur2 for
+    // keyed records, so a record produced via REST with key `k` lands on the
+    // same partition as the same key produced via KafkaProducer.
     val partition = if (keyBytes == null) {
       ThreadLocalRandom.current().nextInt(numPartitions)
     } else {
-      Math.floorMod(java.util.Arrays.hashCode(keyBytes), numPartitions)
+      BuiltInPartitioner.partitionForKey(keyBytes, numPartitions)
     }
 
     val tip = new TopicIdPartition(topicId, new TopicPartition(topic, partition))
