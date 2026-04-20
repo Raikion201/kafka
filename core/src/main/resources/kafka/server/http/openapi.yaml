@@ -1,0 +1,131 @@
+openapi: 3.0.3
+info:
+  title: Kafka HTTP REST Proxy
+  description: |
+    Embedded REST front-end for the Kafka broker. Forwards HTTP produce
+    requests through the broker's server-side produce path (AuthHelper +
+    ReplicaManager.appendRecords).
+  version: "0.1.0"
+servers:
+  - url: /
+    description: This broker
+paths:
+  /v1/topics/{name}:
+    post:
+      summary: Produce a single record to a topic
+      description: |
+        Serialises the JSON body as a single Kafka record and appends it to
+        the named topic. Partition is chosen by hashing the key
+        (`Math.floorMod(hashCode(key), numPartitions)`); keyless records go
+        to a random partition.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Topic name
+          schema:
+            type: string
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProduceBody'
+            examples:
+              withKey:
+                summary: Keyed record
+                value:
+                  key: "k1"
+                  value: "hello"
+              keyless:
+                summary: Keyless record (random partition)
+                value:
+                  value: "just a value"
+      responses:
+        '200':
+          description: Record appended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProduceResponse'
+              example:
+                partition: 2
+                offset: 47
+        '401':
+          description: Missing or invalid Basic Auth credentials
+          headers:
+            WWW-Authenticate:
+              schema:
+                type: string
+              example: 'Basic realm="kafka-rest"'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: |
+        User:pass pairs configured via `http.rest.basic.credentials` in
+        `server.properties`. If that config is empty, no auth is required
+        and this scheme is not enforced.
+  schemas:
+    ProduceBody:
+      type: object
+      properties:
+        key:
+          type: string
+          nullable: true
+          description: Optional record key. Determines partitioning.
+        value:
+          type: string
+          nullable: true
+          description: Optional record value.
+    ProduceResponse:
+      type: object
+      required: [partition, offset]
+      properties:
+        partition:
+          type: integer
+          format: int32
+          description: Partition the record landed on
+        offset:
+          type: integer
+          format: int64
+          description: Offset assigned by the broker
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code
+  responses:
+    Forbidden:
+      description: ACL denies WRITE on the topic
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "TOPIC_AUTHORIZATION_FAILED"
+    NotFound:
+      description: Topic does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "UNKNOWN_TOPIC"
+    ServerError:
+      description: Append failed in the broker
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

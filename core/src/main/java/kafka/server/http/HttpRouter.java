@@ -55,6 +55,7 @@ public final class HttpRouter {
         }
 
         config.register(new ProduceResource(replicaManager, authorizerPlugin, metadataCache, time));
+        config.register(new OpenApiResource());
 
         return config;
     }

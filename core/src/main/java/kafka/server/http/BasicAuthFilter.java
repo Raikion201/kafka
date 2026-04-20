@@ -52,6 +52,11 @@ public class BasicAuthFilter implements ContainerRequestFilter {
 
     @Override
     public void filter(ContainerRequestContext ctx) {
+        String path = ctx.getUriInfo().getPath();
+        if (path.equals("swagger") || path.equals("openapi.yaml")) {
+            return;
+        }
+
         String header = ctx.getHeaderString(HttpHeaders.AUTHORIZATION);
         if (header == null || !header.startsWith(BASIC_PREFIX)) {
             abort(ctx);
