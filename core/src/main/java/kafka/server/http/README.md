@@ -295,13 +295,3 @@ Run the REST-proxy test suite:
 | `KafkaSslContextFactoryTest`         |     5 | The bridge in isolation: `newSSLEngine` delegates to `SslFactory`, fresh engines per call, reconfigurable configs exposed, `reconfigure` flows through |
 | **Total**                            |  **31** |                                                                             |
 
-## What this doesn't do (yet)
-
-- **Batch produce** — one record per request.
-- **Consumer endpoints** — no `GET /v1/topics/{name}/records` or similar.
-- **Admin endpoints** — no topic create/describe/delete via REST; use the normal Kafka admin tooling.
-- **Quota enforcement** — HTTP produces bypass `quotaManagers.produce`. A loud REST client can outrun quota limits that apply to binary clients.
-- **Throttling** — beyond Jetty's thread pool ceiling.
-- **Connect's REST layer** — still uses the old `SslContextFactories` path. Migrating Connect to the same `SslFactory`-backed pipeline is a clean follow-up but its own review surface.
-
-These are all clean follow-ups; the scaffold here is meant to be small and reviewable.
