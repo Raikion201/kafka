@@ -108,7 +108,11 @@ class HttpRestServer(
       val sslFactory = new SslFactory(
         ConnectionMode.SERVER,
         /* clientAuthConfigOverride */ null,
-        /* keystoreVerifiableUsingTruststore */ true)
+        // REST clients are external — their certs aren't in the broker's
+        // truststore, so we can't do a mock handshake against it at startup.
+        // SslFactory still validates on every reconfigure via CertificateEntries
+        // + SslEngineValidator; that's the rotation-time safety net.
+        /* keystoreVerifiableUsingTruststore */ false)
       sslFactory.configure(configs)
       val jettyFactory = new KafkaSslContextFactory(listener, sslFactory)
       brokerConfig.addReconfigurable(jettyFactory)
