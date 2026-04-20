@@ -28,7 +28,8 @@ public class HttpServerConfigs {
     public static final String HTTP_REST_EXECUTOR_THREADS_CONFIG = "http.rest.executor.threads";
     public static final int HTTP_REST_EXECUTOR_THREADS_DEFAULT = 8;
     public static final String HTTP_REST_EXECUTOR_THREADS_DOC =
-            "The number of worker threads used by the embedded HTTP REST server to handle HTTP requests.";
+            "The number of worker threads used by the embedded HTTP REST server to handle HTTP requests. " +
+            "Must be at least 4 — Jetty needs threads for acceptors, selectors, and request handling before it will start.";
 
     public static final String HTTP_REST_BASIC_CREDENTIALS_CONFIG = "http.rest.basic.credentials";
     public static final String HTTP_REST_BASIC_CREDENTIALS_DEFAULT = "";
@@ -39,7 +40,7 @@ public class HttpServerConfigs {
 
     public static final ConfigDef CONFIG_DEF = new ConfigDef()
             .define(HTTP_REST_EXECUTOR_THREADS_CONFIG, INT, HTTP_REST_EXECUTOR_THREADS_DEFAULT,
-                    atLeast(1), MEDIUM, HTTP_REST_EXECUTOR_THREADS_DOC)
+                    atLeast(4), MEDIUM, HTTP_REST_EXECUTOR_THREADS_DOC)
             .define(HTTP_REST_BASIC_CREDENTIALS_CONFIG, PASSWORD, HTTP_REST_BASIC_CREDENTIALS_DEFAULT,
                     MEDIUM, HTTP_REST_BASIC_CREDENTIALS_DOC);
 }

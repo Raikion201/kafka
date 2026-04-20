@@ -98,7 +98,12 @@ object KafkaConfig {
   // Entries in `listeners=` that start with HTTP:// or HTTPS:// activate the embedded REST server.
   // They must be filtered out before the standard listener parser sees them, because
   // SecurityProtocol has no HTTP value.
-  private[server] val HttpListenerRegex = """^(?i)(HTTPS?)://([^:]*):(\d+)$""".r
+  //
+  // Host group accepts either:
+  //   - a bracketed IPv6 literal: [::1], [::]   (bracket form is required by RFC 3986)
+  //   - a hostname or IPv4 literal without colons: 0.0.0.0, my-host
+  //   - empty (bind all interfaces)
+  private[server] val HttpListenerRegex = """^(?i)(HTTPS?)://(\[[^\]]*\]|[^:\[]*):(\d+)$""".r
 
   case class HttpEndpoint(host: String, port: Int, isTls: Boolean)
 }
@@ -352,11 +357,13 @@ class KafkaConfig private(doLog: Boolean, val props: util.Map[_, _])
 
   def httpListeners: Seq[KafkaConfig.HttpEndpoint] =
     getList(SocketServerConfigs.LISTENERS_CONFIG).asScala.toSeq.flatMap {
-      case KafkaConfig.HttpListenerRegex(proto, host, port) =>
-        Some(KafkaConfig.HttpEndpoint(
-          host = if (host.isEmpty) "0.0.0.0" else host,
-          port = port.toInt,
-          isTls = proto.equalsIgnoreCase("HTTPS")))
+      case KafkaConfig.HttpListenerRegex(proto, rawHost, port) =>
+        // Strip the [::1]-style brackets the URI form requires for IPv6.
+        val host =
+          if (rawHost.isEmpty) "0.0.0.0"
+          else if (rawHost.startsWith("[") && rawHost.endsWith("]")) rawHost.substring(1, rawHost.length - 1)
+          else rawHost
+        Some(KafkaConfig.HttpEndpoint(host = host, port = port.toInt, isTls = proto.equalsIgnoreCase("HTTPS")))
       case _ => None
     }
 
