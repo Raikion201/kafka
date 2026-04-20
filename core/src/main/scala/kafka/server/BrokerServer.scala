@@ -502,9 +502,9 @@ class BrokerServer(
       val httpEndpoints = config.httpListeners
       if (httpEndpoints.nonEmpty) {
         httpRestServer = new kafka.server.http.HttpRestServer(
-          httpEndpoints.asJava,
+          httpEndpoints.toSeq,
           config.httpExecutorThreads,
-          config.httpBasicCredentials.asJava,
+          config.httpBasicCredentials.toMap,
           config,
           replicaManager,
           authorizerPlugin,

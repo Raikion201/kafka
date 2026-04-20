@@ -63,6 +63,8 @@ the partition is `Math.floorMod(hashCode(key), numPartitions)`.
 
 ## Examples
 
+### HTTP (no TLS)
+
 ```bash
 # Start the broker with the listener + basic auth
 cat >> server.properties <<EOF
@@ -85,6 +87,31 @@ curl -u alice:s3cret \
 bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
     --topic rest-demo --from-beginning
 # → hello
+```
+
+### HTTPS
+
+HTTPS reuses the broker's existing `ssl.keystore.*` / `ssl.truststore.*`
+configuration — no separate SSL keys for the REST server. If the broker
+already has an `SSL://` Kafka listener configured, HTTPS just works:
+
+```properties
+listeners=PLAINTEXT://localhost:9092,SSL://localhost:9094,HTTPS://0.0.0.0:8443
+http.rest.basic.credentials=alice:s3cret
+
+# Broker's standard SSL configs — also used by the HTTPS REST listener
+ssl.keystore.location=/path/to/server.keystore.jks
+ssl.keystore.password=changeit
+ssl.key.password=changeit
+ssl.truststore.location=/path/to/server.truststore.jks
+ssl.truststore.password=changeit
+```
+
+```bash
+curl -k -u alice:s3cret \
+     -H 'Content-Type: application/json' \
+     -d '{"key":"k1","value":"hello"}' \
+     https://localhost:8443/v1/topics/rest-demo
 ```
 
 ## Architecture
