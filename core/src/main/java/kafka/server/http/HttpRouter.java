@@ -16,29 +16,45 @@
  */
 package kafka.server.http;
 
+import kafka.server.ReplicaManager;
+
+import org.apache.kafka.common.internals.Plugin;
+import org.apache.kafka.common.utils.Time;
+import org.apache.kafka.metadata.MetadataCache;
+import org.apache.kafka.server.authorizer.Authorizer;
+
 import com.fasterxml.jackson.jakarta.rs.json.JacksonJsonProvider;
 
 import org.glassfish.jersey.server.ResourceConfig;
 
 import java.util.Map;
 
+import scala.Option;
+
 /**
  * Builds the Jersey {@link ResourceConfig} for the embedded HTTP REST server.
  *
  * <p>Registers the JSON provider, the Basic Auth filter (when credentials are
- * configured), and the REST resources. Resources are added in later phases.
+ * configured), and the REST resources.
  */
 public final class HttpRouter {
 
     private HttpRouter() {}
 
-    public static ResourceConfig build(Map<String, String> basicCredentials) {
+    public static ResourceConfig build(
+            Map<String, String> basicCredentials,
+            ReplicaManager replicaManager,
+            Option<Plugin<Authorizer>> authorizerPlugin,
+            MetadataCache metadataCache,
+            Time time) {
         ResourceConfig config = new ResourceConfig();
         config.register(JacksonJsonProvider.class);
 
         if (!basicCredentials.isEmpty()) {
             config.register(new BasicAuthFilter(basicCredentials));
         }
+
+        config.register(new ProduceResource(replicaManager, authorizerPlugin, metadataCache, time));
 
         return config;
     }

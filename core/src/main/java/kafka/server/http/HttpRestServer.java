@@ -17,8 +17,12 @@
 package kafka.server.http;
 
 import kafka.server.KafkaConfig;
+import kafka.server.ReplicaManager;
 
+import org.apache.kafka.common.internals.Plugin;
 import org.apache.kafka.common.utils.Time;
+import org.apache.kafka.metadata.MetadataCache;
+import org.apache.kafka.server.authorizer.Authorizer;
 
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
@@ -33,6 +37,8 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Map;
 
+import scala.Option;
+
 /**
  * Embedded HTTP REST server for the Kafka broker. Activated when {@code listeners=}
  * contains one or more {@code HTTP://} or {@code HTTPS://} entries.
@@ -45,6 +51,9 @@ public class HttpRestServer {
     private final int executorThreads;
     private final Map<String, String> basicCredentials;
     private final KafkaConfig brokerConfig;
+    private final ReplicaManager replicaManager;
+    private final Option<Plugin<Authorizer>> authorizerPlugin;
+    private final MetadataCache metadataCache;
     private final Time time;
 
     private Server jetty;
@@ -54,6 +63,9 @@ public class HttpRestServer {
             int executorThreads,
             Map<String, String> basicCredentials,
             KafkaConfig brokerConfig,
+            ReplicaManager replicaManager,
+            Option<Plugin<Authorizer>> authorizerPlugin,
+            MetadataCache metadataCache,
             Time time) {
         if (endpoints.isEmpty()) {
             throw new IllegalArgumentException("HttpRestServer requires at least one endpoint");
@@ -62,6 +74,9 @@ public class HttpRestServer {
         this.executorThreads = executorThreads;
         this.basicCredentials = basicCredentials;
         this.brokerConfig = brokerConfig;
+        this.replicaManager = replicaManager;
+        this.authorizerPlugin = authorizerPlugin;
+        this.metadataCache = metadataCache;
         this.time = time;
     }
 
@@ -85,7 +100,8 @@ public class HttpRestServer {
 
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
-        context.addServlet(new ServletHolder(new ServletContainer(HttpRouter.build(basicCredentials))), "/*");
+        context.addServlet(new ServletHolder(new ServletContainer(
+                HttpRouter.build(basicCredentials, replicaManager, authorizerPlugin, metadataCache, time))), "/*");
         jetty.setHandler(context);
 
         jetty.start();
