@@ -76,17 +76,22 @@ curl -s -k -u "${USER}:${PASS}" \
 echo ""
 
 # ─── 4. Negative paths ──────────────────────────────────────────────────
+# Every request sends application/json so we get the REAL status from our
+# handler, not a 415 from Jersey's content-type check running earlier.
 hr ; echo "[4/5] Negative cases ..."
 printf "    no auth header          "
 curl -s -o /dev/null -w "HTTP %{http_code}\n" \
+     -H 'Content-Type: application/json' \
      "http://localhost:${HTTP_PORT}/v1/topics/${TOPIC}" -d '{}'
 
 printf "    wrong password          "
 curl -s -o /dev/null -w "HTTP %{http_code}\n" -u "${USER}:wrong" \
+     -H 'Content-Type: application/json' \
      "http://localhost:${HTTP_PORT}/v1/topics/${TOPIC}" -d '{}'
 
 printf "    unknown topic           "
 curl -s -o /dev/null -w "HTTP %{http_code}\n" -u "${USER}:${PASS}" \
+     -H 'Content-Type: application/json' \
      "http://localhost:${HTTP_PORT}/v1/topics/no-such-topic" -d '{}'
 
 # ─── 5. Read back ───────────────────────────────────────────────────────

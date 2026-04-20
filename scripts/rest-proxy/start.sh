@@ -23,6 +23,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
+# Native-style path for things we write into server.properties. On Git Bash,
+# `pwd` gives /d/... which Java on Windows can't resolve; cygpath -m converts
+# to D:/... (mixed form — forward slashes, drive letter). On Linux/macOS
+# cygpath isn't present and the POSIX path is already what Java expects.
+if command -v cygpath >/dev/null 2>&1; then
+  ROOT_NATIVE="$(cygpath -m "$ROOT")"
+else
+  ROOT_NATIVE="$ROOT"
+fi
+
 # The Windows Git Bash env-var workaround — kafka-run-class.sh's default
 # CLASSPATH-filter regex contains | characters that otherwise get mangled.
 export regex='(-(test|test-sources|src|scaladoc|javadoc)\.jar|jar\.asc|connect-file.*\.jar)$'
@@ -66,13 +76,13 @@ controller.listener.names=CONTROLLER
 inter.broker.listener.name=PLAINTEXT
 listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
 
-log.dirs=$ROOT/$LOG_DIR
+log.dirs=$ROOT_NATIVE/$LOG_DIR
 num.partitions=3
 
 http.rest.basic.credentials=alice:s3cret
 http.rest.executor.threads=8
 
-ssl.keystore.location=$ROOT/$KEYSTORE
+ssl.keystore.location=$ROOT_NATIVE/$KEYSTORE
 ssl.keystore.password=changeit
 ssl.key.password=changeit
 
