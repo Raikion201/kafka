@@ -2220,6 +2220,11 @@ project(':server-common') {
     implementation libs.jacksonDatabind
     implementation libs.pcollections
     implementation libs.slf4jApi
+    // Used by SslContextFactories — shared by Connect and the broker REST
+    // proxy. Only the small jetty-util artifact is actually needed.
+    implementation (libs.jettyServer) {
+      exclude group: 'org.slf4j', module: 'slf4j-api'
+    }
 
     testImplementation project(':clients')
     testImplementation project(':clients').sourceSets.test.output
@@ -3629,6 +3634,7 @@ project(':connect:runtime') {
 
     compileOnly log4j2Libs
 
+    implementation project(':server-common')   // SslContextFactories (shared with the broker REST proxy)
     implementation libs.slf4jApi
     implementation libs.jose4j                    // for SASL/OAUTHBEARER JWT validation
     implementation libs.jacksonAnnotations

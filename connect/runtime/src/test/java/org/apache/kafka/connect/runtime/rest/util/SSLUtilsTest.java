@@ -21,6 +21,8 @@ import org.apache.kafka.common.config.types.Password;
 import org.apache.kafka.common.network.CertStores;
 import org.apache.kafka.connect.runtime.rest.RestServerConfig;
 
+import org.apache.kafka.server.http.SslContextFactories;
+
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,19 +54,6 @@ public class SSLUtilsTest {
     }
 
     @Test
-    public void testGetOrDefault() {
-        String existingKey = "exists";
-        String missingKey = "missing";
-        String value = "value";
-        String defaultValue = "default";
-        Map<String, Object> map = new HashMap<>();
-        map.put("exists", "value");
-
-        assertEquals(value, SSLUtils.getOrDefault(map, existingKey, defaultValue));
-        assertEquals(defaultValue, SSLUtils.getOrDefault(map, missingKey, defaultValue));
-    }
-
-    @Test
     public void testCreateServerSideSslContextFactory() {
         Map<String, String> configMap = new HashMap<>();
         configMap.put("ssl.keystore.location", keystorePath);
@@ -85,7 +74,7 @@ public class SSLUtilsTest {
         configMap.put("ssl.trustmanager.algorithm", "PKIX");
 
         RestServerConfig config = RestServerConfig.forPublic(null, configMap);
-        SslContextFactory.Server ssl = SSLUtils.createServerSideSslContextFactory(config);
+        SslContextFactory.Server ssl = SslContextFactories.createServerSideSslContextFactory(config);
 
         assertEquals("file://" + keystorePath, ssl.getKeyStorePath());
         assertEquals("file://" + truststorePath, ssl.getTrustStorePath());
@@ -123,7 +112,7 @@ public class SSLUtilsTest {
         configMap.put("ssl.trustmanager.algorithm", "PKIX");
 
         RestServerConfig config = RestServerConfig.forPublic(null, configMap);
-        SslContextFactory.Client ssl = SSLUtils.createClientSideSslContextFactory(config);
+        SslContextFactory.Client ssl = SslContextFactories.createClientSideSslContextFactory(config);
 
         assertEquals("file://" + keystorePath, ssl.getKeyStorePath());
         assertEquals("file://" + truststorePath, ssl.getTrustStorePath());
@@ -151,7 +140,7 @@ public class SSLUtilsTest {
         configMap.put("ssl.secure.random.implementation", "SHA1PRNG");
 
         RestServerConfig config = RestServerConfig.forPublic(null, configMap);
-        SslContextFactory.Server ssl = SSLUtils.createServerSideSslContextFactory(config);
+        SslContextFactory.Server ssl = SslContextFactories.createServerSideSslContextFactory(config);
 
         assertEquals(SslConfigs.DEFAULT_SSL_KEYSTORE_TYPE, ssl.getKeyStoreType());
         assertEquals(SslConfigs.DEFAULT_SSL_TRUSTSTORE_TYPE, ssl.getTrustStoreType());
@@ -176,7 +165,7 @@ public class SSLUtilsTest {
         configMap.put("ssl.secure.random.implementation", "SHA1PRNG");
 
         RestServerConfig config = RestServerConfig.forPublic(null, configMap);
-        SslContextFactory.Client ssl = SSLUtils.createClientSideSslContextFactory(config);
+        SslContextFactory.Client ssl = SslContextFactories.createClientSideSslContextFactory(config);
 
         assertEquals(SslConfigs.DEFAULT_SSL_KEYSTORE_TYPE, ssl.getKeyStoreType());
         assertEquals(SslConfigs.DEFAULT_SSL_TRUSTSTORE_TYPE, ssl.getTrustStoreType());

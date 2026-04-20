@@ -14,14 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.kafka.connect.runtime.rest.util;
+package org.apache.kafka.server.http;
 
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.SslConfigs;
 import org.apache.kafka.common.config.internals.BrokerSecurityConfigs;
 import org.apache.kafka.common.config.types.Password;
-import org.apache.kafka.connect.runtime.rest.RestClient;
-import org.apache.kafka.connect.runtime.rest.RestServer;
 
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 
@@ -30,15 +28,21 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * Helper class for setting up SSL for {@link RestServer} and {@link RestClient}
+ * Builds Jetty {@link SslContextFactory} instances from Kafka's standard
+ * {@code ssl.*} configs, so any broker or Kafka Connect worker that embeds
+ * Jetty can reuse the same keystore/truststore the rest of the process is
+ * already using.
+ *
+ * <p>Both Kafka Connect's REST server/client and the broker's embedded HTTP
+ * REST proxy depend on this class; it lives in {@code server-common} so
+ * there is a single implementation.
  */
-public class SSLUtils {
+public class SslContextFactories {
 
     private static final Pattern COMMA_WITH_WHITESPACE = Pattern.compile("\\s*,\\s*");
 
-
     /**
-     * Configures SSL/TLS for HTTPS Jetty Server using configs with the given prefix
+     * Configures SSL/TLS for an HTTPS Jetty server using configs with the given prefix.
      */
     public static SslContextFactory.Server createServerSideSslContextFactory(AbstractConfig config, String prefix) {
         Map<String, Object> sslConfigValues = config.valuesWithPrefixAllOrNothing(prefix);
@@ -54,14 +58,16 @@ public class SSLUtils {
     }
 
     /**
-     * Configures SSL/TLS for HTTPS Jetty Server
+     * Configures SSL/TLS for an HTTPS Jetty server using configs under the
+     * {@code listeners.https.} prefix (with fallback to the unprefixed
+     * broker/worker ssl.* configs).
      */
     public static SslContextFactory.Server createServerSideSslContextFactory(AbstractConfig config) {
         return createServerSideSslContextFactory(config, "listeners.https.");
     }
 
     /**
-     * Configures SSL/TLS for HTTPS Jetty Client
+     * Configures SSL/TLS for an HTTPS Jetty client.
      */
     public static SslContextFactory.Client createClientSideSslContextFactory(AbstractConfig config) {
         Map<String, Object> sslConfigValues = config.valuesWithPrefixAllOrNothing("listeners.https.");
@@ -77,7 +83,7 @@ public class SSLUtils {
     }
 
     /**
-     * Configures KeyStore related settings in SslContextFactory
+     * Configures KeyStore related settings in SslContextFactory.
      */
     protected static void configureSslContextFactoryKeyStore(SslContextFactory ssl, Map<String, Object> sslConfigValues) {
         ssl.setKeyStoreType((String) getOrDefault(sslConfigValues, SslConfigs.SSL_KEYSTORE_TYPE_CONFIG, SslConfigs.DEFAULT_SSL_KEYSTORE_TYPE));
@@ -103,7 +109,7 @@ public class SSLUtils {
     }
 
     /**
-     * Configures TrustStore related settings in SslContextFactory
+     * Configures TrustStore related settings in SslContextFactory.
      */
     protected static void configureSslContextFactoryTrustStore(SslContextFactory ssl, Map<String, Object> sslConfigValues) {
         ssl.setTrustStoreType((String) getOrDefault(sslConfigValues, SslConfigs.SSL_TRUSTSTORE_TYPE_CONFIG, SslConfigs.DEFAULT_SSL_TRUSTSTORE_TYPE));
@@ -118,13 +124,13 @@ public class SSLUtils {
     }
 
     /**
-     * Configures Protocol, Algorithm and Provider related settings in SslContextFactory
+     * Configures Protocol, Algorithm and Provider related settings in SslContextFactory.
      */
     @SuppressWarnings("unchecked")
     protected static void configureSslContextFactoryAlgorithms(SslContextFactory ssl, Map<String, Object> sslConfigValues) {
         List<String> sslEnabledProtocols = (List<String>) getOrDefault(sslConfigValues, SslConfigs.SSL_ENABLED_PROTOCOLS_CONFIG, List.of(COMMA_WITH_WHITESPACE.split(SslConfigs.DEFAULT_SSL_ENABLED_PROTOCOLS)));
 
-        if (!sslEnabledProtocols.isEmpty()) 
+        if (!sslEnabledProtocols.isEmpty())
             ssl.setIncludeProtocols(sslEnabledProtocols.toArray(new String[0]));
 
         String sslProvider = (String) sslConfigValues.get(SslConfigs.SSL_PROVIDER_CONFIG);
@@ -135,7 +141,7 @@ public class SSLUtils {
 
         List<String> sslCipherSuites = (List<String>) sslConfigValues.get(SslConfigs.SSL_CIPHER_SUITES_CONFIG);
 
-        if (!sslCipherSuites.isEmpty())
+        if (sslCipherSuites != null && !sslCipherSuites.isEmpty())
             ssl.setIncludeCipherSuites(sslCipherSuites.toArray(new String[0]));
 
         ssl.setKeyManagerFactoryAlgorithm((String) getOrDefault(sslConfigValues, SslConfigs.SSL_KEYMANAGER_ALGORITHM_CONFIG, SslConfigs.DEFAULT_SSL_KEYMANGER_ALGORITHM));
@@ -148,7 +154,7 @@ public class SSLUtils {
     }
 
     /**
-     * Configures hostname verification related settings in SslContextFactory
+     * Configures hostname verification related settings in SslContextFactory.
      */
     protected static void configureSslContextFactoryEndpointIdentification(SslContextFactory.Client ssl, Map<String, Object> sslConfigValues) {
         String sslEndpointIdentificationAlg = (String) sslConfigValues.get(SslConfigs.SSL_ENDPOINT_IDENTIFICATION_ALGORITHM_CONFIG);
@@ -157,7 +163,7 @@ public class SSLUtils {
     }
 
     /**
-     * Configures Authentication related settings in SslContextFactory
+     * Configures Authentication related settings in SslContextFactory.
      */
     protected static void configureSslContextFactoryAuthentication(SslContextFactory.Server ssl, Map<String, Object> sslConfigValues) {
         String sslClientAuth = (String) getOrDefault(sslConfigValues, BrokerSecurityConfigs.SSL_CLIENT_AUTH_CONFIG, "none");

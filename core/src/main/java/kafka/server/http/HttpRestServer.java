@@ -23,6 +23,7 @@ import org.apache.kafka.common.internals.Plugin;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.metadata.MetadataCache;
 import org.apache.kafka.server.authorizer.Authorizer;
+import org.apache.kafka.server.http.SslContextFactories;
 
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
@@ -86,7 +87,7 @@ public class HttpRestServer {
         jetty = new Server(pool);
 
         SslContextFactory.Server ssl = endpoints.stream().anyMatch(KafkaConfig.HttpEndpoint::isTls)
-                ? HttpSslUtils.createServerSideSslContextFactory(brokerConfig)
+                ? SslContextFactories.createServerSideSslContextFactory(brokerConfig)
                 : null;
 
         for (KafkaConfig.HttpEndpoint ep : endpoints) {
