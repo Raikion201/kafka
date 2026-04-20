@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets
 import java.util.{Optional, UUID}
 import java.util.concurrent.{CompletableFuture, ThreadLocalRandom, TimeUnit}
 
+import jakarta.servlet.http.HttpServletRequest
 import jakarta.ws.rs.container.ContainerRequestContext
 import jakarta.ws.rs.core.{Context, MediaType, Response}
 import jakarta.ws.rs.{Consumes, POST, Path, PathParam, Produces}
@@ -60,28 +61,37 @@ class ProduceResource(
     metadataCache: MetadataCache,
     time: Time) {
 
+  // Hoisted — immutable and shared across requests.
   private val authHelper = new AuthHelper(authorizerPlugin)
-  private val listenerName = new ListenerName("HTTP")
   private val clientInfo = new ClientInformation("http-rest", "1.0")
+  private val httpListenerName = new ListenerName("HTTP")
+  private val httpsListenerName = new ListenerName("HTTPS")
 
   @POST
   @Path("/{name}")
   def produce(@PathParam("name") topic: String,
               body: ProduceBody,
-              @Context httpCtx: ContainerRequestContext): Response = {
+              @Context httpCtx: ContainerRequestContext,
+              @Context servletRequest: HttpServletRequest): Response = {
 
     val principal = Option(httpCtx.getProperty(BasicAuthFilter.PRINCIPAL_PROPERTY))
       .map(_.asInstanceOf[KafkaPrincipal])
       .getOrElse(KafkaPrincipal.ANONYMOUS)
 
+    val isSecure = servletRequest.isSecure
+    val clientAddr =
+      try InetAddress.getByName(servletRequest.getRemoteAddr)
+      catch { case _: Exception => InetAddress.getLoopbackAddress }
+    val clientPort = servletRequest.getRemotePort
+
     val reqCtx = new RequestContext(
       new RequestHeader(ApiKeys.PRODUCE, ApiKeys.PRODUCE.latestVersion(), "http-rest", 0),
       "http-" + UUID.randomUUID(),
-      InetAddress.getLoopbackAddress,
-      Optional.empty(),
+      clientAddr,
+      Optional.of(Integer.valueOf(clientPort)),
       principal,
-      listenerName,
-      SecurityProtocol.PLAINTEXT,
+      if (isSecure) httpsListenerName else httpListenerName,
+      if (isSecure) SecurityProtocol.SSL else SecurityProtocol.PLAINTEXT,
       clientInfo,
       false)
 
@@ -94,7 +104,14 @@ class ProduceResource(
       return error(Response.Status.NOT_FOUND, "UNKNOWN_TOPIC")
     }
 
-    val numPartitions = metadataCache.numPartitions(topic).orElse(Int.box(1)).intValue()
+    // If the topic was just deleted the partition count is unknown — surface
+    // that as 503 rather than silently producing to partition 0.
+    val numPartitionsOpt = metadataCache.numPartitions(topic)
+    if (!numPartitionsOpt.isPresent) {
+      return error(Response.Status.SERVICE_UNAVAILABLE, "TOPIC_METADATA_UNAVAILABLE")
+    }
+    val numPartitions = numPartitionsOpt.get.intValue()
+
     val keyBytes = Option(body).flatMap(b => Option(b.key)).map(_.getBytes(StandardCharsets.UTF_8)).orNull
     val valueBytes = Option(body).flatMap(b => Option(b.value)).map(_.getBytes(StandardCharsets.UTF_8)).orNull
 
