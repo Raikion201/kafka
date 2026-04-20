@@ -107,6 +107,8 @@ class BrokerServer(
 
   @volatile var dataPlaneRequestProcessor: KafkaApis = _
 
+  @volatile var httpRestServer: kafka.server.http.HttpRestServer = _
+
   var authorizerPlugin: Option[Plugin[Authorizer]] = None
   @volatile var socketServer: SocketServer = _
   var dataPlaneRequestHandlerPool: KafkaRequestHandlerPool = _
@@ -497,6 +499,20 @@ class BrokerServer(
         "broker"
       )
 
+      val httpEndpoints = config.httpListeners
+      if (httpEndpoints.nonEmpty) {
+        httpRestServer = new kafka.server.http.HttpRestServer(
+          httpEndpoints.asJava,
+          config.httpExecutorThreads,
+          config.httpBasicCredentials.asJava,
+          config,
+          replicaManager,
+          authorizerPlugin,
+          metadataCache,
+          time)
+        httpRestServer.startup()
+      }
+
       metadataPublishers.add(new MetadataVersionConfigValidator(config.brokerId,
         () => config.processRoles.contains(ProcessRole.BrokerRole) && config.logDirs().size() > 1,
         sharedServer.metadataPublishingFaultHandler
@@ -806,6 +822,12 @@ class BrokerServer(
       }
       if (lifecycleManager != null)
         lifecycleManager.beginShutdown()
+
+      // Stop HTTP REST server first so in-flight HTTP produces can drain
+      // against ReplicaManager before we shut it down below.
+      if (httpRestServer != null) {
+        Utils.swallow(this.logger.underlying, () => httpRestServer.shutdown())
+      }
 
       // Stop socket server to stop accepting any more connections and requests.
       // Socket server will be shutdown towards the end of the sequence.
