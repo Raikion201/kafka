@@ -21,10 +21,12 @@ import kafka.server.KafkaConfig;
 import org.apache.kafka.common.utils.Time;
 
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee10.servlet.ServletHolder;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
+import org.glassfish.jersey.servlet.ServletContainer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -83,6 +85,7 @@ public class HttpRestServer {
 
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
+        context.addServlet(new ServletHolder(new ServletContainer(HttpRouter.build(basicCredentials))), "/*");
         jetty.setHandler(context);
 
         jetty.start();
