@@ -31,7 +31,7 @@ import org.apache.kafka.common.acl.AclOperation
 import org.apache.kafka.common.compress.Compression
 import org.apache.kafka.common.internals.Plugin
 import org.apache.kafka.common.network.{ClientInformation, ListenerName}
-import org.apache.kafka.common.protocol.ApiKeys
+import org.apache.kafka.common.protocol.{ApiKeys, Errors}
 import org.apache.kafka.common.record.internal.{MemoryRecords, SimpleRecord}
 import org.apache.kafka.common.requests.{RequestContext, RequestHeader}
 import org.apache.kafka.common.requests.ProduceResponse.PartitionResponse
@@ -126,8 +126,8 @@ class ProduceResource(
 
     if (pr == null) {
       error(Response.Status.INTERNAL_SERVER_ERROR, "NO_RESPONSE")
-    } else if (pr.error != org.apache.kafka.common.protocol.Errors.NONE) {
-      error(Response.Status.INTERNAL_SERVER_ERROR, pr.error.name())
+    } else if (pr.error != Errors.NONE) {
+      error(httpStatusFor(pr.error), pr.error.name())
     } else {
       Response.ok(new ProduceResponseBody(partition, pr.baseOffset)).build()
     }
@@ -135,4 +135,30 @@ class ProduceResource(
 
   private def error(status: Response.Status, code: String): Response =
     Response.status(status).entity(java.util.Map.of("error", code)).build()
+
+  private def error(status: Int, code: String): Response =
+    Response.status(status).entity(java.util.Map.of("error", code)).build()
+
+  /**
+   * Map Kafka error codes to HTTP status so clients get something they can
+   * act on. Default is 500 — we only deviate when the Kafka error clearly
+   * corresponds to a different HTTP status.
+   */
+  private def httpStatusFor(e: Errors): Int = e match {
+    case Errors.TOPIC_AUTHORIZATION_FAILED |
+         Errors.CLUSTER_AUTHORIZATION_FAILED |
+         Errors.DELEGATION_TOKEN_AUTHORIZATION_FAILED       => 403
+    case Errors.UNKNOWN_TOPIC_OR_PARTITION |
+         Errors.UNKNOWN_TOPIC_ID                            => 404
+    case Errors.MESSAGE_TOO_LARGE                           => 413
+    case Errors.INVALID_TOPIC_EXCEPTION |
+         Errors.INVALID_REQUIRED_ACKS |
+         Errors.CORRUPT_MESSAGE                             => 400
+    case Errors.NOT_LEADER_OR_FOLLOWER |
+         Errors.NOT_ENOUGH_REPLICAS |
+         Errors.NOT_ENOUGH_REPLICAS_AFTER_APPEND |
+         Errors.KAFKA_STORAGE_ERROR                         => 503
+    case Errors.REQUEST_TIMED_OUT                           => 504
+    case _                                                  => 500
+  }
 }
