@@ -82,7 +82,7 @@ class ProduceResource(
     asyncResponse.setTimeout(35, TimeUnit.SECONDS)
     asyncResponse.setTimeoutHandler(ar => ar.resume(error(504, "REQUEST_TIMED_OUT")))
 
-    val principal = Option(httpCtx.getProperty(BasicAuthFilter.PRINCIPAL_PROPERTY))
+    val principal = Option(httpCtx.getProperty(BasicAuthFilter.PrincipalProperty))
       .map(_.asInstanceOf[KafkaPrincipal])
       .getOrElse(KafkaPrincipal.ANONYMOUS)
 
