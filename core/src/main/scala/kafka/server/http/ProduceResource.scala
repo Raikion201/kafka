@@ -19,10 +19,10 @@ package kafka.server.http
 import java.net.InetAddress
 import java.nio.charset.StandardCharsets
 import java.util.{Optional, UUID}
-import java.util.concurrent.{CompletableFuture, ThreadLocalRandom, TimeUnit}
+import java.util.concurrent.{ThreadLocalRandom, TimeUnit}
 
 import jakarta.servlet.http.HttpServletRequest
-import jakarta.ws.rs.container.ContainerRequestContext
+import jakarta.ws.rs.container.{AsyncResponse, ContainerRequestContext, Suspended}
 import jakarta.ws.rs.core.{Context, MediaType, Response}
 import jakarta.ws.rs.{Consumes, POST, Path, PathParam, Produces}
 
@@ -35,7 +35,6 @@ import org.apache.kafka.common.network.{ClientInformation, ListenerName}
 import org.apache.kafka.common.protocol.{ApiKeys, Errors}
 import org.apache.kafka.common.record.internal.{MemoryRecords, SimpleRecord}
 import org.apache.kafka.common.requests.{RequestContext, RequestHeader}
-import org.apache.kafka.common.requests.ProduceResponse.PartitionResponse
 import org.apache.kafka.common.resource.ResourceType
 import org.apache.kafka.common.security.auth.{KafkaPrincipal, SecurityProtocol}
 import org.apache.kafka.common.utils.Time
@@ -44,13 +43,15 @@ import org.apache.kafka.metadata.MetadataCache
 import org.apache.kafka.server.authorizer.Authorizer
 import org.apache.kafka.storage.internals.log.AppendOrigin
 
+import org.slf4j.LoggerFactory
+
 import kafka.server.{AuthHelper, ReplicaManager}
 
 /**
  * REST endpoint for `POST /v1/topics/{name}`. Reuses the broker's server-side
  * produce path: authorizes via [[AuthHelper]] and appends via
- * [[ReplicaManager.appendRecords]] with a `CompletableFuture` callback, so no
- * `RequestChannel` plumbing is needed.
+ * [[ReplicaManager.appendRecords]], resuming the suspended async response
+ * from the append callback so no Jetty worker thread blocks on I/O.
  */
 @Path("/v1/topics")
 @Produces(Array(MediaType.APPLICATION_JSON))
@@ -60,6 +61,8 @@ class ProduceResource(
     authorizerPlugin: Option[Plugin[Authorizer]],
     metadataCache: MetadataCache,
     time: Time) {
+
+  private val log = LoggerFactory.getLogger(classOf[ProduceResource])
 
   // Hoisted — immutable and shared across requests.
   private val authHelper = new AuthHelper(authorizerPlugin)
@@ -72,7 +75,12 @@ class ProduceResource(
   def produce(@PathParam("name") topic: String,
               body: ProduceBody,
               @Context httpCtx: ContainerRequestContext,
-              @Context servletRequest: HttpServletRequest): Response = {
+              @Context servletRequest: HttpServletRequest,
+              @Suspended asyncResponse: AsyncResponse): Unit = {
+
+    // Bound the suspension so a stuck append doesn't pin a connection forever.
+    asyncResponse.setTimeout(35, TimeUnit.SECONDS)
+    asyncResponse.setTimeoutHandler(ar => ar.resume(error(504, "REQUEST_TIMED_OUT")))
 
     val principal = Option(httpCtx.getProperty(BasicAuthFilter.PRINCIPAL_PROPERTY))
       .map(_.asInstanceOf[KafkaPrincipal])
@@ -96,19 +104,22 @@ class ProduceResource(
       false)
 
     if (!authHelper.authorize(reqCtx, AclOperation.WRITE, ResourceType.TOPIC, topic)) {
-      return error(Response.Status.FORBIDDEN, "TOPIC_AUTHORIZATION_FAILED")
+      asyncResponse.resume(error(Response.Status.FORBIDDEN, "TOPIC_AUTHORIZATION_FAILED"))
+      return
     }
 
     val topicId = metadataCache.getTopicId(topic)
     if (topicId == Uuid.ZERO_UUID) {
-      return error(Response.Status.NOT_FOUND, "UNKNOWN_TOPIC")
+      asyncResponse.resume(error(Response.Status.NOT_FOUND, "UNKNOWN_TOPIC"))
+      return
     }
 
     // If the topic was just deleted the partition count is unknown — surface
     // that as 503 rather than silently producing to partition 0.
     val numPartitionsOpt = metadataCache.numPartitions(topic)
     if (!numPartitionsOpt.isPresent) {
-      return error(Response.Status.SERVICE_UNAVAILABLE, "TOPIC_METADATA_UNAVAILABLE")
+      asyncResponse.resume(error(Response.Status.SERVICE_UNAVAILABLE, "TOPIC_METADATA_UNAVAILABLE"))
+      return
     }
     val numPartitions = numPartitionsOpt.get.intValue()
 
@@ -128,25 +139,25 @@ class ProduceResource(
     val record = new SimpleRecord(time.milliseconds(), keyBytes, valueBytes)
     val records = MemoryRecords.withRecords(Compression.NONE, record)
 
-    val future = new CompletableFuture[java.util.Map[TopicIdPartition, PartitionResponse]]()
-
-    replicaManager.appendRecords(
-      timeout = 30000L,
-      requiredAcks = 1.toShort,
-      internalTopicsAllowed = false,
-      origin = AppendOrigin.CLIENT,
-      entriesPerPartition = Map(tip -> records),
-      responseCallback = result => future.complete(result))
-
-    val result = future.get(35, TimeUnit.SECONDS)
-    val pr = result.get(tip)
-
-    if (pr == null) {
-      error(Response.Status.INTERNAL_SERVER_ERROR, "NO_RESPONSE")
-    } else if (pr.error != Errors.NONE) {
-      error(httpStatusFor(pr.error), pr.error.name())
-    } else {
-      Response.ok(new ProduceResponseBody(partition, pr.baseOffset)).build()
+    try {
+      replicaManager.appendRecords(
+        timeout = 30000L,
+        requiredAcks = 1.toShort,
+        internalTopicsAllowed = false,
+        origin = AppendOrigin.CLIENT,
+        entriesPerPartition = Map(tip -> records),
+        responseCallback = result => {
+          val pr = result.get(tip)
+          val response =
+            if (pr == null) error(Response.Status.INTERNAL_SERVER_ERROR, "NO_RESPONSE")
+            else if (pr.error != Errors.NONE) error(httpStatusFor(pr.error), pr.error.name())
+            else Response.ok(new ProduceResponseBody(partition, pr.baseOffset)).build()
+          asyncResponse.resume(response)
+        })
+    } catch {
+      case e: Exception =>
+        log.warn("Unexpected error during append for topic {}", topic, e)
+        asyncResponse.resume(error(Response.Status.INTERNAL_SERVER_ERROR, "APPEND_FAILED"))
     }
   }
 
