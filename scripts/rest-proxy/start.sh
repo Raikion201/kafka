@@ -107,10 +107,52 @@ bash ./bin/kafka-run-class.sh kafka.tools.StorageTool format \
     -t "$CLUSTER_ID" -c "$PROPERTIES"
 
 # ─── 5. Start broker ────────────────────────────────────────────────────
+# Launch Kafka in the background, poll the REST port until it accepts, then
+# print a highly-visible READY banner. The broker's own log output is quiet
+# under the tools log4j config (mostly WARN/ERROR only), so without this poll
+# you can't tell from the console whether the broker is still booting, stuck,
+# or ready — we've been getting bitten by exactly that.
 echo ""
-echo "[start.sh] Starting broker. Ctrl-C to stop."
-echo "[start.sh] Once you see the 'KafkaServer started' line, open another terminal and run:"
-echo "            bash scripts/rest-proxy/test.sh"
+echo "[start.sh] Launching broker in the background ..."
+KAFKA_HEAP_OPTS="-Xmx1G" bash ./bin/kafka-run-class.sh kafka.Kafka "$PROPERTIES" &
+KAFKA_PID=$!
+
+# Clean Ctrl-C handling — forward the signal to the Kafka JVM.
+trap 'echo ""; echo "[start.sh] Stopping broker (pid $KAFKA_PID) ..."; kill "$KAFKA_PID" 2>/dev/null || true; wait "$KAFKA_PID" 2>/dev/null || true; exit 0' INT TERM
+
+deadline=$(( $(date +%s) + 120 ))
+while : ; do
+  if ! kill -0 "$KAFKA_PID" 2>/dev/null; then
+    echo ""
+    echo "[start.sh] Broker JVM exited before coming up. Scroll up for the error."
+    exit 1
+  fi
+  if curl -sf -o /dev/null --max-time 1 "http://localhost:8080/openapi.yaml" 2>/dev/null \
+     && curl -sf -k -o /dev/null --max-time 1 "https://localhost:8443/openapi.yaml" 2>/dev/null; then
+    break
+  fi
+  if [ "$(date +%s)" -gt "$deadline" ]; then
+    echo ""
+    echo "[start.sh] Gave up waiting for listeners after 120 s."
+    kill "$KAFKA_PID" 2>/dev/null || true
+    exit 1
+  fi
+  sleep 2
+done
+
 echo ""
-KAFKA_HEAP_OPTS="-Xmx1G" \
-  exec bash ./bin/kafka-run-class.sh kafka.Kafka "$PROPERTIES"
+echo "════════════════════════════════════════════════════════════════"
+echo " BROKER READY"
+echo "   HTTP  → http://localhost:8080"
+echo "   HTTPS → https://localhost:8443   (self-signed cert, use curl -k)"
+echo "   Kafka → localhost:9092           (binary protocol)"
+echo ""
+echo " In another terminal, run:"
+echo "   bash scripts/rest-proxy/test.sh"
+echo ""
+echo " Ctrl-C here to shut the broker down cleanly."
+echo "════════════════════════════════════════════════════════════════"
+
+# Stay attached to the JVM so Ctrl-C stops it and so any further Kafka log
+# output still reaches this terminal.
+wait "$KAFKA_PID"
