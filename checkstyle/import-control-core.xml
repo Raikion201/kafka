@@ -64,6 +64,13 @@
   <subpackage name="server">
     <allow pkg="kafka" />
     <allow pkg="org.apache.kafka" />
+
+    <subpackage name="http">
+      <allow pkg="jakarta.ws.rs" />
+      <allow pkg="org.eclipse.jetty" />
+      <allow pkg="org.glassfish.jersey" />
+      <allow pkg="com.fasterxml.jackson.jakarta.rs.json" />
+    </subpackage>
   </subpackage>
 
   <subpackage name="security">
