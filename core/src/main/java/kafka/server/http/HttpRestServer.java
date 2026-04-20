@@ -34,11 +34,6 @@ import java.util.Map;
 /**
  * Embedded HTTP REST server for the Kafka broker. Activated when {@code listeners=}
  * contains one or more {@code HTTP://} or {@code HTTPS://} entries.
- *
- * <p>This class owns only the Jetty lifecycle — binding ports, wiring the SSL
- * context when HTTPS listeners are present, and registering the servlet context.
- * The handler chain (Jersey router, Basic Auth filter, produce resource) is
- * configured in {@link HttpRouter}.
  */
 public class HttpRestServer {
 
@@ -58,6 +53,9 @@ public class HttpRestServer {
             Map<String, String> basicCredentials,
             KafkaConfig brokerConfig,
             Time time) {
+        if (endpoints.isEmpty()) {
+            throw new IllegalArgumentException("HttpRestServer requires at least one endpoint");
+        }
         this.endpoints = endpoints;
         this.executorThreads = executorThreads;
         this.basicCredentials = basicCredentials;
@@ -66,21 +64,13 @@ public class HttpRestServer {
     }
 
     public void startup() throws Exception {
-        if (endpoints.isEmpty()) {
-            log.debug("No HTTP/HTTPS listeners configured; REST server not started");
-            return;
-        }
-
         QueuedThreadPool pool = new QueuedThreadPool(executorThreads);
         pool.setName("http-rest");
         jetty = new Server(pool);
 
-        SslContextFactory.Server ssl = null;
-        boolean needsTls = endpoints.stream().anyMatch(KafkaConfig.HttpEndpoint::isTls);
-        if (needsTls) {
-            ssl = HttpSslUtils.createServerSideSslContextFactory(brokerConfig);
-            jetty.addBean(ssl);
-        }
+        SslContextFactory.Server ssl = endpoints.stream().anyMatch(KafkaConfig.HttpEndpoint::isTls)
+                ? HttpSslUtils.createServerSideSslContextFactory(brokerConfig)
+                : null;
 
         for (KafkaConfig.HttpEndpoint ep : endpoints) {
             ServerConnector connector = ep.isTls()
@@ -95,34 +85,18 @@ public class HttpRestServer {
         context.setContextPath("/");
         jetty.setHandler(context);
 
-        // Handler chain (router / auth filter / resources) is installed in a later
-        // phase. The context is attached now so Jetty can bind ports cleanly.
-
         jetty.start();
-        log.info("HTTP REST server started on {} endpoint(s): {}", endpoints.size(), endpoints);
+        log.info("HTTP REST server listening on {}", endpoints);
     }
 
-    public void shutdown() {
+    public void shutdown() throws Exception {
         if (jetty == null) return;
         try {
             jetty.stop();
             jetty.join();
-        } catch (Exception e) {
-            log.warn("Error shutting down HTTP REST server", e);
         } finally {
             jetty.destroy();
             jetty = null;
         }
-    }
-
-    // Accessors used by the router in a later phase so it can reach broker deps
-    // without HttpRestServer holding every broker field.
-
-    public Map<String, String> basicCredentials() {
-        return basicCredentials;
-    }
-
-    public Time time() {
-        return time;
     }
 }
