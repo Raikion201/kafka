@@ -41,7 +41,7 @@ import org.apache.kafka.raft.{KRaftConfigs, MetadataLogConfig, QuorumConfig}
 import org.apache.kafka.security.authorizer.AuthorizerUtils
 import org.apache.kafka.server.ProcessRole
 import org.apache.kafka.server.authorizer.Authorizer
-import org.apache.kafka.server.config.{AbstractKafkaConfig, QuotaConfig, ReplicationConfigs, ServerConfigs, ServerLogConfigs, DynamicBrokerConfig => JDynamicBrokerConfig}
+import org.apache.kafka.server.config.{AbstractKafkaConfig, HttpServerConfigs, QuotaConfig, ReplicationConfigs, ServerConfigs, ServerLogConfigs, DynamicBrokerConfig => JDynamicBrokerConfig}
 import org.apache.kafka.server.log.remote.storage.RemoteLogManagerConfig
 import org.apache.kafka.server.metrics.MetricConfigs
 
@@ -94,6 +94,13 @@ object KafkaConfig {
   def maybeSensitive(configType: Option[ConfigDef.Type]): Boolean = {
     AbstractKafkaConfig.maybeSensitive(configType.toJava)
   }
+
+  // Entries in `listeners=` that start with HTTP:// or HTTPS:// activate the embedded REST server.
+  // They must be filtered out before the standard listener parser sees them, because
+  // SecurityProtocol has no HTTP value.
+  private[server] val HttpListenerRegex = """^(?i)(HTTPS?)://([^:]*):(\d+)$""".r
+
+  case class HttpEndpoint(host: String, port: Int, isTls: Boolean)
 }
 
 /**
@@ -337,8 +344,33 @@ class KafkaConfig private(doLog: Boolean, val props: util.Map[_, _])
     dynamicConfig.removeReconfigurable(reconfigurable)
   }
 
-  def listeners: Seq[Endpoint] =
-    AbstractKafkaConfig.listenerListToEndPoints(getList(SocketServerConfigs.LISTENERS_CONFIG), effectiveListenerSecurityProtocolMap).asScala
+  def listeners: Seq[Endpoint] = {
+    val nonHttp = getList(SocketServerConfigs.LISTENERS_CONFIG).asScala
+      .filterNot(s => KafkaConfig.HttpListenerRegex.pattern.matcher(s).matches)
+    AbstractKafkaConfig.listenerListToEndPoints(nonHttp.asJava, effectiveListenerSecurityProtocolMap).asScala
+  }
+
+  def httpListeners: Seq[KafkaConfig.HttpEndpoint] =
+    getList(SocketServerConfigs.LISTENERS_CONFIG).asScala.toSeq.flatMap {
+      case KafkaConfig.HttpListenerRegex(proto, host, port) =>
+        Some(KafkaConfig.HttpEndpoint(
+          host = if (host.isEmpty) "0.0.0.0" else host,
+          port = port.toInt,
+          isTls = proto.equalsIgnoreCase("HTTPS")))
+      case _ => None
+    }
+
+  def httpExecutorThreads: Int =
+    getInt(HttpServerConfigs.HTTP_REST_EXECUTOR_THREADS_CONFIG)
+
+  def httpBasicCredentials: Map[String, String] =
+    getList(HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG).asScala.toSeq.map { entry =>
+      entry.split(":", 2) match {
+        case Array(u, p) => u -> p
+        case _ => throw new ConfigException(
+          s"Invalid entry in ${HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG}: '$entry' (must be 'user:pass')")
+      }
+    }.toMap
 
   def controllerListeners: Seq[Endpoint] =
     listeners.filter(l => controllerListenerNames.contains(l.listener))
