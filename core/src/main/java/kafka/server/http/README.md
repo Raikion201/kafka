@@ -92,26 +92,75 @@ bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
 ### HTTPS
 
 HTTPS reuses the broker's existing `ssl.keystore.*` / `ssl.truststore.*`
-configuration — no separate SSL keys for the REST server. If the broker
-already has an `SSL://` Kafka listener configured, HTTPS just works:
+configuration — no separate SSL keys for the REST server.
 
-```properties
-listeners=PLAINTEXT://localhost:9092,SSL://localhost:9094,HTTPS://0.0.0.0:8443
-http.rest.basic.credentials=alice:s3cret
+#### Full-fat demo matching the design doc
 
-# Broker's standard SSL configs — also used by the HTTPS REST listener
-ssl.keystore.location=/path/to/server.keystore.jks
-ssl.keystore.password=changeit
-ssl.key.password=changeit
-ssl.truststore.location=/path/to/server.truststore.jks
-ssl.truststore.password=changeit
-```
+This brings up a single broker with **PLAINTEXT + HTTP + HTTPS listeners
+all at once**, the arrangement the design doc calls for:
+`listeners=PLAINTEXT://...,HTTP://0.0.0.0:8080,HTTPS://0.0.0.0:8443`.
 
 ```bash
+# 1) Generate a self-signed keystore for HTTPS
+keytool -genkeypair -alias rest-proxy -keyalg RSA -keysize 2048 \
+    -validity 365 -keystore /tmp/server.keystore.jks \
+    -storepass changeit -keypass changeit \
+    -dname "CN=localhost, O=demo, L=demo, ST=demo, C=US"
+
+# 2) Write a server.properties with all three listeners
+cat > /tmp/rest-demo.properties <<'EOF'
+process.roles=broker,controller
+node.id=1
+controller.quorum.voters=1@localhost:9093
+
+# Kafka's standard listeners= config. HTTP:// and HTTPS:// entries are
+# split out by KafkaConfig.httpListeners before the standard listener
+# parser sees them.
+listeners=PLAINTEXT://localhost:9092,CONTROLLER://localhost:9093,HTTP://0.0.0.0:8080,HTTPS://0.0.0.0:8443
+advertised.listeners=PLAINTEXT://localhost:9092
+controller.listener.names=CONTROLLER
+inter.broker.listener.name=PLAINTEXT
+listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+
+log.dirs=/tmp/kafka-logs
+num.partitions=3
+
+http.rest.basic.credentials=alice:s3cret
+
+# Broker-wide SSL configs — reused by HTTPS://0.0.0.0:8443
+ssl.keystore.location=/tmp/server.keystore.jks
+ssl.keystore.password=changeit
+ssl.key.password=changeit
+EOF
+
+# 3) Format storage and start the broker
+./bin/kafka-storage.sh format -t "$(./bin/kafka-storage.sh random-uuid)" \
+    -c /tmp/rest-demo.properties
+./bin/kafka-server-start.sh /tmp/rest-demo.properties &
+
+# 4) Create a topic (over the binary PLAINTEXT listener)
+./bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+    --create --topic rest-demo --partitions 3
+
+# 5) Produce over HTTP
+curl -u alice:s3cret \
+     -H 'Content-Type: application/json' \
+     -d '{"key":"k1","value":"from-http"}' \
+     http://localhost:8080/v1/topics/rest-demo
+# → {"partition":0,"offset":0}
+
+# 6) Produce over HTTPS (-k because the cert is self-signed)
 curl -k -u alice:s3cret \
      -H 'Content-Type: application/json' \
-     -d '{"key":"k1","value":"hello"}' \
+     -d '{"key":"k2","value":"from-tls"}' \
      https://localhost:8443/v1/topics/rest-demo
+# → {"partition":2,"offset":0}
+
+# 7) Verify both records reached the topic
+./bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+    --topic rest-demo --from-beginning --timeout-ms 3000
+# → from-http
+# → from-tls
 ```
 
 ## Architecture

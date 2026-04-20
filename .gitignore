@@ -61,3 +61,6 @@ storage/kafka-tiered-storage/
 docker/test/report_*.html
 kafka.Kafka
 __pycache__
+
+# Local broker demo scratch (see core/src/main/java/kafka/server/http/README.md)
+/tmp/
