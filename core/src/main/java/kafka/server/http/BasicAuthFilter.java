@@ -25,6 +25,7 @@ import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.Response;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.Map;
 
@@ -81,12 +82,22 @@ public class BasicAuthFilter implements ContainerRequestFilter {
         String user = decoded.substring(0, colon);
         String pass = decoded.substring(colon + 1);
         String expected = credentials.get(user);
-        if (expected == null || !expected.equals(pass)) {
+        if (expected == null || !constantTimeEquals(expected, pass)) {
             abort(ctx);
             return;
         }
 
         ctx.setProperty(PRINCIPAL_PROPERTY, new KafkaPrincipal(KafkaPrincipal.USER_TYPE, user));
+    }
+
+    /**
+     * String.equals short-circuits on length mismatch and first difference,
+     * leaking password length and common prefix through timing. Compare as
+     * bytes via MessageDigest.isEqual, which runs in constant time relative
+     * to the shorter input.
+     */
+    private static boolean constantTimeEquals(String a, String b) {
+        return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8));
     }
 
     private static void abort(ContainerRequestContext ctx) {

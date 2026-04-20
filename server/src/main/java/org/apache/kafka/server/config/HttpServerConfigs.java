@@ -18,12 +18,10 @@ package org.apache.kafka.server.config;
 
 import org.apache.kafka.common.config.ConfigDef;
 
-import java.util.List;
-
 import static org.apache.kafka.common.config.ConfigDef.Importance.MEDIUM;
 import static org.apache.kafka.common.config.ConfigDef.Range.atLeast;
 import static org.apache.kafka.common.config.ConfigDef.Type.INT;
-import static org.apache.kafka.common.config.ConfigDef.Type.LIST;
+import static org.apache.kafka.common.config.ConfigDef.Type.PASSWORD;
 
 public class HttpServerConfigs {
 
@@ -33,14 +31,15 @@ public class HttpServerConfigs {
             "The number of worker threads used by the embedded HTTP REST server to handle HTTP requests.";
 
     public static final String HTTP_REST_BASIC_CREDENTIALS_CONFIG = "http.rest.basic.credentials";
-    public static final List<String> HTTP_REST_BASIC_CREDENTIALS_DEFAULT = List.of();
+    public static final String HTTP_REST_BASIC_CREDENTIALS_DEFAULT = "";
     public static final String HTTP_REST_BASIC_CREDENTIALS_DOC =
             "Comma-separated list of <code>user:password</code> pairs used for HTTP Basic Auth on the embedded REST server. " +
-            "When empty (the default), the REST server accepts requests without authentication.";
+            "When empty (the default), the REST server accepts requests without authentication. " +
+            "Declared as PASSWORD so the value is redacted in broker logs and in <code>kafka-configs.sh --describe</code>.";
 
     public static final ConfigDef CONFIG_DEF = new ConfigDef()
             .define(HTTP_REST_EXECUTOR_THREADS_CONFIG, INT, HTTP_REST_EXECUTOR_THREADS_DEFAULT,
                     atLeast(1), MEDIUM, HTTP_REST_EXECUTOR_THREADS_DOC)
-            .define(HTTP_REST_BASIC_CREDENTIALS_CONFIG, LIST, HTTP_REST_BASIC_CREDENTIALS_DEFAULT,
+            .define(HTTP_REST_BASIC_CREDENTIALS_CONFIG, PASSWORD, HTTP_REST_BASIC_CREDENTIALS_DEFAULT,
                     MEDIUM, HTTP_REST_BASIC_CREDENTIALS_DOC);
 }

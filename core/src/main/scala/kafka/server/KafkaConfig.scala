@@ -363,14 +363,18 @@ class KafkaConfig private(doLog: Boolean, val props: util.Map[_, _])
   def httpExecutorThreads: Int =
     getInt(HttpServerConfigs.HTTP_REST_EXECUTOR_THREADS_CONFIG)
 
-  def httpBasicCredentials: Map[String, String] =
-    getList(HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG).asScala.toSeq.map { entry =>
+  def httpBasicCredentials: Map[String, String] = {
+    val password = getPassword(HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG)
+    val raw = if (password == null) "" else password.value()
+    if (raw.isEmpty) Map.empty
+    else raw.split(",").toSeq.map { entry =>
       entry.split(":", 2) match {
         case Array(u, p) => u -> p
         case _ => throw new ConfigException(
-          s"Invalid entry in ${HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG}: '$entry' (must be 'user:pass')")
+          s"Invalid entry in ${HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG} (must be 'user:pass')")
       }
     }.toMap
+  }
 
   def controllerListeners: Seq[Endpoint] =
     listeners.filter(l => controllerListenerNames.contains(l.listener))
