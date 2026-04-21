@@ -14,10 +14,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package kafka.server.http;
+package org.apache.kafka.server.http;
+
+import org.apache.kafka.server.http.api.BrokerHttpServer;
+import org.apache.kafka.server.http.api.BrokerHttpServerContext;
+import org.apache.kafka.server.http.api.BrokerHttpServerFactory;
 
 /**
- * JSON response of a successful produce: the partition the record landed on
- * and the offset assigned by the broker.
+ * {@link BrokerHttpServerFactory} implementation wired to {@link HttpRestServer}.
+ * Discovered by the broker at startup via {@link java.util.ServiceLoader}; see
+ * {@code META-INF/services/org.apache.kafka.server.http.api.BrokerHttpServerFactory}.
  */
-public record ProduceResponseBody(int partition, long offset) { }
+public class HttpRestServerFactory implements BrokerHttpServerFactory {
+
+    @Override
+    public BrokerHttpServer create(BrokerHttpServerContext context) {
+        return new HttpRestServer(context);
+    }
+}

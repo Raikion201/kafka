@@ -2,11 +2,17 @@
 
 A thin HTTP front-end for the Kafka broker. When enabled, the broker accepts
 `POST /v1/topics/{name}` requests and runs them through the broker's own
-server-side produce path — the same `AuthHelper` authorization check and the
-same `ReplicaManager.appendRecords` call that binary Kafka clients hit.
+server-side produce path — the same authorization check and the same
+`ReplicaManager.appendRecords` call that binary Kafka clients hit.
 
 It is **embedded in the broker JVM**, not a sidecar. There is no separate
 service to run.
+
+The proxy lives in its own Gradle module (`:http`) and is plugged into the
+broker through a narrow SPI exposed by `:http-api`. The broker only depends
+on the SPI at compile time; the implementation is discovered at runtime via
+`java.util.ServiceLoader`. If the `:http` jar is not on the runtime
+classpath, the broker boots without the REST proxy.
 
 ---
 
@@ -19,10 +25,10 @@ in `server.properties`:
 listeners=PLAINTEXT://localhost:9092,HTTP://0.0.0.0:8080,HTTPS://0.0.0.0:8443
 ```
 
-That's it. If `listeners=` has no HTTP/HTTPS entry, the REST server code never
-runs. The standard Kafka listener parser never sees the HTTP entries — they're
-split off by `KafkaConfig.httpListeners` before it runs, so the existing
-`SocketServer` path is undisturbed.
+That's it. If `listeners=` has no HTTP/HTTPS entry, the REST server code
+never runs. The standard Kafka listener parser never sees the HTTP entries
+— they're split off by `KafkaConfig.httpListeners` before it runs, so the
+existing `SocketServer` path is undisturbed.
 
 ## Configuration keys
 
@@ -130,69 +136,6 @@ bash scripts/rest-proxy/stop.sh
 
 Force-kills any lingering Kafka JVM.
 
-### What the scripts are doing under the hood
-
-If you want to understand each step (or run on a machine where the scripts
-don't work — e.g. pure Linux without `cygpath`), here's the manual flow:
-
-```bash
-# 1. Keystore (one-time)
-keytool -genkeypair -alias rest-proxy -keyalg RSA -keysize 2048 \
-    -validity 365 -keystore tmp/server.keystore.jks \
-    -storepass changeit -keypass changeit \
-    -dname "CN=localhost, O=demo, L=demo, ST=demo, C=US"
-
-# 2. server.properties with all three listeners
-cat > tmp/rest-demo.properties <<'EOF'
-process.roles=broker,controller
-node.id=1
-controller.quorum.voters=1@localhost:9093
-
-listeners=PLAINTEXT://localhost:9092,CONTROLLER://localhost:9093,HTTP://0.0.0.0:8080,HTTPS://0.0.0.0:8443
-advertised.listeners=PLAINTEXT://localhost:9092
-controller.listener.names=CONTROLLER
-inter.broker.listener.name=PLAINTEXT
-listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-
-log.dirs=tmp/kafka-logs
-num.partitions=3
-
-http.rest.basic.credentials=alice:s3cret
-
-ssl.keystore.location=tmp/server.keystore.jks
-ssl.keystore.password=changeit
-ssl.key.password=changeit
-EOF
-
-# 3. Format + start
-./bin/kafka-storage.sh format -t "$(./bin/kafka-storage.sh random-uuid)" \
-    -c tmp/rest-demo.properties
-./bin/kafka-server-start.sh tmp/rest-demo.properties &
-
-# 4. Create topic (binary protocol)
-./bin/kafka-topics.sh --bootstrap-server localhost:9092 \
-    --create --topic rest-demo --partitions 3 --replication-factor 1
-
-# 5. Produce via HTTP
-curl -u alice:s3cret -H 'Content-Type: application/json' \
-     -d '{"key":"k1","value":"from-http"}' \
-     http://localhost:8080/v1/topics/rest-demo
-# → {"partition":0,"offset":0}
-
-# 6. Produce via HTTPS (-k because the cert is self-signed)
-curl -k -u alice:s3cret -H 'Content-Type: application/json' \
-     -d '{"key":"k2","value":"from-tls"}' \
-     https://localhost:8443/v1/topics/rest-demo
-# → {"partition":2,"offset":0}
-
-# 7. Read both back
-./bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
-    --topic rest-demo --from-beginning --timeout-ms 3000 \
-    --property print.key=true --property key.separator='|'
-# → k1|from-http
-# → k2|from-tls
-```
-
 ### Swagger UI in a browser
 
 Open `http://localhost:8080/swagger` (or `https://localhost:8443/swagger`
@@ -203,22 +146,64 @@ the `curl` version.
 
 ---
 
+## Module layout
+
+```
+http/
+├── api/                           :http-api  (Java, narrow SPI seen by core)
+│   └── src/main/java/org/apache/kafka/server/http/api/
+│       ├── BrokerHttpServer.java            startup() / shutdown()
+│       ├── BrokerHttpServerFactory.java     ServiceLoader SPI
+│       ├── BrokerHttpServerContext.java     immutable bag passed to the factory
+│       ├── HttpEndpoint.java                host, port, isTls
+│       ├── RecordAppender.java              narrow over ReplicaManager.appendRecords
+│       └── AuthorizationHelper.java         narrow over AuthHelper.authorize
+│
+└── src/                           :http      (Java, Jetty/Jersey impl)
+    ├── main/java/org/apache/kafka/server/http/
+    │   ├── HttpRestServer.java              implements BrokerHttpServer
+    │   ├── HttpRestServerFactory.java       implements BrokerHttpServerFactory
+    │   ├── HttpRouter.java                  Jersey ResourceConfig builder
+    │   ├── ProduceResource.java             @POST /v1/topics/{name}
+    │   ├── ProduceBody.java                 JSON request DTO (record)
+    │   ├── ProduceResponseBody.java         JSON response DTO (record)
+    │   ├── BasicAuthFilter.java             @PreMatching filter
+    │   ├── OpenApiResource.java             /openapi.yaml + /swagger
+    │   └── KafkaSslContextFactory.java      Jetty ↔ SslFactory bridge
+    └── main/resources/
+        ├── META-INF/services/org.apache.kafka.server.http.api.BrokerHttpServerFactory
+        ├── org/apache/kafka/server/http/openapi.yaml
+        └── org/apache/kafka/server/http/swagger-ui.html
+```
+
+**Why the split?** `:http-api` is small, depends only on clients +
+server-common + metadata, and contains zero Jetty/Jersey. It's what `core`
+compiles against. `:http` is where the web framework lives and is loaded at
+runtime via ServiceLoader — swap it out, replace it, or strip it from a
+distribution without recompiling the broker.
+
 ## Architecture
 
 ```
 listeners=PLAINTEXT://...,HTTP://...,HTTPS://...
                  │
                  ▼
-         KafkaConfig.scala
-         ┌──────┴───────┐
-    listeners:      httpListeners:
-    [PLAINTEXT]     [HttpEndpoint(HTTP,  8080, isTls=false),
-         │           HttpEndpoint(HTTPS, 8443, isTls=true )]
+         KafkaConfig.scala                         ┌─────────────────────────┐
+         ┌──────┴───────┐                          │     :core (Scala)       │
+    listeners:      httpListeners:                 └─────────────────────────┘
+    [PLAINTEXT]     [HttpEndpoint(HTTP,  8080),
+         │           HttpEndpoint(HTTPS, 8443)]
          ▼              │
     SocketServer        ▼
-    (port 9092)    HttpRestServer (Jetty 12 + Jersey 3.1)
+    (port 9092)    HttpRestProxyLoader
+                        │  (ServiceLoader)
+                        ▼
+                   BrokerHttpServerFactory ◄─────── META-INF/services
                         │
-     ┌──────────────────┤ TLS only
+                        ▼
+                   BrokerHttpServer                ┌─────────────────────────┐
+                        ↑                          │       :http (Java)      │
+     ┌──────────────────┤ TLS only                 └─────────────────────────┘
      ▼                  │
   KafkaSslContextFactory│   ← extends Jetty's SslContextFactory.Server,
      │                  │     overrides newSSLEngine to delegate to …
@@ -236,38 +221,31 @@ listeners=PLAINTEXT://...,HTTP://...,HTTPS://...
                    ProduceResource          JSON in/out, @Suspended async
                         │
                         ▼
-                   AuthHelper.authorize     ← reuses broker ACL path
+                   AuthorizationHelper      ← SPI adapter over AuthHelper
                         │
                         ▼
                    MetadataCache            ← reuses broker metadata
                         │
                         ▼
-                   ReplicaManager.appendRecords  ← reuses broker append path
+                   RecordAppender           ← SPI adapter over ReplicaManager
                         │
                         ▼
                    HTTP 200 { partition, offset }
 ```
 
-The only genuinely new surface is HTTP routing and JSON. Everything below
-`ProduceResource` is the broker's existing plumbing.
+The `RecordAppender` and `AuthorizationHelper` adapters are built in
+`core/.../server/HttpRestProxyLoader.scala` and forward straight to
+`ReplicaManager.appendRecords` and `AuthHelper.authorize` — one lambda
+each. Nothing in `:http` imports any Scala/core type.
 
-## Files
+## Wiring files (core)
 
 | File                                                         | Role                                                                  |
 |--------------------------------------------------------------|-----------------------------------------------------------------------|
 | `server/.../config/HttpServerConfigs.java`                   | Config keys + `ConfigDef` (merged into `AbstractKafkaConfig.CONFIG_DEF`) |
 | `core/.../server/KafkaConfig.scala`                          | `httpListeners` / `httpExecutorThreads` / `httpBasicCredentials` accessors and the listener-split override |
-| `core/.../server/BrokerServer.scala`                         | Lifecycle — constructs and shuts down `HttpRestServer`                |
-| `core/.../server/http/HttpRestServer.scala`                  | Jetty server lifecycle: thread pool, connectors, per-HTTPS-listener `SslFactory` registration |
-| `core/.../server/http/KafkaSslContextFactory.scala`          | Jetty ↔ Kafka SSL bridge; implements `ListenerReconfigurable` for live cert rotation |
-| `core/.../server/http/HttpRouter.scala`                      | Jersey `ResourceConfig` factory — the canonical routes table lives in its Scaladoc |
-| `core/.../server/http/BasicAuthFilter.scala`                 | `@PreMatching` filter; constant-time compare; allow-lists `/swagger` and `/openapi.yaml` |
-| `core/.../server/http/ProduceResource.scala`                 | `@POST /v1/topics/{name}` — auth + partition + append + error mapping; `@Suspended` async so it doesn't pin a Jetty worker during the append |
-| `core/.../server/http/OpenApiResource.scala`                 | Serves `openapi.yaml` and `swagger-ui.html` from classpath             |
-| `core/.../server/http/ProduceBody.java`                      | JSON request DTO (Java record)                                        |
-| `core/.../server/http/ProduceResponseBody.java`              | JSON response DTO (Java record)                                       |
-| `core/.../resources/kafka/server/http/openapi.yaml`          | Hand-written OpenAPI 3 spec                                           |
-| `core/.../resources/kafka/server/http/swagger-ui.html`       | Loads Swagger UI from a CDN, points it at `/openapi.yaml`             |
+| `core/.../server/BrokerServer.scala`                         | Lifecycle — calls `HttpRestProxyLoader.load` and starts/stops the server |
+| `core/.../server/HttpRestProxyLoader.scala`                  | `ServiceLoader` lookup + `RecordAppender`/`AuthorizationHelper` adapters + context assembly |
 | `scripts/rest-proxy/{start,test,stop}.sh`                    | One-command bootstrap + smoke test                                    |
 
 ## Testing
@@ -275,22 +253,26 @@ The only genuinely new surface is HTTP routing and JSON. Everything below
 Run the REST-proxy test suite:
 
 ```bash
-./gradlew :core:test \
+./gradlew :http:test :http:http-api:test :core:test \
   --tests "kafka.server.HttpRestProxyIntegrationTest" \
   --tests "kafka.server.HttpsRestProxyIntegrationTest" \
-  --tests "kafka.server.http.BasicAuthFilterTest" \
-  --tests "kafka.server.http.HttpConfigTest" \
-  --tests "kafka.server.http.KafkaSslContextFactoryTest"
+  --tests "org.apache.kafka.server.http.BasicAuthFilterTest" \
+  --tests "org.apache.kafka.server.http.HttpConfigTest" \
+  --tests "org.apache.kafka.server.http.KafkaSslContextFactoryTest"
 ```
 
 ### Coverage
 
-| Test class                           | Cases | What it proves                                                              |
-|--------------------------------------|------:|-----------------------------------------------------------------------------|
-| `HttpRestProxyIntegrationTest`       |     4 | End-to-end over plain HTTP: produce → consume back, 401 / 401 / 404         |
-| `HttpsRestProxyIntegrationTest`      |     2 | HTTPS handshake + produce + consume back; per-listener SSL override served  |
-| `BasicAuthFilterTest`                |    10 | Every auth outcome: missing, non-Basic, malformed base64, no colon, unknown user, wrong password, success, password with colon, `/swagger` and `/openapi.yaml` allow-list |
-| `HttpConfigTest`                     |    10 | `listeners=` splitting, IPv6 bracket form, `PASSWORD`-typed credentials, malformed entries, default thread count, `atLeast(4)` floor |
-| `KafkaSslContextFactoryTest`         |     5 | The bridge in isolation: `newSSLEngine` delegates to `SslFactory`, fresh engines per call, reconfigurable configs exposed, `reconfigure` flows through |
-| **Total**                            |  **31** |                                                                             |
+| Test class                           | Module    | Cases | What it proves                                                              |
+|--------------------------------------|-----------|------:|-----------------------------------------------------------------------------|
+| `HttpRestProxyIntegrationTest`       | core      |     4 | End-to-end over plain HTTP: produce → consume back, 401 / 401 / 404         |
+| `HttpsRestProxyIntegrationTest`      | core      |     2 | HTTPS handshake + produce + consume back; per-listener SSL override served  |
+| `BasicAuthFilterTest`                | :http     |    10 | Every auth outcome: missing, non-Basic, malformed base64, no colon, unknown user, wrong password, success, password with colon, `/swagger` and `/openapi.yaml` allow-list |
+| `HttpConfigTest`                     | :http     |    10 | `listeners=` splitting, IPv6 bracket form, `PASSWORD`-typed credentials, malformed entries, default thread count, `atLeast(4)` floor |
+| `KafkaSslContextFactoryTest`         | :http     |     5 | The bridge in isolation: `newSSLEngine` delegates to `SslFactory`, fresh engines per call, reconfigurable configs exposed, `reconfigure` flows through |
+| **Total**                            |           |  **31** |                                                                             |
 
+Integration tests stay in `:core` because they extend `IntegrationTestHarness`
+(a core-test-only fixture) and drive the whole broker. They depend on
+`:http` via `testImplementation`, so the impl jar is on the broker's runtime
+classpath when the test runs.
