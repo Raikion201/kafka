@@ -153,23 +153,49 @@ class HttpsRestProxyIntegrationTest extends IntegrationTestHarness {
 
   private val mapper = new ObjectMapper()
 
+  /**
+   * Happy path over HTTPS — the load-bearing TLS test. We POST a record
+   * over the HTTPS listener, then spin up a normal `KafkaConsumer` against
+   * the same broker (over the binary protocol on the PLAINTEXT listener)
+   * and read the exact bytes back from the exact partition and offset the
+   * HTTPS response claimed. If that works, every hop in the chain is
+   * proven live under encryption:
+   *
+   *   Jetty accepted a TLS connection on the HTTPS listener →
+   *   KafkaSslContextFactory handed Jetty an SSLEngine from SslFactory →
+   *   Kafka's SslFactory produced a working server-side engine →
+   *   TLS handshake completed end-to-end →
+   *   BasicAuthFilter accepted the credentials →
+   *   Jersey dispatched to `ProduceResource.produce` →
+   *   `AuthHelper.authorize` passed →
+   *   `MetadataCache.getTopicId` / `numPartitions` worked →
+   *   `ReplicaManager.appendRecords` actually appended →
+   *   The record is durable and readable by a normal Kafka client.
+   *
+   * Crucially, the read-back client uses the PLAINTEXT listener — it
+   * proves the record reached the topic, not just that Jetty accepted
+   * the POST on a TLS socket and threw it away.
+   */
   @Test
   def httpsProducedRecordReachesTopic(): Unit = {
     val topic = "rest-https-happy"
     createTopic(topic, numPartitions = 3, replicationFactor = 1)
 
+    // Produce over HTTPS. Expect 200 + {partition, offset} in the JSON body.
     val resp = postHttps(s"/v1/topics/$topic", """{"key":"k1","value":"hello-over-tls"}""")
     assertEquals(200, resp.statusCode(), s"Body: ${resp.body()}")
 
     val json = mapper.readTree(resp.body())
     val partition = json.get("partition").asInt()
     val offset = json.get("offset").asLong()
-    assertTrue(partition >= 0 && partition < 3)
+    assertTrue(partition >= 0 && partition < 3, s"partition out of range: $partition")
     assertEquals(0L, offset)
 
-    // Read it back — proves the record really reached the topic, not just
-    // that Jetty accepted the request on a TLS socket.
+    // IntegrationTestHarness requires group.protocol on the harness-level
+    // consumerConfig, not just on the per-call overrides. "classic" because
+    // we're not testing the new consumer rebalance protocol here.
     consumerConfig.setProperty(org.apache.kafka.clients.consumer.ConsumerConfig.GROUP_PROTOCOL_CONFIG, "classic")
+
     val props = new Properties()
     props.setProperty(org.apache.kafka.clients.consumer.ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest")
     props.setProperty(org.apache.kafka.clients.consumer.ConsumerConfig.GROUP_ID_CONFIG, "rest-https-test")
@@ -179,23 +205,40 @@ class HttpsRestProxyIntegrationTest extends IntegrationTestHarness {
       props)
     try {
       consumer.subscribe(java.util.List.of(topic))
+
+      // Poll up to 10 s for the record the HTTPS request just produced.
       val deadline = System.currentTimeMillis() + 10000
       var received: List[org.apache.kafka.clients.consumer.ConsumerRecord[String, String]] = Nil
       while (received.isEmpty && System.currentTimeMillis() < deadline) {
         received = consumer.poll(java.time.Duration.ofMillis(500)).asScala.toList
       }
+
+      // The record we read back must match what we POSTed, byte-for-byte,
+      // on the same partition the HTTPS response announced.
       assertEquals(1, received.size, "expected exactly one record via HTTPS")
       assertEquals("hello-over-tls", received.head.value())
       assertEquals(partition, received.head.partition())
     } finally consumer.close()
   }
 
+  /**
+   * Per-listener keystore override — the specific behaviour that motivated
+   * routing HTTPS through `SslFactory` instead of a hand-rolled Jetty
+   * keystore factory. `modifyConfigs` sets two keystores:
+   *
+   *   ssl.keystore.location=<global cert, CN=kafka-global>
+   *   listener.name.https.ssl.keystore.location=<https cert, CN=kafka-https>
+   *
+   * Kafka's convention is that `listener.name.<name>.ssl.*` wins for that
+   * listener. If the REST proxy were building its Jetty
+   * `SslContextFactory` directly from the global `ssl.*` block — as the
+   * previous hand-rolled implementation did — the HTTPS listener would
+   * serve the global cert and this assertion would fail. We grab the
+   * cert off the wire during a real TLS handshake and check the subject
+   * CN: "kafka-https" proves the per-listener override was honoured.
+   */
   @Test
   def httpsServesPerListenerKeystoreNotGlobal(): Unit = {
-    // Reach into Jetty's handshake: record whichever cert the HTTPS listener
-    // actually serves and check its subject CN. We configured the per-listener
-    // keystore with CN=kafka-https and the global keystore with CN=kafka-global,
-    // so the CN tells us unambiguously which keystore drove the engine.
     val servedCert = captureServerCertificate()
     val subject = servedCert.getSubjectX500Principal.getName
     assertTrue(subject.contains("CN=kafka-https"),
@@ -206,7 +249,14 @@ class HttpsRestProxyIntegrationTest extends IntegrationTestHarness {
       "Per-listener override was NOT applied; broker served the global keystore instead of the HTTPS one.")
   }
 
-  /** Open a TLS handshake against the HTTPS port and grab the cert the server presents. */
+  /**
+   * Open a TLS handshake against the HTTPS port and capture whichever cert
+   * the server presents. We use a `TrustManager` that unconditionally
+   * accepts the chain (we trust the test CA by construction) but records
+   * the server's leaf cert in the process — this is how we inspect what
+   * the broker actually served over the wire without having the
+   * certificate's trust path set up on the client side.
+   */
   private def captureServerCertificate(): X509Certificate = {
     var captured: X509Certificate = null
     val ctx = SSLContext.getInstance("TLS")
@@ -214,6 +264,7 @@ class HttpsRestProxyIntegrationTest extends IntegrationTestHarness {
       override def getAcceptedIssuers: Array[X509Certificate] = Array.empty
       override def checkClientTrusted(chain: Array[X509Certificate], authType: String): Unit = {}
       override def checkServerTrusted(chain: Array[X509Certificate], authType: String): Unit = {
+        // Capture only the leaf (index 0) the first time it arrives.
         if (chain != null && chain.nonEmpty && captured == null) captured = chain(0)
       }
     }), null)
