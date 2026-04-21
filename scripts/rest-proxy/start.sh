@@ -65,7 +65,11 @@ if [ ! -f "$KEYSTORE" ]; then
 fi
 
 # ─── 3. Properties ──────────────────────────────────────────────────────
-cat > "$PROPERTIES" <<EOF
+# Only write a fresh file when one doesn't exist, so user edits
+# (e.g. http.rest.swagger-ui.enabled=true) survive a restart. log.dirs
+# is per-run, so patch that one line in place on every run regardless.
+if [ ! -f "$PROPERTIES" ]; then
+  cat > "$PROPERTIES" <<EOF
 process.roles=broker,controller
 node.id=1
 controller.quorum.voters=1@localhost:9093
@@ -90,7 +94,16 @@ offsets.topic.replication.factor=1
 transaction.state.log.replication.factor=1
 transaction.state.log.min.isr=1
 EOF
-echo "[start.sh] Wrote $PROPERTIES (log.dirs=$LOG_DIR)"
+  echo "[start.sh] Wrote $PROPERTIES (log.dirs=$LOG_DIR)"
+else
+  esc_logdir=$(printf '%s\n' "$ROOT_NATIVE/$LOG_DIR" | sed 's/[\/&]/\\&/g')
+  if grep -q '^log.dirs=' "$PROPERTIES"; then
+    sed -i.bak "s/^log.dirs=.*/log.dirs=$esc_logdir/" "$PROPERTIES" && rm -f "$PROPERTIES.bak"
+  else
+    echo "log.dirs=$ROOT_NATIVE/$LOG_DIR" >> "$PROPERTIES"
+  fi
+  echo "[start.sh] Kept existing $PROPERTIES (log.dirs=$LOG_DIR)"
+fi
 
 # ─── 4. Format ──────────────────────────────────────────────────────────
 echo "[start.sh] Formatting $LOG_DIR ..."
@@ -127,8 +140,17 @@ while : ; do
     echo "[start.sh] Broker JVM exited before coming up. Scroll up for the error."
     exit 1
   fi
-  if curl -sf -o /dev/null --max-time 1 "http://localhost:8080/openapi.yaml" 2>/dev/null \
-     && curl -sf -k -o /dev/null --max-time 1 "https://localhost:8443/openapi.yaml" 2>/dev/null; then
+  # Probe any URL the REST server responds to. We don't use /openapi.yaml
+  # any more because it's only served when http.rest.swagger-ui.enabled=true.
+  # curl -f fails on 4xx, so we drop it and just accept ANY 3-digit HTTP
+  # response as proof that Jetty is bound and Jersey is dispatching —
+  # the produce endpoint replies 401 (no creds) or 415 (no Content-Type),
+  # both of which count as "up."
+  http_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 1 \
+    "http://localhost:8080/v1/topics/_probe" 2>/dev/null || echo 000)
+  https_code=$(curl -s -k -o /dev/null -w '%{http_code}' --max-time 1 \
+    "https://localhost:8443/v1/topics/_probe" 2>/dev/null || echo 000)
+  if [ "$http_code" != "000" ] && [ "$https_code" != "000" ]; then
     break
   fi
   if [ "$(date +%s)" -gt "$deadline" ]; then
