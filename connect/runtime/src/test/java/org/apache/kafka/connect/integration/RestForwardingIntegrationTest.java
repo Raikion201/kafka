@@ -32,7 +32,7 @@ import org.apache.kafka.connect.runtime.rest.RestClient;
 import org.apache.kafka.connect.runtime.rest.RestServerConfig;
 import org.apache.kafka.connect.runtime.rest.entities.ConnectorInfo;
 import org.apache.kafka.connect.runtime.rest.entities.ConnectorType;
-import org.apache.kafka.server.http.SslContextFactories;
+import org.apache.kafka.connect.runtime.rest.util.SSLUtils;
 import org.apache.kafka.connect.util.Callback;
 import org.apache.kafka.test.TestSslUtils;
 import org.apache.kafka.test.TestUtils;
@@ -180,7 +180,7 @@ public class RestForwardingIntegrationTest {
         leaderServer.initializeResources(leaderHerder);
 
         // External client setup
-        factory = SslContextFactories.createClientSideSslContextFactory(followerConfig);
+        factory = SSLUtils.createClientSideSslContextFactory(followerConfig);
         factory.start();
         SSLContext ssl = factory.getSslContext();
         httpClient = HttpClients.custom()

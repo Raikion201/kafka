@@ -256,7 +256,6 @@ The only genuinely new surface is HTTP routing and JSON. Everything below
 | File                                                         | Role                                                                  |
 |--------------------------------------------------------------|-----------------------------------------------------------------------|
 | `server/.../config/HttpServerConfigs.java`                   | Config keys + `ConfigDef` (merged into `AbstractKafkaConfig.CONFIG_DEF`) |
-| `server-common/.../server/http/SslContextFactories.java`     | Jetty `SslContextFactory` builder used by **Kafka Connect**. Broker HTTPS no longer uses this — it goes through `KafkaSslContextFactory` instead. |
 | `core/.../server/KafkaConfig.scala`                          | `httpListeners` / `httpExecutorThreads` / `httpBasicCredentials` accessors and the listener-split override |
 | `core/.../server/BrokerServer.scala`                         | Lifecycle — constructs and shuts down `HttpRestServer`                |
 | `core/.../server/http/HttpRestServer.scala`                  | Jetty server lifecycle: thread pool, connectors, per-HTTPS-listener `SslFactory` registration |

@@ -21,7 +21,7 @@ import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.connect.runtime.distributed.Crypto;
 import org.apache.kafka.connect.runtime.rest.entities.ErrorMessage;
 import org.apache.kafka.connect.runtime.rest.errors.ConnectRestException;
-import org.apache.kafka.server.http.SslContextFactories;
+import org.apache.kafka.connect.runtime.rest.util.SSLUtils;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -135,7 +135,7 @@ public class RestClient {
         Objects.requireNonNull(responseFormat, "response format must be non-null");
         // Only try to load SSL configs if we have to (see KAFKA-14816)
         SslContextFactory.Client sslContextFactory = url.startsWith("https://")
-                ? SslContextFactories.createClientSideSslContextFactory(config)
+                ? SSLUtils.createClientSideSslContextFactory(config)
                 : null;
         HttpClient client = httpClient(sslContextFactory);
         client.setFollowRedirects(false);

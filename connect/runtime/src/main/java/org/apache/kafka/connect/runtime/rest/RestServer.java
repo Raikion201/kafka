@@ -27,7 +27,7 @@ import org.apache.kafka.connect.runtime.Herder;
 import org.apache.kafka.connect.runtime.health.ConnectClusterDetailsImpl;
 import org.apache.kafka.connect.runtime.health.ConnectClusterStateImpl;
 import org.apache.kafka.connect.runtime.rest.errors.ConnectExceptionMapper;
-import org.apache.kafka.server.http.SslContextFactories;
+import org.apache.kafka.connect.runtime.rest.util.SSLUtils;
 
 import com.fasterxml.jackson.jakarta.rs.json.JacksonJsonProvider;
 
@@ -166,9 +166,9 @@ public abstract class RestServer {
         if (PROTOCOL_HTTPS.equals(protocol)) {
             SslContextFactory.Server ssl;
             if (isAdmin) {
-                ssl = SslContextFactories.createServerSideSslContextFactory(config, RestServerConfig.ADMIN_LISTENERS_HTTPS_CONFIGS_PREFIX);
+                ssl = SSLUtils.createServerSideSslContextFactory(config, RestServerConfig.ADMIN_LISTENERS_HTTPS_CONFIGS_PREFIX);
             } else {
-                ssl = SslContextFactories.createServerSideSslContextFactory(config);
+                ssl = SSLUtils.createServerSideSslContextFactory(config);
             }
             connector = new ServerConnector(jettyServer, ssl);
             if (!isAdmin) {
