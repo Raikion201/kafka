@@ -104,8 +104,6 @@ object KafkaConfig {
   //   - a hostname or IPv4 literal without colons: 0.0.0.0, my-host
   //   - empty (bind all interfaces)
   private[server] val HttpListenerRegex = """^(?i)(HTTPS?)://(\[[^\]]*\]|[^:\[]*):(\d+)$""".r
-
-  case class HttpEndpoint(host: String, port: Int, isTls: Boolean)
 }
 
 /**
@@ -355,7 +353,7 @@ class KafkaConfig private(doLog: Boolean, val props: util.Map[_, _])
     AbstractKafkaConfig.listenerListToEndPoints(nonHttp.asJava, effectiveListenerSecurityProtocolMap).asScala
   }
 
-  def httpListeners: Seq[KafkaConfig.HttpEndpoint] =
+  def httpListeners: Seq[org.apache.kafka.server.http.api.HttpEndpoint] =
     getList(SocketServerConfigs.LISTENERS_CONFIG).asScala.toSeq.flatMap {
       case KafkaConfig.HttpListenerRegex(proto, rawHost, port) =>
         // Strip the [::1]-style brackets the URI form requires for IPv6.
@@ -363,23 +361,25 @@ class KafkaConfig private(doLog: Boolean, val props: util.Map[_, _])
           if (rawHost.isEmpty) "0.0.0.0"
           else if (rawHost.startsWith("[") && rawHost.endsWith("]")) rawHost.substring(1, rawHost.length - 1)
           else rawHost
-        Some(KafkaConfig.HttpEndpoint(host = host, port = port.toInt, isTls = proto.equalsIgnoreCase("HTTPS")))
+        Some(new org.apache.kafka.server.http.api.HttpEndpoint(host, port.toInt, proto.equalsIgnoreCase("HTTPS")))
       case _ => None
     }
 
   def httpExecutorThreads: Int =
     getInt(HttpServerConfigs.HTTP_REST_EXECUTOR_THREADS_CONFIG)
 
+  def httpSwaggerUiEnabled: Boolean =
+    getBoolean(HttpServerConfigs.HTTP_REST_SWAGGER_UI_ENABLED_CONFIG)
+
+  // The shape has already been validated at broker construction time by
+  // HttpServerConfigs.BasicCredentialsValidator, so this accessor just parses.
   def httpBasicCredentials: Map[String, String] = {
     val password = getPassword(HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG)
     val raw = if (password == null) "" else password.value()
     if (raw.isEmpty) Map.empty
     else raw.split(",").toSeq.map { entry =>
-      entry.split(":", 2) match {
-        case Array(u, p) => u -> p
-        case _ => throw new ConfigException(
-          s"Invalid entry in ${HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG} (must be 'user:pass')")
-      }
+      val colon = entry.indexOf(':')
+      entry.substring(0, colon) -> entry.substring(colon + 1)
     }.toMap
   }
 

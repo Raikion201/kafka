@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package kafka.server.http
+package kafka.server
 
 import java.util.Properties
 
@@ -25,8 +25,6 @@ import org.apache.kafka.server.config.{HttpServerConfigs, ReplicationConfigs, Se
 
 import org.junit.jupiter.api.Assertions._
 import org.junit.jupiter.api.Test
-
-import kafka.server.KafkaConfig
 
 /**
  * Unit tests for the HTTP-REST-proxy-specific accessors on KafkaConfig.
@@ -115,11 +113,25 @@ class HttpConfigTest {
   }
 
   @Test
-  def malformedCredentialThrowsConfigException(): Unit = {
-    val cfg = new KafkaConfig(props(
-      SocketServerConfigs.LISTENERS_CONFIG -> "PLAINTEXT://:9092",
-      HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG -> "no-colon-here"))
-    assertThrows(classOf[ConfigException], () => cfg.httpBasicCredentials)
+  def malformedCredentialThrowsAtConstruction(): Unit = {
+    // Eager validation via ConfigDef.Validator — the broker must refuse to
+    // boot rather than booting and only failing when the REST server starts.
+    assertThrows(classOf[ConfigException], () =>
+      new KafkaConfig(props(
+        SocketServerConfigs.LISTENERS_CONFIG -> "PLAINTEXT://:9092",
+        HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG -> "no-colon-here")))
+  }
+
+  @Test
+  def emptyUserOrPasswordEntryRejectedAtConstruction(): Unit = {
+    assertThrows(classOf[ConfigException], () =>
+      new KafkaConfig(props(
+        SocketServerConfigs.LISTENERS_CONFIG -> "PLAINTEXT://:9092",
+        HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG -> ":pass")))
+    assertThrows(classOf[ConfigException], () =>
+      new KafkaConfig(props(
+        SocketServerConfigs.LISTENERS_CONFIG -> "PLAINTEXT://:9092",
+        HttpServerConfigs.HTTP_REST_BASIC_CREDENTIALS_CONFIG -> "user:")))
   }
 
   @Test
@@ -130,10 +142,26 @@ class HttpConfigTest {
   }
 
   @Test
-  def executorThreadsBelowFourIsRejectedAtConstruction(): Unit = {
-    assertThrows(classOf[org.apache.kafka.common.config.ConfigException], () =>
+  def executorThreadsBelowOneIsRejectedAtConstruction(): Unit = {
+    assertThrows(classOf[ConfigException], () =>
       new KafkaConfig(props(
         SocketServerConfigs.LISTENERS_CONFIG -> "PLAINTEXT://:9092",
-        HttpServerConfigs.HTTP_REST_EXECUTOR_THREADS_CONFIG -> "2")))
+        HttpServerConfigs.HTTP_REST_EXECUTOR_THREADS_CONFIG -> "0")))
+  }
+
+  @Test
+  def swaggerUiDisabledByDefault(): Unit = {
+    val cfg = new KafkaConfig(props(
+      SocketServerConfigs.LISTENERS_CONFIG -> "PLAINTEXT://:9092"))
+    assertFalse(cfg.httpSwaggerUiEnabled,
+      "Swagger UI must be opt-in — exposing endpoint surface unauthenticated by default is a footgun.")
+  }
+
+  @Test
+  def swaggerUiCanBeEnabled(): Unit = {
+    val cfg = new KafkaConfig(props(
+      SocketServerConfigs.LISTENERS_CONFIG -> "PLAINTEXT://:9092",
+      HttpServerConfigs.HTTP_REST_SWAGGER_UI_ENABLED_CONFIG -> "true"))
+    assertTrue(cfg.httpSwaggerUiEnabled)
   }
 }

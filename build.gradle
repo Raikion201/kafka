@@ -1095,6 +1095,10 @@ project(':core') {
     implementation project(':server')
     implementation project(':coordinator-common')
     implementation project(':share-coordinator')
+    // http-api is compile-time (BrokerServer builds the context);
+    // the :http impl is loaded at runtime via ServiceLoader.
+    implementation project(':http:http-api')
+    runtimeOnly project(':http')
 
     implementation libs.argparse4j
     implementation libs.jacksonDatabind
@@ -1110,19 +1114,6 @@ project(':core') {
     implementation libs.slf4jApi
     implementation libs.re2j
 
-    // Embedded HTTP REST server (enabled by HTTP:// entries in listeners=)
-    implementation libs.jacksonJakartarsJsonProvider
-    implementation libs.jerseyContainerServlet
-    implementation libs.jerseyHk2
-    implementation libs.jaxbApi      // Jersey dependency that was available in the JDK before Java 9
-    implementation libs.activation   // Jersey dependency that was available in the JDK before Java 9
-    implementation (libs.jettyServer) {
-      exclude group: 'org.slf4j', module: 'slf4j-api'
-    }
-    implementation (libs.jettyServlet) {
-      exclude group: 'org.slf4j', module: 'slf4j-api'
-    }
-
     testImplementation project(':clients').sourceSets.test.output
     testImplementation project(':group-coordinator').sourceSets.test.output
     testImplementation project(':share-coordinator').sourceSets.test.output
@@ -1132,6 +1123,10 @@ project(':core') {
     testImplementation project(':storage:storage-api').sourceSets.test.output
     testImplementation project(':server').sourceSets.test.output
     testImplementation project(':streams')
+    // Integration tests for POST /v1/topics/{name} run against a real broker
+    // that loads the :http impl via ServiceLoader, so the impl must be on the
+    // test classpath. http-api is already transitive via 'implementation' above.
+    testImplementation project(':http')
     testImplementation project(':test-common:test-common-runtime')
     testImplementation project(':test-common:test-common-internal-api')
     testImplementation project(':test-common:test-common-util')
@@ -1576,6 +1571,79 @@ project(':group-coordinator') {
 
   compileJava.dependsOn 'processMessages'
   srcJar.dependsOn 'processMessages'
+}
+
+
+project(':http:http-api') {
+  base {
+    archivesName = "kafka-http-api"
+  }
+
+  dependencies {
+    implementation project(':clients')
+    implementation project(':server-common')
+    implementation project(':metadata')
+    implementation libs.slf4jApi
+
+    testImplementation libs.junitJupiter
+    testImplementation libs.mockitoCore
+    testImplementation testLog4j2Libs
+
+    testRuntimeOnly runtimeTestLibs
+  }
+
+  javadoc {
+    enabled = false
+  }
+
+  checkstyle {
+    configProperties = checkstyleConfigProperties("import-control.xml")
+  }
+}
+
+project(':http') {
+  base {
+    archivesName = "kafka-http"
+  }
+
+  dependencies {
+    implementation project(':http:http-api')
+    implementation project(':clients')
+    implementation project(':server-common')
+    implementation project(':metadata')
+    implementation libs.slf4jApi
+
+    // Jetty + Jersey — the embedded HTTP REST server
+    implementation libs.jacksonDatabind
+    implementation libs.jacksonJakartarsJsonProvider
+    implementation libs.jerseyContainerServlet
+    implementation libs.jerseyHk2
+    implementation libs.jaxbApi      // Jersey dependency that was available in the JDK before Java 9
+    implementation libs.activation   // Jersey dependency that was available in the JDK before Java 9
+    implementation (libs.jettyServer) {
+      exclude group: 'org.slf4j', module: 'slf4j-api'
+    }
+    implementation (libs.jettyServlet) {
+      exclude group: 'org.slf4j', module: 'slf4j-api'
+    }
+
+    testImplementation project(':clients').sourceSets.test.output
+    testImplementation project(':server-common').sourceSets.test.output
+    testImplementation libs.junitJupiter
+    testImplementation libs.mockitoCore
+    testImplementation libs.bcpkix
+    testImplementation testLog4j2Libs
+
+    testRuntimeOnly runtimeTestLibs
+  }
+
+  javadoc {
+    enabled = false
+  }
+
+  checkstyle {
+    configProperties = checkstyleConfigProperties("import-control.xml")
+  }
 }
 
 

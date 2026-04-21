@@ -16,7 +16,6 @@
  */
 package org.apache.kafka.server.http;
 
-import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.network.ConnectionMode;
 import org.apache.kafka.common.network.ListenerName;
 import org.apache.kafka.common.security.ssl.SslFactory;
@@ -57,10 +56,10 @@ public class HttpRestServer implements BrokerHttpServer {
 
     private final BrokerHttpServerContext ctx;
 
-    // Jetty needs a distinct SslContextFactory per HTTPS listener name; multiple
-    // HTTPS endpoints sharing a listener name (the common case — all HTTPS
-    // entries resolve to the listener name "HTTPS") share one KafkaSslContextFactory
-    // and one SslFactory, so reconfig fires once per cert rotation.
+    // Jetty needs a distinct SslContextFactory per HTTPS listener name. All
+    // HTTPS endpoints resolve to one listener name ("HTTPS") by design, so
+    // they share one KafkaSslContextFactory / SslFactory — cert rotation
+    // fires once per listener, not once per bind.
     private final Map<ListenerName, KafkaSslContextFactory> sslFactoriesByListener = new LinkedHashMap<>();
 
     private volatile Server jetty;
@@ -92,6 +91,8 @@ public class HttpRestServer implements BrokerHttpServer {
         context.addServlet(
                 new ServletHolder(new ServletContainer(HttpRouter.build(
                         ctx.basicCredentials(),
+                        ctx.swaggerUiEnabled(),
+                        ctx.requestTimeoutMs(),
                         ctx.appender(),
                         ctx.auth(),
                         ctx.metadataCache(),
@@ -109,17 +110,21 @@ public class HttpRestServer implements BrokerHttpServer {
 
     /**
      * Build (or reuse) the {@link KafkaSslContextFactory} for the listener name
-     * this endpoint resolves to. Each such factory wraps a fresh {@link SslFactory}
-     * that we configure with {@code listener.name.<listener>.ssl.*} overrides
-     * layered on top of the broker's global {@code ssl.*} configs, then register
-     * with {@code DynamicBrokerConfig} so {@code kafka-configs.sh --alter} can
-     * rotate the cert at runtime.
+     * this endpoint resolves to. The broker has already resolved
+     * {@code listener.name.<name>.ssl.*} overrides and passed them in via
+     * {@link BrokerHttpServerContext#sslConfigsByListener()}, so we just read
+     * out the pre-extracted map rather than reaching back into the broker config.
      */
     private SslContextFactory.Server sslContextFactoryFor(HttpEndpoint ep) {
-        ListenerName listener = listenerNameOf(ep);
+        ListenerName listener = ep.listenerName();
         return sslFactoriesByListener.computeIfAbsent(listener, name -> {
-            AbstractConfig brokerConfig = ctx.brokerConfig();
-            Map<String, Object> configs = brokerConfig.valuesWithPrefixOverride(name.configPrefix());
+            Map<String, Object> configs = ctx.sslConfigsByListener().get(name);
+            if (configs == null) {
+                throw new IllegalStateException(
+                        "No SSL configs supplied for HTTPS listener " + name +
+                        ". BrokerHttpServerContext.sslConfigsByListener() must contain an entry " +
+                        "for every HTTPS endpoint's listenerName().");
+            }
             SslFactory sslFactory = new SslFactory(
                     ConnectionMode.SERVER,
                     /* clientAuthConfigOverride */ null,
@@ -133,10 +138,6 @@ public class HttpRestServer implements BrokerHttpServer {
             ctx.reconfigurableRegistry().addReconfigurable(jettyFactory);
             return jettyFactory;
         });
-    }
-
-    private static ListenerName listenerNameOf(HttpEndpoint ep) {
-        return new ListenerName(ep.isTls() ? "HTTPS" : "HTTP");
     }
 
     @Override

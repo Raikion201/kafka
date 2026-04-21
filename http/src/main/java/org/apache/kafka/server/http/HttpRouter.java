@@ -36,15 +36,21 @@ import java.util.Map;
  *   Method  Path                        Resource             Purpose
  *   ------  --------------------------  -------------------  -----------------------
  *   POST    /v1/topics/{name}           ProduceResource      Produce a single record
- *   GET     /openapi.yaml               OpenApiResource      OpenAPI 3 spec
- *   GET     /swagger                    OpenApiResource      Swagger UI (for testing)
+ *   GET     /openapi.yaml               OpenApiResource      OpenAPI 3 spec     (opt-in)
+ *   GET     /swagger                    OpenApiResource      Swagger UI         (opt-in)
  * </pre>
+ *
+ * <p>The OpenAPI / Swagger routes are only registered when {@code swaggerUiEnabled}
+ * is {@code true}. They are off by default because they're served without Basic
+ * Auth (the UI needs to load before the user can authenticate) and reveal the
+ * endpoint surface to anyone who can reach the REST port.</p>
  *
  * <h3>Filters</h3>
  * <pre>
  *   BasicAuthFilter (optional)    Rejects with 401 when http.rest.basic.credentials
  *                                 is set and the request lacks valid credentials.
- *                                 Skips /swagger and /openapi.yaml so the UI loads.
+ *                                 Skips /swagger and /openapi.yaml (when those are
+ *                                 enabled) so the UI can load.
  * </pre>
  *
  * <h3>Providers</h3>
@@ -57,6 +63,8 @@ public final class HttpRouter {
     private HttpRouter() { }
 
     public static ResourceConfig build(Map<String, String> basicCredentials,
+                                       boolean swaggerUiEnabled,
+                                       int requestTimeoutMs,
                                        RecordAppender appender,
                                        AuthorizationHelper auth,
                                        MetadataCache metadataCache,
@@ -73,8 +81,10 @@ public final class HttpRouter {
 
         // Routes — each resource class declares its own JAX-RS @Path / @Method
         // annotations. The table in the class-level Javadoc is the contract.
-        config.register(new ProduceResource(appender, auth, metadataCache, time));
-        config.register(new OpenApiResource());
+        config.register(new ProduceResource(appender, auth, metadataCache, time, requestTimeoutMs));
+        if (swaggerUiEnabled) {
+            config.register(new OpenApiResource());
+        }
 
         return config;
     }

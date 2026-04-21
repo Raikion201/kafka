@@ -23,7 +23,6 @@ import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.compress.Compression;
 import org.apache.kafka.common.network.ClientInformation;
-import org.apache.kafka.common.network.ListenerName;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.record.internal.MemoryRecords;
@@ -37,6 +36,7 @@ import org.apache.kafka.common.security.auth.SecurityProtocol;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.metadata.MetadataCache;
 import org.apache.kafka.server.http.api.AuthorizationHelper;
+import org.apache.kafka.server.http.api.HttpEndpoint;
 import org.apache.kafka.server.http.api.RecordAppender;
 
 import org.slf4j.Logger;
@@ -68,6 +68,25 @@ import java.util.concurrent.TimeUnit;
  * server-side produce path: authorizes via {@link AuthorizationHelper} and
  * appends via {@link RecordAppender}, resuming the suspended async response
  * from the append callback so no Jetty worker thread blocks on I/O.
+ *
+ * <h3>Design trade-offs worth knowing</h3>
+ *
+ * <p><b>Partitioning.</b> We compute the target partition with
+ * {@link BuiltInPartitioner#partitionForKey}, which is murmur2 — the default
+ * {@code KafkaProducer} partitioner. A record POSTed with key {@code k} lands
+ * on the same partition as the same key produced through a default-configured
+ * {@code KafkaProducer}. Clients that ship a custom {@code partitioner.class}
+ * on the producer side will land keys differently; the REST proxy cannot
+ * introspect client-side partitioner plugins and does not try to.</p>
+ *
+ * <p><b>SecurityProtocol in the RequestContext.</b> Authorizers see
+ * {@link SecurityProtocol#SSL} for HTTPS (truthful — TLS) and
+ * {@link SecurityProtocol#PLAINTEXT} for HTTP (truthful — no transport
+ * encryption). The REST proxy is not a binary Kafka client, so
+ * {@link ApiKeys#PRODUCE} in the {@link RequestHeader} is a shape concession,
+ * not a wire protocol claim. An {@link Authorizer} that inspects
+ * {@code ApiKeys} to decide ACLs will treat this request as a PRODUCE — which
+ * is semantically what it is.</p>
  */
 @Path("/v1/topics")
 @Produces(MediaType.APPLICATION_JSON)
@@ -76,28 +95,32 @@ public class ProduceResource {
 
     private static final Logger LOG = LoggerFactory.getLogger(ProduceResource.class);
 
-    private static final long APPEND_TIMEOUT_MS = 30_000L;
-    private static final long ASYNC_TIMEOUT_SECONDS = 35L;
+    /** Leeway between the broker's append deadline and Jersey's async timeout, in ms. */
+    private static final long ASYNC_TIMEOUT_SLACK_MS = 5_000L;
+
     private static final short REQUIRED_ACKS_LEADER = 1;
 
     private final RecordAppender appender;
     private final AuthorizationHelper auth;
     private final MetadataCache metadataCache;
     private final Time time;
+    private final long appendTimeoutMs;
+    private final long asyncTimeoutMs;
 
     // Hoisted — immutable and shared across requests.
     private final ClientInformation clientInfo = new ClientInformation("http-rest", "1.0");
-    private final ListenerName httpListenerName = new ListenerName("HTTP");
-    private final ListenerName httpsListenerName = new ListenerName("HTTPS");
 
     public ProduceResource(RecordAppender appender,
                            AuthorizationHelper auth,
                            MetadataCache metadataCache,
-                           Time time) {
+                           Time time,
+                           int requestTimeoutMs) {
         this.appender = appender;
         this.auth = auth;
         this.metadataCache = metadataCache;
         this.time = time;
+        this.appendTimeoutMs = requestTimeoutMs;
+        this.asyncTimeoutMs = requestTimeoutMs + ASYNC_TIMEOUT_SLACK_MS;
     }
 
     @POST
@@ -109,7 +132,7 @@ public class ProduceResource {
                         @Suspended AsyncResponse asyncResponse) {
 
         // Bound the suspension so a stuck append doesn't pin a connection forever.
-        asyncResponse.setTimeout(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        asyncResponse.setTimeout(asyncTimeoutMs, TimeUnit.MILLISECONDS);
         asyncResponse.setTimeoutHandler(ar -> ar.resume(error(504, "REQUEST_TIMED_OUT")));
 
         RequestContext reqCtx = buildRequestContext(httpCtx, servletRequest);
@@ -119,13 +142,22 @@ public class ProduceResource {
             return;
         }
 
-        Response validation = validateTopic(topic);
-        if (validation != null) {
-            asyncResponse.resume(validation);
+        Uuid topicId = metadataCache.getTopicId(topic);
+        if (topicId.equals(Uuid.ZERO_UUID)) {
+            asyncResponse.resume(error(Response.Status.NOT_FOUND, "UNKNOWN_TOPIC"));
             return;
         }
 
-        appendRecord(topic, body, asyncResponse);
+        // One metadata lookup, reused — avoids the race where the topic is
+        // deleted between an isEmpty() check and a follow-up get() that
+        // would then throw NoSuchElementException and turn into a bare 500.
+        Optional<Integer> numPartitionsOpt = metadataCache.numPartitions(topic);
+        if (numPartitionsOpt.isEmpty()) {
+            asyncResponse.resume(error(Response.Status.SERVICE_UNAVAILABLE, "TOPIC_METADATA_UNAVAILABLE"));
+            return;
+        }
+
+        appendRecord(topic, topicId, numPartitionsOpt.get(), body, asyncResponse);
     }
 
     private RequestContext buildRequestContext(ContainerRequestContext httpCtx, HttpServletRequest servletRequest) {
@@ -140,7 +172,7 @@ public class ProduceResource {
                 resolveClientAddress(servletRequest),
                 Optional.of(servletRequest.getRemotePort()),
                 principal,
-                isSecure ? httpsListenerName : httpListenerName,
+                isSecure ? HttpEndpoint.HTTPS : HttpEndpoint.HTTP,
                 isSecure ? SecurityProtocol.SSL : SecurityProtocol.PLAINTEXT,
                 clientInfo,
                 false);
@@ -154,33 +186,11 @@ public class ProduceResource {
         }
     }
 
-    /**
-     * @return a {@link Response} to abort the request with, or {@code null} if
-     *         the topic exists and has a known partition count.
-     */
-    private Response validateTopic(String topic) {
-        Uuid topicId = metadataCache.getTopicId(topic);
-        if (topicId.equals(Uuid.ZERO_UUID)) {
-            return error(Response.Status.NOT_FOUND, "UNKNOWN_TOPIC");
-        }
-        // If the topic was just deleted the partition count is unknown —
-        // surface that as 503 rather than silently producing to partition 0.
-        if (metadataCache.numPartitions(topic).isEmpty()) {
-            return error(Response.Status.SERVICE_UNAVAILABLE, "TOPIC_METADATA_UNAVAILABLE");
-        }
-        return null;
-    }
-
-    private void appendRecord(String topic, ProduceBody body, AsyncResponse asyncResponse) {
-        Uuid topicId = metadataCache.getTopicId(topic);
-        int numPartitions = metadataCache.numPartitions(topic).orElseThrow();
-
+    private void appendRecord(String topic, Uuid topicId, int numPartitions,
+                              ProduceBody body, AsyncResponse asyncResponse) {
         byte[] keyBytes = body == null || body.key() == null ? null : body.key().getBytes(StandardCharsets.UTF_8);
         byte[] valueBytes = body == null || body.value() == null ? null : body.value().getBytes(StandardCharsets.UTF_8);
 
-        // Match the binary-client default: BuiltInPartitioner uses murmur2 for
-        // keyed records, so a record produced via REST with key `k` lands on
-        // the same partition as the same key produced via KafkaProducer.
         int partition = keyBytes == null
                 ? ThreadLocalRandom.current().nextInt(numPartitions)
                 : BuiltInPartitioner.partitionForKey(keyBytes, numPartitions);
@@ -190,7 +200,7 @@ public class ProduceResource {
         MemoryRecords records = MemoryRecords.withRecords(Compression.NONE, record);
 
         try {
-            appender.appendRecords(APPEND_TIMEOUT_MS, REQUIRED_ACKS_LEADER,
+            appender.appendRecords(appendTimeoutMs, REQUIRED_ACKS_LEADER,
                     Map.of(tip, records),
                     result -> asyncResponse.resume(responseFor(partition, result.get(tip))));
         } catch (Exception e) {

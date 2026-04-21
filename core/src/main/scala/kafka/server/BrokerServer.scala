@@ -519,11 +519,21 @@ class BrokerServer(
           override def removeReconfigurable(r: org.apache.kafka.common.Reconfigurable): Unit = config.removeReconfigurable(r)
         }
 
+        // Pre-resolve per-listener SSL configs (listener.name.<n>.ssl.* overrides
+        // layered on top of the global ssl.*) so :http never needs to read
+        // anything back out of the broker config by key.
+        val sslConfigsByListener = new java.util.LinkedHashMap[ListenerName, java.util.Map[String, Object]]()
+        httpEndpoints.filter(_.isTls).map(_.listenerName).distinct.foreach { listener =>
+          sslConfigsByListener.put(listener, config.valuesWithPrefixOverride(listener.configPrefix))
+        }
+
         httpRestServer = BrokerHttpServers.load(new BrokerHttpServerContext(
           httpEndpoints.asJava,
           config.httpExecutorThreads,
           config.httpBasicCredentials.asJava,
-          config,
+          sslConfigsByListener,
+          config.requestTimeoutMs,
+          config.httpSwaggerUiEnabled,
           registry,
           appender,
           auth,

@@ -80,6 +80,8 @@ include 'clients',
     'generator',
     'group-coordinator',
     'group-coordinator:group-coordinator-api',
+    'http',
+    'http:api',
     'jmh-benchmarks',
     'metadata',
     'raft',
@@ -127,5 +129,6 @@ include 'clients',
     'test-common:test-common-runtime'
 
 project(":storage:api").name = "storage-api"
+project(":http:api").name = "http-api"
 rootProject.name = 'kafka'
 
