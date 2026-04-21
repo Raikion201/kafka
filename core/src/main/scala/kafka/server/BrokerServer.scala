@@ -48,6 +48,7 @@ import org.apache.kafka.server.FetchSession.FetchSessionCache
 import org.apache.kafka.server.authorizer.Authorizer
 import org.apache.kafka.server.common.{ApiMessageAndVersion, DirectoryEventHandler, NodeToControllerChannelManager, ShareVersion, TopicIdPartition}
 import org.apache.kafka.server.config.{ConfigType, DelegationTokenManagerConfigs}
+import org.apache.kafka.server.http.api.BrokerHttpServer
 import org.apache.kafka.server.log.remote.metadata.storage.BrokerReadyCallback
 import org.apache.kafka.server.log.remote.storage.{RemoteLogManager, RemoteLogManagerConfig}
 import org.apache.kafka.server.metrics.{ClientTelemetryExporterPlugin, KafkaYammerMetrics}
@@ -107,7 +108,7 @@ class BrokerServer(
 
   @volatile var dataPlaneRequestProcessor: KafkaApis = _
 
-  @volatile var httpRestServer: kafka.server.http.HttpRestServer = _
+  @volatile var httpRestServer: BrokerHttpServer = _
 
   var authorizerPlugin: Option[Plugin[Authorizer]] = None
   @volatile var socketServer: SocketServer = _
@@ -499,18 +500,16 @@ class BrokerServer(
         "broker"
       )
 
-      val httpEndpoints = config.httpListeners
+      val httpEndpoints = config.httpListeners.toSeq
       if (httpEndpoints.nonEmpty) {
-        httpRestServer = new kafka.server.http.HttpRestServer(
-          httpEndpoints.toSeq,
-          config.httpExecutorThreads,
-          config.httpBasicCredentials.toMap,
+        httpRestServer = HttpRestProxyLoader.load(
+          httpEndpoints,
           config,
           replicaManager,
           authorizerPlugin,
           metadataCache,
           time)
-        httpRestServer.startup()
+        if (httpRestServer != null) httpRestServer.startup()
       }
 
       metadataPublishers.add(new MetadataVersionConfigValidator(config.brokerId,
