@@ -9,10 +9,14 @@
 #   1. Ensures the project jars are built.
 #   2. Generates a self-signed keystore at tmp/server.keystore.jks if missing.
 #   3. Writes tmp/rest-proxy-demo.properties if missing.
-#   4. Creates a fresh log directory on each run (avoids Windows file-lock
-#      recovery crashes on stale segments from a previous kill).
-#   5. Formats that log directory.
-#   6. Launches the broker in the foreground (Ctrl-C to stop cleanly).
+#   4. Uses a persistent log directory at tmp/kafka-logs so topics and data
+#      survive a clean (Ctrl-C) restart. Only formats it on first run.
+#   5. Launches the broker in the foreground (Ctrl-C to stop cleanly).
+#
+# Reset the state (drop all topics / offsets) with:
+#   rm -rf tmp/kafka-logs
+# If the broker was killed hard and the next boot hits locked segments on
+# Windows, the same reset command clears it.
 #
 # Usage:
 #   bash scripts/rest-proxy/start.sh
@@ -40,10 +44,10 @@ export regex='(-(test|test-sources|src|scaladoc|javadoc)\.jar|jar\.asc|connect-f
 STATE_DIR="tmp"
 KEYSTORE="$STATE_DIR/server.keystore.jks"
 PROPERTIES="$STATE_DIR/rest-proxy-demo.properties"
-# Fresh log dir per run so a previous crash can't corrupt this one. Unix
-# seconds resolution is enough; if you start twice in the same second you
-# just get two identically-named dirs and the second run formats the first.
-LOG_DIR="$STATE_DIR/kafka-logs-$(date +%s)"
+# Persistent log dir — topics and data survive a clean restart.
+# If you ever need a reset (e.g. the broker was killed hard and the next
+# boot trips on locked segments): rm -rf "$LOG_DIR"
+LOG_DIR="$STATE_DIR/kafka-logs"
 
 mkdir -p "$STATE_DIR" "$LOG_DIR"
 
@@ -105,19 +109,26 @@ else
   echo "[start.sh] Kept existing $PROPERTIES (log.dirs=$LOG_DIR)"
 fi
 
-# ─── 4. Format ──────────────────────────────────────────────────────────
-echo "[start.sh] Formatting $LOG_DIR ..."
-CLUSTER_ID=$(bash ./bin/kafka-run-class.sh kafka.tools.StorageTool random-uuid 2>/dev/null | tail -1)
-if [ -z "$CLUSTER_ID" ] || [ "${#CLUSTER_ID}" -lt 16 ]; then
-  echo "[start.sh] ERROR: could not get a cluster id (got '$CLUSTER_ID')."
-  echo "          Most likely the classpath filter regex isn't exported in this shell."
-  echo "          Run:  export regex='(-(test|test-sources|src|scaladoc|javadoc)\\.jar|jar\\.asc|connect-file.*\\.jar)$'"
-  exit 1
-fi
-echo "[start.sh] Cluster ID: $CLUSTER_ID"
+# ─── 4. Format (first run only) ─────────────────────────────────────────
+# An already-formatted log dir has meta.properties at its root; kafka-storage
+# format refuses to touch a dir that has one. Skip the format step entirely
+# when we find that marker so data from the previous run survives.
+if [ -f "$LOG_DIR/meta.properties" ]; then
+  echo "[start.sh] $LOG_DIR already formatted; keeping existing data."
+else
+  echo "[start.sh] Formatting $LOG_DIR ..."
+  CLUSTER_ID=$(bash ./bin/kafka-run-class.sh kafka.tools.StorageTool random-uuid 2>/dev/null | tail -1)
+  if [ -z "$CLUSTER_ID" ] || [ "${#CLUSTER_ID}" -lt 16 ]; then
+    echo "[start.sh] ERROR: could not get a cluster id (got '$CLUSTER_ID')."
+    echo "          Most likely the classpath filter regex isn't exported in this shell."
+    echo "          Run:  export regex='(-(test|test-sources|src|scaladoc|javadoc)\\.jar|jar\\.asc|connect-file.*\\.jar)$'"
+    exit 1
+  fi
+  echo "[start.sh] Cluster ID: $CLUSTER_ID"
 
-bash ./bin/kafka-run-class.sh kafka.tools.StorageTool format \
-    -t "$CLUSTER_ID" -c "$PROPERTIES"
+  bash ./bin/kafka-run-class.sh kafka.tools.StorageTool format \
+      -t "$CLUSTER_ID" -c "$PROPERTIES"
+fi
 
 # ─── 5. Start broker ────────────────────────────────────────────────────
 # Launch Kafka in the background, poll the REST port until it accepts, then
