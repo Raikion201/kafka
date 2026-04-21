@@ -48,7 +48,8 @@ import org.apache.kafka.server.FetchSession.FetchSessionCache
 import org.apache.kafka.server.authorizer.Authorizer
 import org.apache.kafka.server.common.{ApiMessageAndVersion, DirectoryEventHandler, NodeToControllerChannelManager, ShareVersion, TopicIdPartition}
 import org.apache.kafka.server.config.{ConfigType, DelegationTokenManagerConfigs}
-import org.apache.kafka.server.http.api.BrokerHttpServer
+import org.apache.kafka.server.http.api.{AuthorizationHelper, BrokerHttpServer, BrokerHttpServerContext, BrokerHttpServers, ReconfigurableRegistry, RecordAppender}
+import org.apache.kafka.storage.internals.log.AppendOrigin
 import org.apache.kafka.server.log.remote.metadata.storage.BrokerReadyCallback
 import org.apache.kafka.server.log.remote.storage.{RemoteLogManager, RemoteLogManagerConfig}
 import org.apache.kafka.server.metrics.{ClientTelemetryExporterPlugin, KafkaYammerMetrics}
@@ -502,13 +503,32 @@ class BrokerServer(
 
       val httpEndpoints = config.httpListeners.toSeq
       if (httpEndpoints.nonEmpty) {
-        httpRestServer = HttpRestProxyLoader.load(
-          httpEndpoints,
+        // Narrow adapters over core-only types so the :http module never sees them.
+        val appender: RecordAppender = (timeoutMs, acks, entries, callback) =>
+          replicaManager.appendRecords(
+            timeout = timeoutMs,
+            requiredAcks = acks,
+            internalTopicsAllowed = false,
+            origin = AppendOrigin.CLIENT,
+            entriesPerPartition = entries.asScala.toMap,
+            responseCallback = result => callback.accept(result))
+        val authHelperAdapter = new AuthHelper(authorizerPlugin)
+        val auth: AuthorizationHelper = (ctx, op, rt, name) => authHelperAdapter.authorize(ctx, op, rt, name)
+        val registry: ReconfigurableRegistry = new ReconfigurableRegistry {
+          override def addReconfigurable(r: org.apache.kafka.common.Reconfigurable): Unit = config.addReconfigurable(r)
+          override def removeReconfigurable(r: org.apache.kafka.common.Reconfigurable): Unit = config.removeReconfigurable(r)
+        }
+
+        httpRestServer = BrokerHttpServers.load(new BrokerHttpServerContext(
+          httpEndpoints.asJava,
+          config.httpExecutorThreads,
+          config.httpBasicCredentials.asJava,
           config,
-          replicaManager,
-          authorizerPlugin,
+          registry,
+          appender,
+          auth,
           metadataCache,
-          time)
+          time))
         if (httpRestServer != null) httpRestServer.startup()
       }
 

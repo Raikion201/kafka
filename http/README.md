@@ -195,7 +195,7 @@ listeners=PLAINTEXT://...,HTTP://...,HTTPS://...
          │           HttpEndpoint(HTTPS, 8443)]
          ▼              │
     SocketServer        ▼
-    (port 9092)    HttpRestProxyLoader
+    (port 9092)    BrokerHttpServers.load
                         │  (ServiceLoader)
                         ▼
                    BrokerHttpServerFactory ◄─────── META-INF/services
@@ -233,10 +233,13 @@ listeners=PLAINTEXT://...,HTTP://...,HTTPS://...
                    HTTP 200 { partition, offset }
 ```
 
-The `RecordAppender` and `AuthorizationHelper` adapters are built in
-`core/.../server/HttpRestProxyLoader.scala` and forward straight to
-`ReplicaManager.appendRecords` and `AuthHelper.authorize` — one lambda
-each. Nothing in `:http` imports any Scala/core type.
+The `RecordAppender` / `AuthorizationHelper` / `ReconfigurableRegistry`
+adapters are built inline in `BrokerServer.scala` — one lambda / SAM each,
+forwarding straight to `ReplicaManager.appendRecords`, `AuthHelper.authorize`,
+and `config.{add,remove}Reconfigurable`. The ServiceLoader lookup itself
+lives in `:http-api` (`BrokerHttpServers.load`), so `:core` never does
+any HTTP-specific wiring beyond constructing those three adapters.
+Nothing in `:http` imports any Scala/core type.
 
 ## Wiring files (core)
 
@@ -244,8 +247,7 @@ each. Nothing in `:http` imports any Scala/core type.
 |--------------------------------------------------------------|-----------------------------------------------------------------------|
 | `server/.../config/HttpServerConfigs.java`                   | Config keys + `ConfigDef` (merged into `AbstractKafkaConfig.CONFIG_DEF`) |
 | `core/.../server/KafkaConfig.scala`                          | `httpListeners` / `httpExecutorThreads` / `httpBasicCredentials` accessors and the listener-split override |
-| `core/.../server/BrokerServer.scala`                         | Lifecycle — calls `HttpRestProxyLoader.load` and starts/stops the server |
-| `core/.../server/HttpRestProxyLoader.scala`                  | `ServiceLoader` lookup + `RecordAppender`/`AuthorizationHelper` adapters + context assembly |
+| `core/.../server/BrokerServer.scala`                         | Lifecycle — builds adapters inline, calls `BrokerHttpServers.load`, starts/stops the server |
 | `scripts/rest-proxy/{start,test,stop}.sh`                    | One-command bootstrap + smoke test                                    |
 
 ## Testing
