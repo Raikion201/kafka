@@ -134,4 +134,51 @@ public class BasicAuthFilterTest {
         filter.filter(ctx);
         verify(ctx, never()).abortWith(any(Response.class));
     }
+
+    /**
+     * Both entries in a multi-user credentials map must authenticate
+     * independently. Guards against a refactor that collapses the map into a
+     * single cached "current user" lookup — a regression that the one-user
+     * happy-path test would miss.
+     */
+    @Test
+    public void bothUsersInAMultiUserMapCanAuthenticate() {
+        BasicAuthFilter f = new BasicAuthFilter(Map.of("alice", "s3cret", "bob", "hunter2"));
+
+        ContainerRequestContext aliceCtx = ctxFor("v1/topics/foo", basic("alice:s3cret"));
+        f.filter(aliceCtx);
+        verify(aliceCtx, never()).abortWith(any(Response.class));
+        verify(aliceCtx).setProperty(eq(BasicAuthFilter.PRINCIPAL_PROPERTY), any());
+
+        ContainerRequestContext bobCtx = ctxFor("v1/topics/foo", basic("bob:hunter2"));
+        f.filter(bobCtx);
+        verify(bobCtx, never()).abortWith(any(Response.class));
+        verify(bobCtx).setProperty(eq(BasicAuthFilter.PRINCIPAL_PROPERTY), any());
+
+        // Cross-check: alice's password must not authenticate bob.
+        ContainerRequestContext swapped = ctxFor("v1/topics/foo", basic("bob:s3cret"));
+        f.filter(swapped);
+        verify(swapped).abortWith(any(Response.class));
+    }
+
+    /**
+     * Non-ASCII passwords survive Base64 round-trip and UTF-8 byte compare.
+     * A regression to {@code String.equals} on an {@code ISO-8859-1}-decoded
+     * header would pass ASCII-only tests; this one catches it.
+     */
+    @Test
+    public void nonAsciiPasswordAuthenticates() {
+        String password = "пароль-💥-ñ";
+        BasicAuthFilter f = new BasicAuthFilter(Map.of("alice", password));
+
+        ContainerRequestContext ok = ctxFor("v1/topics/foo", basic("alice:" + password));
+        f.filter(ok);
+        verify(ok, never()).abortWith(any(Response.class));
+        verify(ok).setProperty(eq(BasicAuthFilter.PRINCIPAL_PROPERTY), any());
+
+        // Same prefix, different suffix — constant-time compare must reject.
+        ContainerRequestContext bad = ctxFor("v1/topics/foo", basic("alice:пароль-💥-X"));
+        f.filter(bad);
+        verify(bad).abortWith(any(Response.class));
+    }
 }
