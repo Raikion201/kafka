@@ -45,7 +45,7 @@ NAMESPACE="kafka"
 CLUSTER_NAME="my-cluster"
 KAFKA_IMAGE="kafka-rest-proxy:demo"
 OPERATOR_IMAGE="strimzi-cluster-operator-rest:demo"
-REST_LISTENER_PORT=8080
+REST_LISTENER_PORT=9090
 REST_USER="alice"
 REST_PASS="s3cret"
 TOPIC="demo-topic"
@@ -143,16 +143,33 @@ else
 # Overlay the REST-proxy-enabled Kafka libs on top of a stock Strimzi
 # Kafka image so we inherit Strimzi's directory layout / user / entrypoint
 # but serve our Kafka binaries.
+#
+# Why this approach:
+# 1. Keep Strimzi startup scripts (kafka_run.sh, kafka_liveness.sh,
+#    kafka_readiness.sh) from the base image — they are NOT in the
+#    standard Kafka tarball.
+# 2. Keep Strimzi-specific JARs (kafka-kubernetes-config-provider,
+#    kafka-oauth, cruise-control, etc.) from the base image — they are
+#    not in our fork's tarball either.
+# 3. Remove only the original upstream Kafka JARs (versioned 4.2.0)
+#    so they don't shadow our forked 4.4.0-SNAPSHOT JARs on the classpath.
+# 4. Fix CRLF line endings in bin scripts built on Windows.
 FROM quay.io/strimzi/kafka:latest-kafka-4.2.0
 
 USER root
 
-# Replace /opt/kafka contents with the custom build.
-RUN rm -rf /opt/kafka
 COPY kafka.tgz /tmp/kafka.tgz
-RUN mkdir -p /opt/kafka \
- && tar -xzf /tmp/kafka.tgz -C /opt/kafka --strip-components=1 \
- && rm /tmp/kafka.tgz \
+RUN mkdir -p /tmp/kafka-build \
+ && tar -xzf /tmp/kafka.tgz -C /tmp/kafka-build --strip-components=1 \
+ && find /opt/kafka/libs -name "*-4.2.0.jar" -delete \
+ && find /opt/kafka/libs -name "*-4.2.0-*.jar" -delete \
+ && find /opt/kafka/libs -name "kafka_2.13-4.2.0*.jar" -delete \
+ && find /opt/kafka/libs -name "scala-library-*.jar" -delete \
+ && find /opt/kafka/libs -name "scala-reflect-*.jar" -delete \
+ && cp -r /tmp/kafka-build/libs/. /opt/kafka/libs/ \
+ && find /opt/kafka/bin -name "*.sh" -exec sed -i 's/\r//' {} \; \
+ && chmod +x /opt/kafka/bin/*.sh \
+ && rm -rf /tmp/kafka-build /tmp/kafka.tgz \
  && chown -R 1001:0 /opt/kafka
 
 USER 1001
@@ -184,13 +201,25 @@ else
     { print }
   ' kafka-versions.yaml > kafka-versions.yaml.new && mv kafka-versions.yaml.new kafka-versions.yaml
 
-  # Build cluster-operator jar. Skip the exec plugin that chokes on Windows
-  # (CRD generator); we already regenerated those files at commit time.
-  mvn -pl cluster-operator -am package -DskipTests -Dexec.skip=true -q
+  # Build every operator-image module that the operator Dockerfile bundles.
+  # `mvn package` on each writes its -dist.zip into docker-images/artifacts/binaries/
+  # where Strimzi's docker-images/operator/Makefile unpacks them.
+  mvn -pl cluster-operator,topic-operator,user-operator,kafka-init,v1-api-conversion \
+      -am package -DskipTests -Dexec.skip=true -q
 
-  # Build the Docker image using Strimzi's existing Dockerfile.
-  make -C docker-images/operator build DOCKER_TAG=demo DOCKER_ORG=strimzi-cluster-operator-rest
-  docker tag "strimzi-cluster-operator-rest/cluster-operator:demo" "$OPERATOR_IMAGE"
+  # Strimzi's operator Dockerfile begins with `FROM strimzi/base:latest`, an
+  # internal image that isn't published to any registry. Build it locally first.
+  if ! docker image inspect strimzi/base:latest >/dev/null 2>&1; then
+    echo "building strimzi/base:latest (first time)"
+    make -C docker-images/base docker_build DOCKER_TAG=demo
+  fi
+
+  # Build the operator image using Strimzi's existing Dockerfile. The correct
+  # target is `docker_build` (not `build`). This produces `strimzi/operator:latest`.
+  make -C docker-images/operator docker_build DOCKER_TAG=demo
+
+  # Retag to our demo image name so the rest of the script can find it.
+  docker tag "strimzi/operator:latest" "$OPERATOR_IMAGE"
 fi
 
 # -- 4. Load images into the cluster -----------------------------------
