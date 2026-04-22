@@ -319,7 +319,7 @@ metadata:
   namespace: $NAMESPACE
 spec:
   kafka:
-    version: 4.4.0-rest-proxy
+    version: 4.4.0
     metadataVersion: 4.2-IV1
     image: $KAFKA_IMAGE
     listeners:
