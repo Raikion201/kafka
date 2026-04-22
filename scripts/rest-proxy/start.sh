@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
-# Start a single-node Kafka broker with the REST proxy demo listeners:
-#   PLAINTEXT://localhost:9092   (binary Kafka protocol)
-#   CONTROLLER://localhost:9093  (KRaft controller)
-#   HTTP://0.0.0.0:8080          (REST proxy, plain)
-#   HTTPS://0.0.0.0:8443         (REST proxy, TLS via broker's ssl.keystore.*)
+# Start a single-node Kafka broker with the REST proxy demo listeners.
+# Defaults match the Strimzi deployment so test.sh can target either backend
+# with the same env vars:
+#   PLAINTEXT://localhost:9092                (binary Kafka protocol)
+#   CONTROLLER://localhost:9093               (KRaft controller)
+#   HTTP://0.0.0.0:${HTTP_PORT:-9090}         (REST proxy, plain)
+#   HTTPS://0.0.0.0:${HTTPS_PORT:-8443}       (REST proxy, TLS)
+#
+# Overridable env vars (and their defaults):
+#   KAFKA_PORT=9092  CONTROLLER_PORT=9093  HTTP_PORT=9090  HTTPS_PORT=8443
+#
+# Set HTTPS_PORT= (empty) to disable the HTTPS listener entirely.
 #
 # Does the setup once, idempotently:
 #   1. Ensures the project jars are built.
 #   2. Generates a self-signed keystore at tmp/server.keystore.jks if missing.
-#   3. Writes tmp/rest-proxy-demo.properties if missing.
+#   3. Writes tmp/rest-proxy-demo.properties (listeners line is rewritten
+#      every run to track port-env-var changes; other edits are preserved).
 #   4. Uses a persistent log directory at tmp/kafka-logs so topics and data
 #      survive a clean (Ctrl-C) restart. Only formats it on first run.
 #   5. Launches the broker in the foreground (Ctrl-C to stop cleanly).
@@ -26,6 +34,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+
+KAFKA_PORT="${KAFKA_PORT:-9092}"
+CONTROLLER_PORT="${CONTROLLER_PORT:-9093}"
+HTTP_PORT="${HTTP_PORT:-9090}"
+HTTPS_PORT="${HTTPS_PORT:-8443}"
 
 # Native-style path for things we write into server.properties. On Git Bash,
 # `pwd` gives /d/... which Java on Windows can't resolve; cygpath -m converts
@@ -69,17 +82,25 @@ if [ ! -f "$KEYSTORE" ]; then
 fi
 
 # ─── 3. Properties ──────────────────────────────────────────────────────
+# Listener entries are built from the port env vars; HTTPS is only included
+# when HTTPS_PORT is non-empty so you can run HTTP-only when targeting a
+# Strimzi-style setup.
+LISTENERS="PLAINTEXT://localhost:${KAFKA_PORT},CONTROLLER://localhost:${CONTROLLER_PORT},HTTP://0.0.0.0:${HTTP_PORT}"
+if [ -n "${HTTPS_PORT}" ]; then
+  LISTENERS="${LISTENERS},HTTPS://0.0.0.0:${HTTPS_PORT}"
+fi
+
 # Only write a fresh file when one doesn't exist, so user edits
 # (e.g. http.rest.swagger-ui.enabled=true) survive a restart. log.dirs
-# is per-run, so patch that one line in place on every run regardless.
+# and listeners are per-run, so patch those lines in place on every run.
 if [ ! -f "$PROPERTIES" ]; then
   cat > "$PROPERTIES" <<EOF
 process.roles=broker,controller
 node.id=1
-controller.quorum.voters=1@localhost:9093
+controller.quorum.voters=1@localhost:${CONTROLLER_PORT}
 
-listeners=PLAINTEXT://localhost:9092,CONTROLLER://localhost:9093,HTTP://0.0.0.0:8080,HTTPS://0.0.0.0:8443
-advertised.listeners=PLAINTEXT://localhost:9092
+listeners=${LISTENERS}
+advertised.listeners=PLAINTEXT://localhost:${KAFKA_PORT}
 controller.listener.names=CONTROLLER
 inter.broker.listener.name=PLAINTEXT
 listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
@@ -100,13 +121,19 @@ transaction.state.log.min.isr=1
 EOF
   echo "[start.sh] Wrote $PROPERTIES (log.dirs=$LOG_DIR)"
 else
+  # Patch log.dirs, listeners, advertised.listeners, and the controller
+  # quorum voter so port-env-var overrides take effect on existing files.
   esc_logdir=$(printf '%s\n' "$ROOT_NATIVE/$LOG_DIR" | sed 's/[\/&]/\\&/g')
+  esc_listeners=$(printf '%s\n' "$LISTENERS" | sed 's/[\/&]/\\&/g')
   if grep -q '^log.dirs=' "$PROPERTIES"; then
     sed -i.bak "s/^log.dirs=.*/log.dirs=$esc_logdir/" "$PROPERTIES" && rm -f "$PROPERTIES.bak"
   else
     echo "log.dirs=$ROOT_NATIVE/$LOG_DIR" >> "$PROPERTIES"
   fi
-  echo "[start.sh] Kept existing $PROPERTIES (log.dirs=$LOG_DIR)"
+  sed -i.bak "s/^listeners=.*/listeners=$esc_listeners/" "$PROPERTIES" && rm -f "$PROPERTIES.bak"
+  sed -i.bak "s|^advertised.listeners=.*|advertised.listeners=PLAINTEXT://localhost:${KAFKA_PORT}|" "$PROPERTIES" && rm -f "$PROPERTIES.bak"
+  sed -i.bak "s|^controller.quorum.voters=.*|controller.quorum.voters=1@localhost:${CONTROLLER_PORT}|" "$PROPERTIES" && rm -f "$PROPERTIES.bak"
+  echo "[start.sh] Kept existing $PROPERTIES (log.dirs=$LOG_DIR, listeners updated)"
 fi
 
 # ─── 4. Format (first run only) ─────────────────────────────────────────
@@ -158,9 +185,13 @@ while : ; do
   # the produce endpoint replies 401 (no creds) or 415 (no Content-Type),
   # both of which count as "up."
   http_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 1 \
-    "http://localhost:8080/v1/topics/_probe" 2>/dev/null || echo 000)
-  https_code=$(curl -s -k -o /dev/null -w '%{http_code}' --max-time 1 \
-    "https://localhost:8443/v1/topics/_probe" 2>/dev/null || echo 000)
+    "http://localhost:${HTTP_PORT}/v1/topics/_probe" 2>/dev/null || echo 000)
+  if [ -n "${HTTPS_PORT}" ]; then
+    https_code=$(curl -s -k -o /dev/null -w '%{http_code}' --max-time 1 \
+      "https://localhost:${HTTPS_PORT}/v1/topics/_probe" 2>/dev/null || echo 000)
+  else
+    https_code="skip"
+  fi
   if [ "$http_code" != "000" ] && [ "$https_code" != "000" ]; then
     break
   fi
@@ -176,9 +207,11 @@ done
 echo ""
 echo "════════════════════════════════════════════════════════════════"
 echo " BROKER READY"
-echo "   HTTP  → http://localhost:8080"
-echo "   HTTPS → https://localhost:8443   (self-signed cert, use curl -k)"
-echo "   Kafka → localhost:9092           (binary protocol)"
+echo "   HTTP  → http://localhost:${HTTP_PORT}"
+if [ -n "${HTTPS_PORT}" ]; then
+  echo "   HTTPS → https://localhost:${HTTPS_PORT}   (self-signed cert, use curl -k)"
+fi
+echo "   Kafka → localhost:${KAFKA_PORT}           (binary protocol)"
 echo ""
 echo " In another terminal, run:"
 echo "   bash scripts/rest-proxy/test.sh"

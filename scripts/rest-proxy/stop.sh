@@ -4,6 +4,10 @@
 # shutdown path; use this script when you've lost the terminal or when a
 # crash left a JVM holding open log files.
 #
+# This only touches local java.exe processes — it does NOT affect a Strimzi
+# broker running inside Kubernetes. To stop a Strimzi cluster, use:
+#   kubectl scale kafkanodepool broker controller -n kafka --replicas=0
+#
 # Usage:
 #   bash scripts/rest-proxy/stop.sh
 set -euo pipefail

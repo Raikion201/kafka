@@ -179,47 +179,33 @@ DOCKERFILE
 fi
 
 # -- 3. Strimzi operator image ----------------------------------------
+# Build a custom operator image that overlays our main-branch cluster-operator
+# JARs on top of the 0.51.0 base image. Used for the cluster-operator
+# Deployment AND for the topic/user/kafka-init containers inside EO pods —
+# which is what lets main's EntityTopicOperator gating work (no PKCS12 volumes
+# needed because the main-branch startup scripts don't touch /etc/*-certs/).
 
 if [ "$SKIP_IMAGE_BUILD" -eq 1 ] && docker image inspect "$OPERATOR_IMAGE" >/dev/null 2>&1; then
   say "3. Strimzi operator image: reusing $OPERATOR_IMAGE (--skip-image-build)"
 else
-  say "3. building Strimzi operator from $STRIMZI_ROOT (branch rest-api)"
+  say "3. building Strimzi operator image ($OPERATOR_IMAGE) via Dockerfile.patch"
   cd "$STRIMZI_ROOT"
 
-  # Patch kafka-versions.yaml with the real SHA-512 of our tarball so the
-  # operator does not refuse to recognise the 4.4.0-rest-proxy entry.
-  # awk-based: track whether we're inside the rest-proxy block and rewrite
-  # only that block's checksum line.
-  echo "patching kafka-versions.yaml checksum"
-  awk -v sha="$SHA512" '
-    /^- version: 4\.4\.0-rest-proxy$/ { in_block = 1 }
-    in_block && /^  checksum: / {
-      print "  checksum: " sha
-      in_block = 0
-      next
-    }
-    { print }
-  ' kafka-versions.yaml > kafka-versions.yaml.new && mv kafka-versions.yaml.new kafka-versions.yaml
+  # Build just the cluster-operator module (no -am to avoid api-module CRD
+  # generation crashing on Windows). The main-branch JARs we also overlay
+  # (operator-common, topic-operator, user-operator, kafka-init) are already
+  # in ~/.m2/repository from a prior full build — if this is a first-time
+  # fresh clone you'll need `mvn -DskipTests install` once before this script.
+  mvn -pl cluster-operator -DskipTests package -q
 
-  # Build every operator-image module that the operator Dockerfile bundles.
-  # `mvn package` on each writes its -dist.zip into docker-images/artifacts/binaries/
-  # where Strimzi's docker-images/operator/Makefile unpacks them.
-  mvn -pl cluster-operator,topic-operator,user-operator,kafka-init,v1-api-conversion \
-      -am package -DskipTests -Dexec.skip=true -q
+  # Refresh the docker build-context with the newly built cluster-operator jar
+  # (other strimzi + third-party JARs in tmp/lib/ are left alone — they came
+  # from an earlier full mvn package and are still what we want to overlay).
+  cp cluster-operator/target/cluster-operator-1.1.0-SNAPSHOT.jar \
+     docker-images/operator/tmp/lib/io.strimzi.cluster-operator-1.1.0-SNAPSHOT.jar
 
-  # Strimzi's operator Dockerfile begins with `FROM strimzi/base:latest`, an
-  # internal image that isn't published to any registry. Build it locally first.
-  if ! docker image inspect strimzi/base:latest >/dev/null 2>&1; then
-    echo "building strimzi/base:latest (first time)"
-    make -C docker-images/base docker_build DOCKER_TAG=demo
-  fi
-
-  # Build the operator image using Strimzi's existing Dockerfile. The correct
-  # target is `docker_build` (not `build`). This produces `strimzi/operator:latest`.
-  make -C docker-images/operator docker_build DOCKER_TAG=demo
-
-  # Retag to our demo image name so the rest of the script can find it.
-  docker tag "strimzi/operator:latest" "$OPERATOR_IMAGE"
+  docker build -f docker-images/operator/Dockerfile.patch \
+               -t "$OPERATOR_IMAGE" docker-images/operator/
 fi
 
 # -- 4. Load images into the cluster -----------------------------------
@@ -271,8 +257,14 @@ else
   for f in "$TMP_INSTALL"/*.yaml; do
     sed -i "s/namespace: myproject/namespace: $NAMESPACE/g" "$f"
   done
-  # Patch the Deployment image. Strimzi's default is quay.io/...
-  sed -i "s|image: quay\\.io/strimzi/operator.*|image: $OPERATOR_IMAGE|" "$TMP_INSTALL"/060-Deployment-strimzi-cluster-operator.yaml || true
+  # Pin every operator-image reference — the Deployment's own `image:` AND
+  # the STRIMZI_DEFAULT_{TOPIC,USER,KAFKA_INIT}_OPERATOR_IMAGE env-var
+  # `value:` fields — to our custom image. The env-vars are what the EO's
+  # topic/user-operator containers use, so without this they'd still pull
+  # the official 0.51.0 image and hit the PKCS12-on-disk path.
+  DEPLOY_YAML="$TMP_INSTALL/060-Deployment-strimzi-cluster-operator.yaml"
+  sed -i "s|image: quay\\.io/strimzi/operator.*|image: $OPERATOR_IMAGE|" "$DEPLOY_YAML" || true
+  sed -i "s|value: quay\\.io/strimzi/operator:0\\.51\\.0|value: $OPERATOR_IMAGE|" "$DEPLOY_YAML" || true
 
   kubectl apply -f "$TMP_INSTALL" -n "$NAMESPACE"
   echo "waiting for operator pod..."
