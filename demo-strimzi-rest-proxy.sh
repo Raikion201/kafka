@@ -171,19 +171,18 @@ else
 
   # Patch kafka-versions.yaml with the real SHA-512 of our tarball so the
   # operator does not refuse to recognise the 4.4.0-rest-proxy entry.
+  # awk-based: track whether we're inside the rest-proxy block and rewrite
+  # only that block's checksum line.
   echo "patching kafka-versions.yaml checksum"
-  # Only touch the 4.4.0-rest-proxy block's checksum — match the 128-hex placeholder line
-  python3 -c "
-import re, sys
-p = 'kafka-versions.yaml'
-src = open(p).read()
-new = re.sub(
-    r'(- version: 4\\.4\\.0-rest-proxy[^-]*?checksum: )[0-9a-fA-F]+',
-    r'\\g<1>$SHA512',
-    src,
-    flags=re.DOTALL)
-open(p, 'w').write(new)
-" || { echo "python3 needed to patch kafka-versions.yaml"; exit 1; }
+  awk -v sha="$SHA512" '
+    /^- version: 4\.4\.0-rest-proxy$/ { in_block = 1 }
+    in_block && /^  checksum: / {
+      print "  checksum: " sha
+      in_block = 0
+      next
+    }
+    { print }
+  ' kafka-versions.yaml > kafka-versions.yaml.new && mv kafka-versions.yaml.new kafka-versions.yaml
 
   # Build cluster-operator jar. Skip the exec plugin that chokes on Windows
   # (CRD generator); we already regenerated those files at commit time.
