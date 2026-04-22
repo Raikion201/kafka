@@ -45,7 +45,7 @@ NAMESPACE="kafka"
 CLUSTER_NAME="my-cluster"
 KAFKA_IMAGE="kafka-rest-proxy:demo"
 OPERATOR_IMAGE="strimzi-cluster-operator-rest:demo"
-REST_LISTENER_PORT=9090
+REST_LISTENER_PORT=9095
 REST_USER="alice"
 REST_PASS="s3cret"
 TOPIC="demo-topic"
@@ -334,6 +334,7 @@ spec:
     config:
       http.rest.basic.credentials: $REST_USER:$REST_PASS
       http.rest.executor.threads: 8
+      http.rest.swagger-ui.enabled: "true"
       offsets.topic.replication.factor: 1
       transaction.state.log.replication.factor: 1
       transaction.state.log.min.isr: 1

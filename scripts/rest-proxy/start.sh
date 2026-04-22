@@ -37,7 +37,7 @@ cd "$ROOT"
 
 KAFKA_PORT="${KAFKA_PORT:-9092}"
 CONTROLLER_PORT="${CONTROLLER_PORT:-9093}"
-HTTP_PORT="${HTTP_PORT:-9090}"
+HTTP_PORT="${HTTP_PORT:-9095}"
 HTTPS_PORT="${HTTPS_PORT:-8443}"
 
 # Native-style path for things we write into server.properties. On Git Bash,
