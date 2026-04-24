@@ -106,6 +106,13 @@ public class SchemaResourceTest {
         assertErrorCode(r, "SCHEMA_MISSING");
     }
 
+    @Test
+    void registerSchema_invalidJson_returns400() {
+        Response r = resource.registerSchema(SUBJECT, "{\"schema\":\"{not valid json}\"}");
+        assertEquals(400, r.getStatus());
+        assertErrorCode(r, "SCHEMA_INVALID_JSON");
+    }
+
     // ── GET /v1/schemas/subjects/{subject} ───────────────────────────────────
 
     @Test

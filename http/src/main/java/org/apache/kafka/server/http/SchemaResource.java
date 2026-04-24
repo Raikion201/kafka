@@ -81,7 +81,13 @@ public class SchemaResource {
         if (body == null || body.schema() == null || body.schema().isBlank()) {
             return error(Response.Status.BAD_REQUEST, "SCHEMA_MISSING");
         }
-        int id = store.register(subject, body.schema().strip());
+        String schema = body.schema().strip();
+        try {
+            OBJECT_MAPPER.readTree(schema);
+        } catch (Exception e) {
+            return error(Response.Status.BAD_REQUEST, "SCHEMA_INVALID_JSON");
+        }
+        int id = store.register(subject, schema);
         return Response.status(Response.Status.CREATED)
                 .entity(new SchemaRegisteredBody(id))
                 .build();
