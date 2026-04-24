@@ -45,6 +45,9 @@ import java.util.Map;
  * @param auth                   narrow adapter over {@code AuthHelper.authorize}
  * @param metadataCache          broker metadata cache (topic id + partition count lookups)
  * @param time                   broker clock
+ * @param schemaTopicBootstrapServers  comma-separated {@code host:port} of the broker's own
+ *                               inter-broker listener; used by {@code SchemaTopicPersistence}
+ *                               to create an internal producer/consumer for the {@code _schemas} topic
  */
 public record BrokerHttpServerContext(
         List<HttpEndpoint> endpoints,
@@ -57,4 +60,5 @@ public record BrokerHttpServerContext(
         RecordAppender appender,
         AuthorizationHelper auth,
         MetadataCache metadataCache,
-        Time time) { }
+        Time time,
+        String schemaTopicBootstrapServers) { }

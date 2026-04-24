@@ -527,6 +527,14 @@ class BrokerServer(
           sslConfigsByListener.put(listener, config.valuesWithPrefixOverride(listener.configPrefix))
         }
 
+        // Build a bootstrap-servers string from the inter-broker listener so the
+        // schema registry can create an internal KafkaProducer/KafkaConsumer for
+        // the _schemas topic without needing to know about external listeners.
+        val schemaBootstrap = config.effectiveAdvertisedBrokerListeners
+          .find(ep => ListenerName.normalised(ep.listener) == config.interBrokerListenerName)
+          .map(ep => s"${ep.host}:${ep.port}")
+          .getOrElse(s"localhost:${config.effectiveAdvertisedBrokerListeners.headOption.map(_.port).getOrElse(9092)}")
+
         httpRestServer = BrokerHttpServers.load(new BrokerHttpServerContext(
           httpEndpoints.asJava,
           config.httpExecutorThreads,
@@ -538,7 +546,8 @@ class BrokerServer(
           appender,
           auth,
           metadataCache,
-          time))
+          time,
+          schemaBootstrap))
         if (httpRestServer != null) httpRestServer.startup()
       }
 

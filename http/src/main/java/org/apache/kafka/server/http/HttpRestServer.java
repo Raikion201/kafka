@@ -66,6 +66,8 @@ public class HttpRestServer implements BrokerHttpServer {
     // SchemaStore is thread-safe; one instance serves all requests.
     private final SchemaStore schemaStore = new SchemaStore();
 
+    private SchemaTopicPersistence schemaPersistence;
+
     private volatile Server jetty;
 
     public HttpRestServer(BrokerHttpServerContext ctx) {
@@ -77,6 +79,11 @@ public class HttpRestServer implements BrokerHttpServer {
 
     @Override
     public void startup() {
+        // Restore schema state from _schemas topic before accepting requests.
+        schemaPersistence = new SchemaTopicPersistence(ctx.schemaTopicBootstrapServers());
+        schemaPersistence.restore(schemaStore);
+        schemaStore.setPersistence(schemaPersistence);
+
         QueuedThreadPool pool = new QueuedThreadPool(ctx.executorThreads());
         pool.setName("http-rest");
         jetty = new Server(pool);
@@ -156,6 +163,11 @@ public class HttpRestServer implements BrokerHttpServer {
             }
         }
         sslFactoriesByListener.clear();
+
+        if (schemaPersistence != null) {
+            schemaPersistence.close();
+            schemaPersistence = null;
+        }
 
         if (server == null) return;
         try {

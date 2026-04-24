@@ -35,7 +35,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   <li>{@code subjectVersions} — ordered list of IDs per subject (versions)</li>
  * </ul>
  *
- * <p>All state is in-memory. Schemas are lost on broker restart.</p>
+ * <p>Persistence is handled externally by {@link SchemaTopicPersistence}, which
+ * writes every registration to the {@code _schemas} topic and restores state on
+ * startup via {@link #restoreRegistration}.</p>
  */
 public final class SchemaStore {
 
@@ -59,6 +61,18 @@ public final class SchemaStore {
     private final ConcurrentHashMap<String, SchemaCompatibility> subjectCompatibility =
             new ConcurrentHashMap<>();
 
+    // optional persistence — null until wired in by HttpRestServer after restore()
+    private volatile SchemaTopicPersistence persistence;
+
+    /**
+     * Wire in the persistence layer. Called by {@code HttpRestServer} after
+     * {@link SchemaTopicPersistence#restore} completes, so that restore replays
+     * never trigger a redundant write back to the topic.
+     */
+    public void setPersistence(SchemaTopicPersistence p) {
+        this.persistence = p;
+    }
+
     /**
      * Register a schema under a subject. If the exact same schema content has
      * already been registered (under any subject), the existing ID is returned
@@ -71,9 +85,11 @@ public final class SchemaStore {
      */
     public int register(String subject, String schema) {
         // computeIfAbsent is atomic — only one thread assigns a new id for a given schema
+        boolean[] isNew = {false};
         int id = schemaToId.computeIfAbsent(schema, k -> {
             int newId = nextId.getAndIncrement();
             idToSchema.put(newId, schema);
+            isNew[0] = true;
             return newId;
         });
 
@@ -88,6 +104,12 @@ public final class SchemaStore {
             // element. +1 converts to 1-based version number.
             int version = versions.indexOf(id) + 1;
             idToSubjectVersion.putIfAbsent(id, new SubjectVersion(subject, version));
+
+            // async write to _schemas topic (fire-and-forget)
+            SchemaTopicPersistence p = persistence;
+            if (p != null) {
+                p.persistRegistration(subject, id, version, schema);
+            }
         }
 
         return id;
@@ -157,6 +179,10 @@ public final class SchemaStore {
         if (versions == null) {
             return Collections.emptyList();
         }
+        SchemaTopicPersistence p = persistence;
+        if (p != null) {
+            p.persistDeletion(subject);
+        }
         return Collections.unmodifiableList(new ArrayList<>(versions));
     }
 
@@ -186,6 +212,30 @@ public final class SchemaStore {
             return null;
         }
         return idToSchema.get(versions.get(versions.size() - 1));
+    }
+
+    /**
+     * Restore a registration from the {@code _schemas} topic during startup.
+     * Unlike {@link #register}, this forces a specific ID rather than assigning the next one,
+     * and skips any compatibility check (the schema was already validated when first registered).
+     *
+     * @param subject the subject name
+     * @param id      the exact schema ID to restore
+     * @param schema  the schema content
+     */
+    public void restoreRegistration(String subject, int id, String schema) {
+        idToSchema.put(id, schema);
+        schemaToId.put(schema, id);
+        // advance nextId past any restored IDs so new registrations don't collide
+        nextId.accumulateAndGet(id + 1, Math::max);
+
+        CopyOnWriteArrayList<Integer> versions =
+                subjectVersions.computeIfAbsent(subject, k -> new CopyOnWriteArrayList<>());
+        boolean added = versions.addIfAbsent(id);
+        if (added) {
+            int version = versions.indexOf(id) + 1;
+            idToSubjectVersion.putIfAbsent(id, new SubjectVersion(subject, version));
+        }
     }
 
     /** Returns a snapshot of all subjects and their version counts — for diagnostics. */
