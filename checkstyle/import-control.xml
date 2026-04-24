@@ -269,6 +269,12 @@
       <allow pkg="org.apache.kafka.storage.internals" />
       <!-- REST produce path partitions records the same way KafkaProducer does -->
       <allow class="org.apache.kafka.clients.producer.internals.BuiltInPartitioner" />
+      <!-- Schema persistence reads/writes a Kafka topic -->
+      <allow pkg="org.apache.kafka.clients.admin" />
+      <allow pkg="org.apache.kafka.clients.consumer" />
+      <allow pkg="org.apache.kafka.clients.producer" />
+      <!-- Avro schema parsing and compatibility checking -->
+      <allow pkg="org.apache.avro" />
       <!-- TestSslUtils / TestUtils are used by KafkaSslContextFactoryTest -->
       <allow pkg="org.apache.kafka.test" />
       <allow pkg="jakarta.servlet" />

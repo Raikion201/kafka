@@ -16,115 +16,57 @@
  */
 package org.apache.kafka.server.http;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.avro.Schema;
+import org.apache.avro.SchemaParseException;
+import org.apache.avro.generic.GenericDatumReader;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.io.DatumReader;
+import org.apache.avro.io.Decoder;
+import org.apache.avro.io.DecoderFactory;
 
 /**
- * Validates a string value against a simple Avro-style schema.
- *
- * <p>Supported types: {@code string}, {@code int}, {@code long},
- * {@code float}, {@code double}, {@code boolean}, {@code record},
- * {@code array}. Unknown types are silently skipped.</p>
- *
- * <p>For {@code record}, every field declared in the schema's
- * {@code "fields"} array must be present as a key in the JSON value.</p>
+ * Validates that a schema string is a well-formed Avro schema by parsing it
+ * with the official Avro {@link Schema.Parser}. Any schema type supported by
+ * Avro (record, enum, array, map, union, fixed, and all primitives) is accepted.
  */
 public final class SchemaValidator {
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private SchemaValidator() { }
 
     /**
-     * Validate {@code value} against {@code schema}.
+     * Parse {@code schema} with Avro's schema parser.
      *
-     * @throws SchemaValidationException if the value does not match the schema type
+     * @throws SchemaValidationException if the string is not a valid Avro schema
      */
-    public static void validate(String schema, String value) throws SchemaValidationException {
-        JsonNode schemaNode;
+    public static void validate(String schema) throws SchemaValidationException {
         try {
-            schemaNode = MAPPER.readTree(schema);
+            new Schema.Parser().parse(schema);
+        } catch (SchemaParseException e) {
+            throw new SchemaValidationException("Invalid Avro schema: " + e.getMessage());
         } catch (Exception e) {
-            throw new SchemaValidationException("schema is not valid JSON: " + e.getMessage());
-        }
-
-        String type = schemaNode.path("type").asText("");
-        switch (type) {
-            case "string"         -> validateString(value);
-            case "int", "long"    -> validateInteger(value);
-            case "float", "double" -> validateDouble(value);
-            case "boolean"        -> validateBoolean(value);
-            case "record"         -> validateRecord(value, schemaNode);
-            case "array"          -> validateArray(value);
-            default               -> { /* unknown type — skip */ }
+            throw new SchemaValidationException("Cannot parse schema: " + e.getMessage());
         }
     }
 
-    private static void validateString(String value) throws SchemaValidationException {
-        if (value == null) {
-            throw new SchemaValidationException("schema type is 'string' but value is null");
-        }
-    }
-
-    private static void validateInteger(String value) throws SchemaValidationException {
-        if (value == null) {
-            throw new SchemaValidationException("schema type is 'int/long' but value is null");
-        }
+    /**
+     * Validate that {@code jsonValue} conforms to the given Avro {@code schemaStr}
+     * by decoding it through Avro's JSON decoder.
+     *
+     * @throws SchemaValidationException if the schema is invalid or the value does not conform
+     */
+    public static void validateValue(String schemaStr, String jsonValue) throws SchemaValidationException {
+        Schema schema;
         try {
-            Long.parseLong(value);
-        } catch (NumberFormatException e) {
-            throw new SchemaValidationException("schema type is 'int/long' but value is not an integer: " + value);
-        }
-    }
-
-    private static void validateDouble(String value) throws SchemaValidationException {
-        if (value == null) {
-            throw new SchemaValidationException("schema type is 'float/double' but value is null");
-        }
-        try {
-            Double.parseDouble(value);
-        } catch (NumberFormatException e) {
-            throw new SchemaValidationException("schema type is 'float/double' but value is not a number: " + value);
-        }
-    }
-
-    private static void validateBoolean(String value) throws SchemaValidationException {
-        if (!"true".equals(value) && !"false".equals(value)) {
-            throw new SchemaValidationException("schema type is 'boolean' but value is: " + value);
-        }
-    }
-
-    private static void validateRecord(String value, JsonNode schemaNode) throws SchemaValidationException {
-        JsonNode valueNode;
-        try {
-            valueNode = MAPPER.readTree(value);
+            schema = new Schema.Parser().parse(schemaStr);
         } catch (Exception e) {
-            throw new SchemaValidationException("schema type is 'record' but value is not valid JSON");
+            throw new SchemaValidationException("Cannot parse schema: " + e.getMessage());
         }
-        if (!valueNode.isObject()) {
-            throw new SchemaValidationException("schema type is 'record' but value is not a JSON object");
-        }
-        JsonNode fields = schemaNode.path("fields");
-        if (fields.isArray()) {
-            for (JsonNode field : fields) {
-                String fieldName = field.path("name").asText();
-                if (!valueNode.has(fieldName)) {
-                    throw new SchemaValidationException("missing required field: '" + fieldName + "'");
-                }
-            }
-        }
-    }
-
-    private static void validateArray(String value) throws SchemaValidationException {
         try {
-            JsonNode node = MAPPER.readTree(value);
-            if (!node.isArray()) {
-                throw new SchemaValidationException("schema type is 'array' but value is not a JSON array");
-            }
-        } catch (SchemaValidationException e) {
-            throw e;
+            DatumReader<GenericRecord> reader = new GenericDatumReader<>(schema);
+            Decoder decoder = DecoderFactory.get().jsonDecoder(schema, jsonValue);
+            reader.read(null, decoder);
         } catch (Exception e) {
-            throw new SchemaValidationException("schema type is 'array' but value is not valid JSON");
+            throw new SchemaValidationException("Value does not match schema: " + e.getMessage());
         }
     }
 }

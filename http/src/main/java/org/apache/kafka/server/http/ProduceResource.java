@@ -173,7 +173,7 @@ public class ProduceResource {
                 return;
             }
             try {
-                SchemaValidator.validate(resolvedSchema, body.value());
+                SchemaValidator.validateValue(resolvedSchema, body.value());
             } catch (SchemaValidationException e) {
                 asyncResponse.resume(error(Response.Status.BAD_REQUEST, "SCHEMA_VALIDATION_FAILED: " + e.getMessage()));
                 return;

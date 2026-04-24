@@ -1613,6 +1613,9 @@ project(':http') {
     implementation project(':metadata')
     implementation libs.slf4jApi
 
+    // Avro — schema parsing and compatibility checking
+    implementation libs.avro
+
     // Jetty + Jersey — the embedded HTTP REST server
     implementation libs.jacksonDatabind
     implementation libs.jacksonJakartarsJsonProvider

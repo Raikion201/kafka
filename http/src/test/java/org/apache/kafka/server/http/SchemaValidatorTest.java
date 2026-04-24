@@ -23,72 +23,79 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class SchemaValidatorTest {
 
-    // ── string ───────────────────────────────────────────────────────────────
+    // ── schema-only validation ───────────────────────────────────────────────
+
+    @Test
+    void validPrimitiveSchema_passes() {
+        assertDoesNotThrow(() -> SchemaValidator.validate("{\"type\":\"string\"}"));
+    }
+
+    @Test
+    void validRecordSchema_passes() {
+        assertDoesNotThrow(() -> SchemaValidator.validate(
+                "{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"int\"}]}"));
+    }
+
+    @Test
+    void invalidSchema_throws() {
+        assertThrows(SchemaValidationException.class,
+                () -> SchemaValidator.validate("{not valid json}"));
+    }
+
+    @Test
+    void unknownType_throws() {
+        assertThrows(SchemaValidationException.class,
+                () -> SchemaValidator.validate("{\"type\":\"nonexistent\"}"));
+    }
+
+    // ── value validation ─────────────────────────────────────────────────────
 
     @Test
     void string_validValue_passes() {
-        assertDoesNotThrow(() -> SchemaValidator.validate("{\"type\":\"string\"}", "hello"));
+        assertDoesNotThrow(() -> SchemaValidator.validateValue("{\"type\":\"string\"}", "\"hello\""));
     }
-
-    @Test
-    void string_nullValue_throws() {
-        assertThrows(SchemaValidationException.class,
-                () -> SchemaValidator.validate("{\"type\":\"string\"}", null));
-    }
-
-    // ── int / long ───────────────────────────────────────────────────────────
 
     @Test
     void int_validValue_passes() {
-        assertDoesNotThrow(() -> SchemaValidator.validate("{\"type\":\"int\"}", "42"));
+        assertDoesNotThrow(() -> SchemaValidator.validateValue("{\"type\":\"int\"}", "42"));
     }
 
     @Test
     void long_validValue_passes() {
-        assertDoesNotThrow(() -> SchemaValidator.validate("{\"type\":\"long\"}", "9999999999"));
+        assertDoesNotThrow(() -> SchemaValidator.validateValue("{\"type\":\"long\"}", "9999999999"));
     }
 
     @Test
     void int_stringValue_throws() {
         assertThrows(SchemaValidationException.class,
-                () -> SchemaValidator.validate("{\"type\":\"int\"}", "hello"));
+                () -> SchemaValidator.validateValue("{\"type\":\"int\"}", "\"hello\""));
     }
-
-    @Test
-    void int_nullValue_throws() {
-        assertThrows(SchemaValidationException.class,
-                () -> SchemaValidator.validate("{\"type\":\"int\"}", null));
-    }
-
-    // ── float / double ───────────────────────────────────────────────────────
 
     @Test
     void double_validValue_passes() {
-        assertDoesNotThrow(() -> SchemaValidator.validate("{\"type\":\"double\"}", "3.14"));
+        assertDoesNotThrow(() -> SchemaValidator.validateValue("{\"type\":\"double\"}", "3.14"));
     }
 
     @Test
     void float_notANumber_throws() {
         assertThrows(SchemaValidationException.class,
-                () -> SchemaValidator.validate("{\"type\":\"float\"}", "abc"));
+                () -> SchemaValidator.validateValue("{\"type\":\"float\"}", "\"abc\""));
     }
-
-    // ── boolean ──────────────────────────────────────────────────────────────
 
     @Test
     void boolean_trueValue_passes() {
-        assertDoesNotThrow(() -> SchemaValidator.validate("{\"type\":\"boolean\"}", "true"));
+        assertDoesNotThrow(() -> SchemaValidator.validateValue("{\"type\":\"boolean\"}", "true"));
     }
 
     @Test
     void boolean_falseValue_passes() {
-        assertDoesNotThrow(() -> SchemaValidator.validate("{\"type\":\"boolean\"}", "false"));
+        assertDoesNotThrow(() -> SchemaValidator.validateValue("{\"type\":\"boolean\"}", "false"));
     }
 
     @Test
     void boolean_invalidValue_throws() {
         assertThrows(SchemaValidationException.class,
-                () -> SchemaValidator.validate("{\"type\":\"boolean\"}", "yes"));
+                () -> SchemaValidator.validateValue("{\"type\":\"boolean\"}", "\"yes\""));
     }
 
     // ── record ───────────────────────────────────────────────────────────────
@@ -100,51 +107,24 @@ public class SchemaValidatorTest {
 
     @Test
     void record_allFieldsPresent_passes() {
-        assertDoesNotThrow(() -> SchemaValidator.validate(RECORD_SCHEMA, "{\"id\":1,\"name\":\"Alice\"}"));
+        assertDoesNotThrow(() -> SchemaValidator.validateValue(RECORD_SCHEMA, "{\"id\":1,\"name\":\"Alice\"}"));
     }
 
     @Test
     void record_missingField_throws() {
         assertThrows(SchemaValidationException.class,
-                () -> SchemaValidator.validate(RECORD_SCHEMA, "{\"id\":1}"));
+                () -> SchemaValidator.validateValue(RECORD_SCHEMA, "{\"id\":1}"));
     }
 
     @Test
     void record_notJsonObject_throws() {
         assertThrows(SchemaValidationException.class,
-                () -> SchemaValidator.validate(RECORD_SCHEMA, "hello"));
+                () -> SchemaValidator.validateValue(RECORD_SCHEMA, "\"hello\""));
     }
 
     @Test
     void record_invalidJson_throws() {
         assertThrows(SchemaValidationException.class,
-                () -> SchemaValidator.validate(RECORD_SCHEMA, "{broken"));
-    }
-
-    // ── array ────────────────────────────────────────────────────────────────
-
-    @Test
-    void array_validValue_passes() {
-        assertDoesNotThrow(() -> SchemaValidator.validate("{\"type\":\"array\"}", "[1,2,3]"));
-    }
-
-    @Test
-    void array_notArray_throws() {
-        assertThrows(SchemaValidationException.class,
-                () -> SchemaValidator.validate("{\"type\":\"array\"}", "{\"key\":\"val\"}"));
-    }
-
-    // ── unknown type / invalid schema ────────────────────────────────────────
-
-    @Test
-    void unknownType_skipsValidation() {
-        // should not throw — unknown types are silently skipped
-        assertDoesNotThrow(() -> SchemaValidator.validate("{\"type\":\"bytes\"}", "anything"));
-    }
-
-    @Test
-    void invalidSchema_throws() {
-        assertThrows(SchemaValidationException.class,
-                () -> SchemaValidator.validate("{not valid json}", "anything"));
+                () -> SchemaValidator.validateValue(RECORD_SCHEMA, "{broken"));
     }
 }
