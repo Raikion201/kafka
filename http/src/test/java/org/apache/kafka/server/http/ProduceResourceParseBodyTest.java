@@ -24,8 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
- * Tests for the body-parsing logic added to support clients (e.g. camel-http-secured-sink)
- * that POST without a Content-Type header and send a raw string instead of JSON.
+ * Tests for the body-parsing logic in {@link ProduceResource#parseBody}.
  */
 public class ProduceResourceParseBodyTest {
 
@@ -40,6 +39,7 @@ public class ProduceResourceParseBodyTest {
         ProduceBody body = parseBody(null);
         assertNull(body.key());
         assertNull(body.value());
+        assertNull(body.schemaId());
     }
 
     @Test
@@ -47,6 +47,7 @@ public class ProduceResourceParseBodyTest {
         ProduceBody body = parseBody("   ");
         assertNull(body.key());
         assertNull(body.value());
+        assertNull(body.schemaId());
     }
 
     @Test
@@ -54,6 +55,15 @@ public class ProduceResourceParseBodyTest {
         ProduceBody body = parseBody("{\"key\":\"k1\",\"value\":\"v1\"}");
         assertEquals("k1", body.key());
         assertEquals("v1", body.value());
+        assertNull(body.schemaId());
+    }
+
+    @Test
+    public void jsonWithSchemaIdIsDeserialised() throws Exception {
+        ProduceBody body = parseBody("{\"key\":\"k1\",\"value\":\"v1\",\"schemaId\":42}");
+        assertEquals("k1", body.key());
+        assertEquals("v1", body.value());
+        assertEquals(42, body.schemaId());
     }
 
     @Test
@@ -61,6 +71,7 @@ public class ProduceResourceParseBodyTest {
         ProduceBody body = parseBody("{\"value\":\"hello\"}");
         assertNull(body.key());
         assertEquals("hello", body.value());
+        assertNull(body.schemaId());
     }
 
     @Test
@@ -68,6 +79,7 @@ public class ProduceResourceParseBodyTest {
         ProduceBody body = parseBody("hello from kafka connect");
         assertNull(body.key());
         assertEquals("hello from kafka connect", body.value());
+        assertNull(body.schemaId());
     }
 
     @Test
@@ -81,5 +93,6 @@ public class ProduceResourceParseBodyTest {
         ProduceBody body = parseBody("{not valid json}");
         assertNull(body.key());
         assertEquals("{not valid json}", body.value());
+        assertNull(body.schemaId());
     }
 }

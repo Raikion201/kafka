@@ -358,4 +358,86 @@ class HttpRestProxyIntegrationTest extends IntegrationTestHarness {
     val resp = post("/v1/schemas/subjects/user-value", schemaBody(schemaA), authHeader = None)
     assertEquals(401, resp.statusCode())
   }
+
+  // ── Schema + Produce integration tests ────────────────────────────────────
+
+  /**
+   * Register a schema then produce a record referencing it by ID.
+   * The response must echo back the schemaId and schema content, proving
+   * the produce endpoint and the schema registry talk to each other.
+   */
+  @Test
+  def produceWithSchemaIdEchoesSchemaInResponse(): Unit = {
+    val topic = "schema-produce-happy"
+    createTopic(topic, numPartitions = 1, replicationFactor = 1)
+
+    // Step 1 — register a schema, get an ID back
+    val regResp = post("/v1/schemas/subjects/schema-produce-happy-value", schemaBody(schemaA))
+    assertEquals(201, regResp.statusCode())
+    val schemaId = mapper.readTree(regResp.body()).get("id").asInt()
+
+    // Step 2 — produce a record referencing that schema ID
+    val produceResp = post(s"/v1/topics/$topic",
+      s"""{"key":"k1","value":"hello","schemaId":$schemaId}""")
+    assertEquals(200, produceResp.statusCode(), s"produce body: ${produceResp.body()}")
+
+    val json = mapper.readTree(produceResp.body())
+    assertEquals(schemaId, json.get("schemaId").asInt(), "schemaId must be echoed in response")
+    assertEquals(schemaA, json.get("schema").asText(), "schema content must be echoed in response")
+    assertEquals(0L, json.get("offset").asLong())
+  }
+
+  /**
+   * Produce a value that does not match the registered schema type → 400.
+   * Schema is {"type":"int"} but value is "hello" — should be rejected before append.
+   */
+  @Test
+  def produceWithSchemaValidationFailureReturns400(): Unit = {
+    val topic = "schema-validate-fail"
+    createTopic(topic, numPartitions = 1, replicationFactor = 1)
+
+    val regResp = post("/v1/schemas/subjects/schema-validate-fail-value",
+      schemaBody("""{"type":"int"}"""))
+    assertEquals(201, regResp.statusCode())
+    val schemaId = mapper.readTree(regResp.body()).get("id").asInt()
+
+    // value "hello" is not an integer
+    val resp = post(s"/v1/topics/$topic",
+      s"""{"key":"k1","value":"hello","schemaId":$schemaId}""")
+    assertEquals(400, resp.statusCode())
+    assertTrue(mapper.readTree(resp.body()).get("error").asText()
+      .startsWith("SCHEMA_VALIDATION_FAILED"))
+  }
+
+  /**
+   * Produce with an unknown schemaId → 404.
+   * The record must NOT be appended — the registry check happens before the append.
+   */
+  @Test
+  def produceWithUnknownSchemaIdReturns404(): Unit = {
+    val topic = "schema-produce-unknown"
+    createTopic(topic, numPartitions = 1, replicationFactor = 1)
+
+    val resp = post(s"/v1/topics/$topic",
+      """{"key":"k1","value":"hello","schemaId":999}""")
+    assertEquals(404, resp.statusCode())
+    assertEquals("SCHEMA_NOT_FOUND", mapper.readTree(resp.body()).get("error").asText())
+  }
+
+  /**
+   * Produce without a schemaId still works normally — schemaId is optional.
+   * The response must NOT contain schemaId or schema fields.
+   */
+  @Test
+  def produceWithoutSchemaIdWorksAsNormal(): Unit = {
+    val topic = "schema-produce-no-schema"
+    createTopic(topic, numPartitions = 1, replicationFactor = 1)
+
+    val resp = post(s"/v1/topics/$topic", """{"key":"k1","value":"hello"}""")
+    assertEquals(200, resp.statusCode())
+
+    val json = mapper.readTree(resp.body())
+    assertTrue(json.get("schemaId").isNull, "schemaId should be null when not provided")
+    assertTrue(json.get("schema").isNull, "schema should be null when not provided")
+  }
 }

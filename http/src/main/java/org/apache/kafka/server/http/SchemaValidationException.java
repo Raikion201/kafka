@@ -16,11 +16,8 @@
  */
 package org.apache.kafka.server.http;
 
-/**
- * JSON body of {@code POST /v1/topics/{name}}.
- *
- * <p>{@code schemaId} is optional. When present, the produce endpoint looks
- * up the schema from the registry and echoes it back in the response,
- * linking the produced record to the registered schema.</p>
- */
-public record ProduceBody(String key, String value, Integer schemaId) { }
+public class SchemaValidationException extends Exception {
+    public SchemaValidationException(String message) {
+        super(message);
+    }
+}

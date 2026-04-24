@@ -87,7 +87,7 @@ public final class HttpRouter {
 
         // Routes — each resource class declares its own JAX-RS @Path / @Method
         // annotations. The table in the class-level Javadoc is the contract.
-        config.register(new ProduceResource(appender, auth, metadataCache, time, requestTimeoutMs));
+        config.register(new ProduceResource(appender, auth, metadataCache, time, requestTimeoutMs, schemaStore));
         config.register(new SchemaResource(schemaStore));
         if (swaggerUiEnabled) {
             config.register(new OpenApiResource());

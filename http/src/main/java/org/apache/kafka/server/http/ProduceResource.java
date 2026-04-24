@@ -108,6 +108,7 @@ public class ProduceResource {
     private final Time time;
     private final long appendTimeoutMs;
     private final long asyncTimeoutMs;
+    private final SchemaStore schemaStore;
 
     // Hoisted — immutable and shared across requests.
     private final ClientInformation clientInfo = new ClientInformation("http-rest", "1.0");
@@ -117,13 +118,15 @@ public class ProduceResource {
                            AuthorizationHelper auth,
                            MetadataCache metadataCache,
                            Time time,
-                           int requestTimeoutMs) {
+                           int requestTimeoutMs,
+                           SchemaStore schemaStore) {
         this.appender = appender;
         this.auth = auth;
         this.metadataCache = metadataCache;
         this.time = time;
         this.appendTimeoutMs = requestTimeoutMs;
         this.asyncTimeoutMs = requestTimeoutMs + ASYNC_TIMEOUT_SLACK_MS;
+        this.schemaStore = schemaStore;
     }
 
     @POST
@@ -161,17 +164,33 @@ public class ProduceResource {
             return;
         }
 
-        appendRecord(topic, topicId, numPartitionsOpt.get(), body, asyncResponse);
+        // If the caller linked a schema, verify it exists and validate the value.
+        String resolvedSchema = null;
+        if (body != null && body.schemaId() != null) {
+            resolvedSchema = schemaStore.getById(body.schemaId());
+            if (resolvedSchema == null) {
+                asyncResponse.resume(error(Response.Status.NOT_FOUND, "SCHEMA_NOT_FOUND"));
+                return;
+            }
+            try {
+                SchemaValidator.validate(resolvedSchema, body.value());
+            } catch (SchemaValidationException e) {
+                asyncResponse.resume(error(Response.Status.BAD_REQUEST, "SCHEMA_VALIDATION_FAILED: " + e.getMessage()));
+                return;
+            }
+        }
+
+        appendRecord(topic, topicId, numPartitionsOpt.get(), body, resolvedSchema, asyncResponse);
     }
 
     private static ProduceBody parseBody(String rawBody) {
         if (rawBody == null || rawBody.isBlank()) {
-            return new ProduceBody(null, null);
+            return new ProduceBody(null, null, null);
         }
         try {
             return OBJECT_MAPPER.readValue(rawBody, ProduceBody.class);
         } catch (Exception e) {
-            return new ProduceBody(null, rawBody.strip());
+            return new ProduceBody(null, rawBody.strip(), null);
         }
     }
 
@@ -202,7 +221,7 @@ public class ProduceResource {
     }
 
     private void appendRecord(String topic, Uuid topicId, int numPartitions,
-                              ProduceBody body, AsyncResponse asyncResponse) {
+                              ProduceBody body, String resolvedSchema, AsyncResponse asyncResponse) {
         byte[] keyBytes = body == null || body.key() == null ? null : body.key().getBytes(StandardCharsets.UTF_8);
         byte[] valueBytes = body == null || body.value() == null ? null : body.value().getBytes(StandardCharsets.UTF_8);
 
@@ -214,24 +233,25 @@ public class ProduceResource {
         SimpleRecord record = new SimpleRecord(time.milliseconds(), keyBytes, valueBytes);
         MemoryRecords records = MemoryRecords.withRecords(Compression.NONE, record);
 
+        Integer schemaId = body != null ? body.schemaId() : null;
         try {
             appender.appendRecords(appendTimeoutMs, REQUIRED_ACKS_LEADER,
                     Map.of(tip, records),
-                    result -> asyncResponse.resume(responseFor(partition, result.get(tip))));
+                    result -> asyncResponse.resume(responseFor(partition, result.get(tip), schemaId, resolvedSchema)));
         } catch (Exception e) {
             LOG.warn("Unexpected error during append for topic {}", topic, e);
             asyncResponse.resume(error(Response.Status.INTERNAL_SERVER_ERROR, "APPEND_FAILED"));
         }
     }
 
-    private static Response responseFor(int partition, PartitionResponse pr) {
+    private static Response responseFor(int partition, PartitionResponse pr, Integer schemaId, String schema) {
         if (pr == null) {
             return error(Response.Status.INTERNAL_SERVER_ERROR, "NO_RESPONSE");
         }
         if (pr.error != Errors.NONE) {
             return error(httpStatusFor(pr.error), pr.error.name());
         }
-        return Response.ok(new ProduceResponseBody(partition, pr.baseOffset)).build();
+        return Response.ok(new ProduceResponseBody(partition, pr.baseOffset, schemaId, schema)).build();
     }
 
     private static Response error(Response.Status status, String code) {

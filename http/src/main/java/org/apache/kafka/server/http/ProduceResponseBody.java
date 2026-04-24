@@ -17,7 +17,9 @@
 package org.apache.kafka.server.http;
 
 /**
- * JSON response of a successful produce: the partition the record landed on
- * and the offset assigned by the broker.
+ * JSON response of a successful produce.
+ *
+ * <p>{@code schemaId} and {@code schema} are only present when the request
+ * included a {@code schemaId} that resolved to a known schema.</p>
  */
-public record ProduceResponseBody(int partition, long offset) { }
+public record ProduceResponseBody(int partition, long offset, Integer schemaId, String schema) { }
