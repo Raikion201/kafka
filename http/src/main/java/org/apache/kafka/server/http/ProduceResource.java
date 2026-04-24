@@ -42,6 +42,8 @@ import org.apache.kafka.server.http.api.RecordAppender;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
@@ -90,7 +92,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Path("/v1/topics")
 @Produces(MediaType.APPLICATION_JSON)
-@Consumes(MediaType.APPLICATION_JSON)
+@Consumes({MediaType.APPLICATION_JSON, MediaType.TEXT_PLAIN, MediaType.WILDCARD})
 public class ProduceResource {
 
     private static final Logger LOG = LoggerFactory.getLogger(ProduceResource.class);
@@ -109,6 +111,7 @@ public class ProduceResource {
 
     // Hoisted — immutable and shared across requests.
     private final ClientInformation clientInfo = new ClientInformation("http-rest", "1.0");
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     public ProduceResource(RecordAppender appender,
                            AuthorizationHelper auth,
@@ -126,10 +129,11 @@ public class ProduceResource {
     @POST
     @Path("/{name}")
     public void produce(@PathParam("name") String topic,
-                        ProduceBody body,
+                        String rawBody,
                         @Context ContainerRequestContext httpCtx,
                         @Context HttpServletRequest servletRequest,
                         @Suspended AsyncResponse asyncResponse) {
+        ProduceBody body = parseBody(rawBody);
 
         // Bound the suspension so a stuck append doesn't pin a connection forever.
         asyncResponse.setTimeout(asyncTimeoutMs, TimeUnit.MILLISECONDS);
@@ -158,6 +162,17 @@ public class ProduceResource {
         }
 
         appendRecord(topic, topicId, numPartitionsOpt.get(), body, asyncResponse);
+    }
+
+    private static ProduceBody parseBody(String rawBody) {
+        if (rawBody == null || rawBody.isBlank()) {
+            return new ProduceBody(null, null);
+        }
+        try {
+            return OBJECT_MAPPER.readValue(rawBody, ProduceBody.class);
+        } catch (Exception e) {
+            return new ProduceBody(null, rawBody.strip());
+        }
     }
 
     private RequestContext buildRequestContext(ContainerRequestContext httpCtx, HttpServletRequest servletRequest) {
