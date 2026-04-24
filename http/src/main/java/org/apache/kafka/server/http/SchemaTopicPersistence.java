@@ -19,6 +19,9 @@ package org.apache.kafka.server.http;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -27,6 +30,8 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.config.TopicConfig;
+import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 
@@ -37,6 +42,7 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 
 /**
  * Persists schema registry state to a compacted Kafka topic ({@code _schemas}).
@@ -129,11 +135,34 @@ public final class SchemaTopicPersistence implements AutoCloseable {
     }
 
     /**
+     * Ensure the {@code _schemas} topic exists with {@code cleanup.policy=compact}.
+     * Creates it if absent; silently ignores {@link TopicExistsException}.
+     */
+    private void ensureTopicExists() {
+        Properties props = new Properties();
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        try (AdminClient admin = AdminClient.create(props)) {
+            Set<String> existing = admin.listTopics().names().get();
+            if (!existing.contains(SCHEMAS_TOPIC)) {
+                NewTopic topic = new NewTopic(SCHEMAS_TOPIC, 1, (short) 1)
+                    .configs(Map.of(TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_COMPACT));
+                admin.createTopics(Collections.singletonList(topic)).all().get();
+                LOG.info("Created {} topic with cleanup.policy=compact", SCHEMAS_TOPIC);
+            }
+        } catch (TopicExistsException e) {
+            // another broker beat us to it — fine
+        } catch (Exception e) {
+            LOG.warn("Could not ensure {} topic exists: {}", SCHEMAS_TOPIC, e.getMessage());
+        }
+    }
+
+    /**
      * Replay all messages in {@code _schemas} from the beginning into {@code store}.
+     * Creates the topic first if it does not exist.
      * Called once at broker startup before the HTTP server accepts requests.
-     * Silently skips if the topic does not yet exist.
      */
     public void restore(SchemaStore store) {
+        ensureTopicExists();
         Properties props = new Properties();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
