@@ -143,7 +143,8 @@ public class SchemaValidatorTest {
     }
 
     @Test
-    void invalidSchema_skipsValidation() {
-        assertDoesNotThrow(() -> SchemaValidator.validate("{not valid json}", "anything"));
+    void invalidSchema_throws() {
+        assertThrows(SchemaValidationException.class,
+                () -> SchemaValidator.validate("{not valid json}", "anything"));
     }
 }

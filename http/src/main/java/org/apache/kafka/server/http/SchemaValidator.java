@@ -45,7 +45,7 @@ public final class SchemaValidator {
         try {
             schemaNode = MAPPER.readTree(schema);
         } catch (Exception e) {
-            return; // schema is not valid JSON — nothing to validate against
+            throw new SchemaValidationException("schema is not valid JSON: " + e.getMessage());
         }
 
         String type = schemaNode.path("type").asText("");
