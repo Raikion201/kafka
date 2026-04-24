@@ -141,6 +141,9 @@ public final class SchemaTopicPersistence implements AutoCloseable {
     private void ensureTopicExists() {
         Properties props = new Properties();
         props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, "10000");
+        props.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, "15000");
+        props.put(AdminClientConfig.RETRIES_CONFIG, "0");
         try (AdminClient admin = AdminClient.create(props)) {
             Set<String> existing = admin.listTopics().names().get();
             if (!existing.contains(SCHEMAS_TOPIC)) {
@@ -170,6 +173,8 @@ public final class SchemaTopicPersistence implements AutoCloseable {
         props.put(ConsumerConfig.GROUP_ID_CONFIG, "schema-registry-restore-" + System.currentTimeMillis());
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        props.put(ConsumerConfig.REQUEST_TIMEOUT_MS_CONFIG, "10000");
+        props.put(ConsumerConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, "15000");
 
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
             TopicPartition partition = new TopicPartition(SCHEMAS_TOPIC, 0);
@@ -212,7 +217,7 @@ public final class SchemaTopicPersistence implements AutoCloseable {
             }
             LOG.info("Restored {} schema(s) from {} topic", restored, SCHEMAS_TOPIC);
         } catch (Exception e) {
-            LOG.warn("Could not restore from {} (topic may not exist yet): {}", SCHEMAS_TOPIC, e.getMessage());
+            throw new RuntimeException("Could not restore from " + SCHEMAS_TOPIC + ": " + e.getMessage(), e);
         }
     }
 

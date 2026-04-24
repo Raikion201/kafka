@@ -29,6 +29,7 @@ import org.apache.kafka.common.internals.Plugin
 import org.apache.kafka.common.message.ApiMessageType.ListenerType
 import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.network.ListenerName
+import org.apache.kafka.common.security.auth.SecurityProtocol
 import org.apache.kafka.common.security.scram.internals.ScramMechanism
 import org.apache.kafka.common.security.token.delegation.internals.DelegationTokenCache
 import org.apache.kafka.common.utils.{LogContext, Time, Utils}
@@ -527,12 +528,17 @@ class BrokerServer(
           sslConfigsByListener.put(listener, config.valuesWithPrefixOverride(listener.configPrefix))
         }
 
-        // Build a bootstrap-servers string from the inter-broker listener so the
-        // schema registry can create an internal KafkaProducer/KafkaConsumer for
-        // the _schemas topic without needing to know about external listeners.
+        // Build a bootstrap-servers string for the schema registry's internal
+        // KafkaProducer/KafkaConsumer.  We deliberately pick a PLAINTEXT listener
+        // (not the mTLS REPLICATION listener) so no SSL config is needed and so
+        // the connection works during broker startup when the replication socket
+        // may not yet be fully initialised.  Always use 'localhost' so the admin
+        // client connects in-process without going through external DNS.
         val schemaBootstrap = config.effectiveAdvertisedBrokerListeners
-          .find(ep => ListenerName.normalised(ep.listener) == config.interBrokerListenerName)
-          .map(ep => s"${ep.host}:${ep.port}")
+          .filterNot(ep => ListenerName.normalised(ep.listener) == config.interBrokerListenerName)
+          .find(ep => config.effectiveListenerSecurityProtocolMap()
+            .getOrDefault(ListenerName.normalised(ep.listener), SecurityProtocol.PLAINTEXT) == SecurityProtocol.PLAINTEXT)
+          .map(ep => s"localhost:${ep.port}")
           .getOrElse(s"localhost:${config.effectiveAdvertisedBrokerListeners.headOption.map(_.port).getOrElse(9092)}")
 
         httpRestServer = BrokerHttpServers.load(new BrokerHttpServerContext(

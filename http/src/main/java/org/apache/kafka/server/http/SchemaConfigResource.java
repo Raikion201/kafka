@@ -40,7 +40,7 @@ import java.util.Map;
  */
 @Path("/config")
 @Produces(MediaType.APPLICATION_JSON)
-@Consumes(MediaType.APPLICATION_JSON)
+@Consumes({MediaType.APPLICATION_JSON, "application/vnd.schemaregistry.v1+json"})
 public class SchemaConfigResource {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

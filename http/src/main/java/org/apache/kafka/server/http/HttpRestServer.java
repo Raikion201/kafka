@@ -37,6 +37,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Embedded HTTP REST server for the Kafka broker. Activated when {@code listeners=}
@@ -67,6 +70,7 @@ public class HttpRestServer implements BrokerHttpServer {
     private final SchemaStore schemaStore = new SchemaStore();
 
     private SchemaTopicPersistence schemaPersistence;
+    private ScheduledExecutorService restoreExecutor;
 
     private volatile Server jetty;
 
@@ -79,10 +83,7 @@ public class HttpRestServer implements BrokerHttpServer {
 
     @Override
     public void startup() {
-        // Restore schema state from _schemas topic before accepting requests.
         schemaPersistence = new SchemaTopicPersistence(ctx.schemaTopicBootstrapServers());
-        schemaPersistence.restore(schemaStore);
-        schemaStore.setPersistence(schemaPersistence);
 
         QueuedThreadPool pool = new QueuedThreadPool(ctx.executorThreads());
         pool.setName("http-rest");
@@ -118,6 +119,34 @@ public class HttpRestServer implements BrokerHttpServer {
             throw new RuntimeException("Failed to start embedded HTTP server", e);
         }
         LOG.info("HTTP REST server listening on {}", ctx.endpoints());
+
+        // Restore schema state asynchronously — the broker's PLAIN listener may
+        // not be ready immediately when startup() is called.  Retry every 5 s,
+        // up to 12 attempts (~60 s).  Persistence write-through is only enabled
+        // after a successful restore so in-flight registrations aren't double-written.
+        restoreExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "schema-registry-restore");
+            t.setDaemon(true);
+            return t;
+        });
+        final int[] attempts = {0};
+        final int maxAttempts = 12;
+        restoreExecutor.scheduleWithFixedDelay(() -> {
+            attempts[0]++;
+            try {
+                schemaPersistence.restore(schemaStore);
+                schemaStore.setPersistence(schemaPersistence);
+                LOG.info("Schema registry restore completed on attempt {}", attempts[0]);
+                restoreExecutor.shutdown();
+            } catch (Exception e) {
+                if (attempts[0] >= maxAttempts) {
+                    LOG.warn("Schema registry restore failed after {} attempts — starting empty; schemas will not survive restart", maxAttempts);
+                    restoreExecutor.shutdown();
+                } else {
+                    LOG.debug("Schema registry restore attempt {} failed, retrying: {}", attempts[0], e.getMessage());
+                }
+            }
+        }, 3, 5, TimeUnit.SECONDS);
     }
 
     /**
@@ -164,6 +193,10 @@ public class HttpRestServer implements BrokerHttpServer {
         }
         sslFactoriesByListener.clear();
 
+        if (restoreExecutor != null && !restoreExecutor.isShutdown()) {
+            restoreExecutor.shutdownNow();
+            restoreExecutor = null;
+        }
         if (schemaPersistence != null) {
             schemaPersistence.close();
             schemaPersistence = null;

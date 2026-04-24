@@ -47,7 +47,7 @@ import java.util.Map;
  */
 @Path("/subjects")
 @Produces(MediaType.APPLICATION_JSON)
-@Consumes(MediaType.APPLICATION_JSON)
+@Consumes({MediaType.APPLICATION_JSON, "application/vnd.schemaregistry.v1+json"})
 public class SubjectResource {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
