@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.server.http;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.ws.rs.Consumes;
@@ -77,11 +78,20 @@ public class SchemaResource {
     @POST
     @Path("/subjects/{subject}")
     public Response registerSchema(@PathParam("subject") String subject, String rawBody) {
-        SchemaBody body = parseBody(rawBody);
-        if (body == null || body.schema() == null || body.schema().isBlank()) {
+        if (rawBody == null || rawBody.isBlank()) {
             return error(Response.Status.BAD_REQUEST, "SCHEMA_MISSING");
         }
-        String schema = body.schema().strip();
+        JsonNode node;
+        try {
+            node = OBJECT_MAPPER.readTree(rawBody);
+        } catch (Exception e) {
+            return error(Response.Status.BAD_REQUEST, "INVALID_REQUEST_BODY");
+        }
+        JsonNode schemaNode = node.get("schema");
+        if (schemaNode == null || schemaNode.asText("").isBlank()) {
+            return error(Response.Status.BAD_REQUEST, "SCHEMA_MISSING");
+        }
+        String schema = schemaNode.asText().strip();
         try {
             OBJECT_MAPPER.readTree(schema);
         } catch (Exception e) {
@@ -163,17 +173,6 @@ public class SchemaResource {
             return error(Response.Status.NOT_FOUND, "SUBJECT_NOT_FOUND");
         }
         return Response.ok(Map.of("subject", subject, "versions", deleted)).build();
-    }
-
-    private static SchemaBody parseBody(String rawBody) {
-        if (rawBody == null || rawBody.isBlank()) {
-            return null;
-        }
-        try {
-            return OBJECT_MAPPER.readValue(rawBody, SchemaBody.class);
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     private static Response error(Response.Status status, String code) {

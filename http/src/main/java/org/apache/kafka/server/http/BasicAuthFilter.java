@@ -18,6 +18,9 @@ package org.apache.kafka.server.http;
 
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.container.PreMatching;
@@ -41,6 +44,8 @@ import java.util.Set;
  */
 @PreMatching
 public class BasicAuthFilter implements ContainerRequestFilter {
+
+    private static final Logger LOG = LoggerFactory.getLogger(BasicAuthFilter.class);
 
     /** Property name under which authenticated principals are attached to the request context. */
     public static final String PRINCIPAL_PROPERTY = "kafka.rest.principal";
@@ -94,6 +99,7 @@ public class BasicAuthFilter implements ContainerRequestFilter {
             }
             return new String[]{decoded.substring(0, colon), decoded.substring(colon + 1)};
         } catch (IllegalArgumentException e) {
+            LOG.debug("Malformed Base64 in Authorization header: {}", e.getMessage());
             return null;
         }
     }

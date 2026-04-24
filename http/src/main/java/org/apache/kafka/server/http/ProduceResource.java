@@ -190,6 +190,7 @@ public class ProduceResource {
         try {
             return OBJECT_MAPPER.readValue(rawBody, ProduceBody.class);
         } catch (Exception e) {
+            LOG.debug("Request body is not JSON, treating as raw string value: {}", e.getMessage());
             return new ProduceBody(null, rawBody.strip(), null);
         }
     }

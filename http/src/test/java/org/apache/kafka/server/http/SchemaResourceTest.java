@@ -92,6 +92,13 @@ public class SchemaResourceTest {
     }
 
     @Test
+    void registerSchema_malformedJson_returns400() {
+        Response r = resource.registerSchema(SUBJECT, "{not valid json}");
+        assertEquals(400, r.getStatus());
+        assertErrorCode(r, "INVALID_REQUEST_BODY");
+    }
+
+    @Test
     void registerSchema_missingSchemaField_returns400() {
         // valid JSON but no "schema" key
         Response r = resource.registerSchema(SUBJECT, "{\"other\":\"field\"}");
