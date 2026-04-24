@@ -33,11 +33,16 @@ import java.util.Map;
  *
  * <h3>Routes</h3>
  * <pre>
- *   Method  Path                        Resource             Purpose
- *   ------  --------------------------  -------------------  -----------------------
- *   POST    /v1/topics/{name}           ProduceResource      Produce a single record
- *   GET     /openapi.yaml               OpenApiResource      OpenAPI 3 spec     (opt-in)
- *   GET     /swagger                    OpenApiResource      Swagger UI         (opt-in)
+ *   Method  Path                                         Resource        Purpose
+ *   ------  -------------------------------------------  --------------  -----------------------
+ *   POST    /v1/topics/{name}                            ProduceResource Produce a single record
+ *   POST    /v1/schemas/subjects/{subject}               SchemaResource  Register a schema
+ *   GET     /v1/schemas/subjects/{subject}               SchemaResource  List versions
+ *   GET     /v1/schemas/subjects/{subject}/versions/{v}  SchemaResource  Fetch a version
+ *   GET     /v1/schemas/{id}                             SchemaResource  Fetch schema by ID
+ *   DELETE  /v1/schemas/subjects/{subject}               SchemaResource  Delete a subject
+ *   GET     /openapi.yaml                                OpenApiResource OpenAPI 3 spec (opt-in)
+ *   GET     /swagger                                     OpenApiResource Swagger UI     (opt-in)
  * </pre>
  *
  * <p>The OpenAPI / Swagger routes are only registered when {@code swaggerUiEnabled}
@@ -68,7 +73,8 @@ public final class HttpRouter {
                                        RecordAppender appender,
                                        AuthorizationHelper auth,
                                        MetadataCache metadataCache,
-                                       Time time) {
+                                       Time time,
+                                       SchemaStore schemaStore) {
         ResourceConfig config = new ResourceConfig();
 
         // Providers
@@ -82,6 +88,7 @@ public final class HttpRouter {
         // Routes — each resource class declares its own JAX-RS @Path / @Method
         // annotations. The table in the class-level Javadoc is the contract.
         config.register(new ProduceResource(appender, auth, metadataCache, time, requestTimeoutMs));
+        config.register(new SchemaResource(schemaStore));
         if (swaggerUiEnabled) {
             config.register(new OpenApiResource());
         }

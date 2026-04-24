@@ -62,6 +62,10 @@ public class HttpRestServer implements BrokerHttpServer {
     // fires once per listener, not once per bind.
     private final Map<ListenerName, KafkaSslContextFactory> sslFactoriesByListener = new LinkedHashMap<>();
 
+    // Shared schema store — lives for the lifetime of the server.
+    // SchemaStore is thread-safe; one instance serves all requests.
+    private final SchemaStore schemaStore = new SchemaStore();
+
     private volatile Server jetty;
 
     public HttpRestServer(BrokerHttpServerContext ctx) {
@@ -96,7 +100,8 @@ public class HttpRestServer implements BrokerHttpServer {
                         ctx.appender(),
                         ctx.auth(),
                         ctx.metadataCache(),
-                        ctx.time()))),
+                        ctx.time(),
+                        schemaStore))),
                 "/*");
         jetty.setHandler(context);
 

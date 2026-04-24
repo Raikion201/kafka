@@ -91,7 +91,7 @@ class HttpRestProxyIntegrationTest extends IntegrationTestHarness {
   private val httpClient = HttpClient.newHttpClient()
   private val mapper = new ObjectMapper()
 
-  /** Small helper that fires an HTTP POST at the embedded REST server. */
+  /** Fire an HTTP POST at the embedded REST server. */
   private def post(path: String, body: String, authHeader: Option[String] = Some("Basic " + httpCreds)):
       HttpResponse[String] = {
     val builder = HttpRequest.newBuilder()
@@ -101,6 +101,30 @@ class HttpRestProxyIntegrationTest extends IntegrationTestHarness {
     authHeader.foreach(h => builder.header("Authorization", h))
     httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString())
   }
+
+  /** Fire an HTTP GET at the embedded REST server. */
+  private def get(path: String, authHeader: Option[String] = Some("Basic " + httpCreds)):
+      HttpResponse[String] = {
+    val builder = HttpRequest.newBuilder()
+      .uri(URI.create(s"http://127.0.0.1:$httpPort$path"))
+      .GET()
+    authHeader.foreach(h => builder.header("Authorization", h))
+    httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString())
+  }
+
+  /** Fire an HTTP DELETE at the embedded REST server. */
+  private def delete(path: String, authHeader: Option[String] = Some("Basic " + httpCreds)):
+      HttpResponse[String] = {
+    val builder = HttpRequest.newBuilder()
+      .uri(URI.create(s"http://127.0.0.1:$httpPort$path"))
+      .DELETE()
+    authHeader.foreach(h => builder.header("Authorization", h))
+    httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString())
+  }
+
+  /** Escape a schema string so it can be embedded as a JSON string value. */
+  private def schemaBody(schema: String): String =
+    s"""{"schema":"${schema.replace("\"", "\\\"")}"}"""
 
   /**
    * Happy path — the load-bearing test. We POST a record over HTTP, then
@@ -200,5 +224,138 @@ class HttpRestProxyIntegrationTest extends IntegrationTestHarness {
   def unknownTopicReturns404(): Unit = {
     val resp = post("/v1/topics/this-topic-does-not-exist", """{"key":"k","value":"v"}""")
     assertEquals(404, resp.statusCode())
+  }
+
+  // ── Schema Registry integration tests ─────────────────────────────────────
+
+  private val schemaA = """{"type":"record","name":"User","fields":[{"name":"id","type":"int"}]}"""
+  private val schemaB = """{"type":"record","name":"User","fields":[{"name":"id","type":"int"},{"name":"name","type":"string"}]}"""
+
+  /**
+   * Register a schema, then fetch it back by ID.
+   * Proves the full round-trip: POST assigns an ID, GET /v1/schemas/{id}
+   * returns the same schema content with correct subject+version metadata.
+   */
+  @Test
+  def schemaRegistryRegisterAndFetchById(): Unit = {
+    val subject = "user-value"
+
+    // Register
+    val regResp = post(s"/v1/schemas/subjects/$subject", schemaBody(schemaA))
+    assertEquals(201, regResp.statusCode(), s"register body: ${regResp.body()}")
+    val regJson = mapper.readTree(regResp.body())
+    val id = regJson.get("id").asInt()
+    assertEquals(1, id)
+
+    // Fetch by ID
+    val fetchResp = get(s"/v1/schemas/$id")
+    assertEquals(200, fetchResp.statusCode(), s"fetch body: ${fetchResp.body()}")
+    val fetchJson = mapper.readTree(fetchResp.body())
+    assertEquals(id, fetchJson.get("id").asInt())
+    assertEquals(subject, fetchJson.get("subject").asText())
+    assertEquals(1, fetchJson.get("version").asInt())
+    assertEquals(schemaA, fetchJson.get("schema").asText())
+  }
+
+  /**
+   * Registering the same schema twice under the same subject returns the
+   * same ID (deduplication) without creating a second version.
+   */
+  @Test
+  def schemaRegistryDedupReturnsSameId(): Unit = {
+    val subject = "order-value"
+    val r1 = post(s"/v1/schemas/subjects/$subject", schemaBody(schemaA))
+    val r2 = post(s"/v1/schemas/subjects/$subject", schemaBody(schemaA))
+    assertEquals(201, r1.statusCode())
+    assertEquals(201, r2.statusCode())
+    val id1 = mapper.readTree(r1.body()).get("id").asInt()
+    val id2 = mapper.readTree(r2.body()).get("id").asInt()
+    assertEquals(id1, id2, "same schema content must return same id")
+
+    // Only one version exists
+    val versResp = get(s"/v1/schemas/subjects/$subject")
+    val versions = mapper.readTree(versResp.body()).get("versions")
+    assertEquals(1, versions.size(), "dedup must not create a second version")
+  }
+
+  /**
+   * Registering two different schemas under the same subject creates two
+   * versions with different IDs, both retrievable.
+   */
+  @Test
+  def schemaRegistryTwoVersions(): Unit = {
+    val subject = "item-value"
+    val r1 = post(s"/v1/schemas/subjects/$subject", schemaBody(schemaA))
+    val r2 = post(s"/v1/schemas/subjects/$subject", schemaBody(schemaB))
+    assertEquals(201, r1.statusCode())
+    assertEquals(201, r2.statusCode())
+    val id1 = mapper.readTree(r1.body()).get("id").asInt()
+    val id2 = mapper.readTree(r2.body()).get("id").asInt()
+    assertTrue(id1 != id2, "different schemas must get different ids")
+
+    // Version list contains both
+    val versResp = get(s"/v1/schemas/subjects/$subject")
+    assertEquals(200, versResp.statusCode())
+    val versions = mapper.readTree(versResp.body()).get("versions")
+    assertEquals(2, versions.size())
+
+    // Fetch version 1 and version 2 individually
+    val v1Resp = get(s"/v1/schemas/subjects/$subject/versions/1")
+    assertEquals(200, v1Resp.statusCode())
+    assertEquals(schemaA, mapper.readTree(v1Resp.body()).get("schema").asText())
+
+    val v2Resp = get(s"/v1/schemas/subjects/$subject/versions/2")
+    assertEquals(200, v2Resp.statusCode())
+    assertEquals(schemaB, mapper.readTree(v2Resp.body()).get("schema").asText())
+  }
+
+  /**
+   * DELETE removes the subject; subsequent GET returns 404.
+   */
+  @Test
+  def schemaRegistryDeleteSubject(): Unit = {
+    val subject = "temp-value"
+    post(s"/v1/schemas/subjects/$subject", schemaBody(schemaA))
+
+    val delResp = delete(s"/v1/schemas/subjects/$subject")
+    assertEquals(200, delResp.statusCode(), s"delete body: ${delResp.body()}")
+    val delJson = mapper.readTree(delResp.body())
+    assertEquals(subject, delJson.get("subject").asText())
+    assertEquals(1, delJson.get("versions").size())
+
+    // Subject is gone
+    val afterResp = get(s"/v1/schemas/subjects/$subject")
+    assertEquals(404, afterResp.statusCode())
+  }
+
+  /** GET on unknown schema ID → 404. */
+  @Test
+  def schemaRegistryUnknownIdReturns404(): Unit = {
+    val resp = get("/v1/schemas/999")
+    assertEquals(404, resp.statusCode())
+    assertEquals("SCHEMA_NOT_FOUND", mapper.readTree(resp.body()).get("error").asText())
+  }
+
+  /** GET versions on unknown subject → 404. */
+  @Test
+  def schemaRegistryUnknownSubjectReturns404(): Unit = {
+    val resp = get("/v1/schemas/subjects/no-such-subject")
+    assertEquals(404, resp.statusCode())
+    assertEquals("SUBJECT_NOT_FOUND", mapper.readTree(resp.body()).get("error").asText())
+  }
+
+  /** POST with missing schema field → 400. */
+  @Test
+  def schemaRegistryMissingSchemaFieldReturns400(): Unit = {
+    val resp = post("/v1/schemas/subjects/bad-value", """{"other":"field"}""")
+    assertEquals(400, resp.statusCode())
+    assertEquals("SCHEMA_MISSING", mapper.readTree(resp.body()).get("error").asText())
+  }
+
+  /** Schema registry endpoints respect Basic Auth — no credentials → 401. */
+  @Test
+  def schemaRegistryRequiresAuth(): Unit = {
+    val resp = post("/v1/schemas/subjects/user-value", schemaBody(schemaA), authHeader = None)
+    assertEquals(401, resp.statusCode())
   }
 }
