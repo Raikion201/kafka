@@ -27,6 +27,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for {@link SchemaResource}. Uses a real {@link SchemaStore} —
@@ -69,6 +70,7 @@ public class SchemaResourceTest {
 
     @Test
     void registerDifferentSchema_returnsNewId() {
+        resource.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
         Response r1 = resource.registerSchema(SUBJECT, body(SCHEMA_A));
         Response r2 = resource.registerSchema(SUBJECT, body(SCHEMA_B));
         int id1 = ((SchemaRegisteredBody) r1.getEntity()).id();
@@ -124,6 +126,7 @@ public class SchemaResourceTest {
 
     @Test
     void getVersions_returns200WithVersionList() {
+        resource.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
         resource.registerSchema(SUBJECT, body(SCHEMA_A));
         resource.registerSchema(SUBJECT, body(SCHEMA_B));
 
@@ -197,6 +200,7 @@ public class SchemaResourceTest {
 
     @Test
     void deleteSubject_returns200WithDeletedVersionIds() {
+        resource.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
         resource.registerSchema(SUBJECT, body(SCHEMA_A));
         resource.registerSchema(SUBJECT, body(SCHEMA_B));
 
@@ -224,6 +228,83 @@ public class SchemaResourceTest {
         assertErrorCode(r, "SUBJECT_NOT_FOUND");
     }
 
+    // ── GET/PUT /v1/schemas/subjects/{subject}/config ─────────────────────────
+
+    @Test
+    void getCompatibility_defaultIsBackward() {
+        Response r = resource.getCompatibility(SUBJECT);
+        assertEquals(200, r.getStatus());
+        @SuppressWarnings("unchecked")
+        Map<String, String> entity = (Map<String, String>) r.getEntity();
+        assertEquals("BACKWARD", entity.get("compatibility"));
+    }
+
+    @Test
+    void setCompatibility_updatesMode() {
+        Response r = resource.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
+        assertEquals(200, r.getStatus());
+        @SuppressWarnings("unchecked")
+        Map<String, String> entity = (Map<String, String>) r.getEntity();
+        assertEquals("NONE", entity.get("compatibility"));
+
+        Response r2 = resource.getCompatibility(SUBJECT);
+        @SuppressWarnings("unchecked")
+        Map<String, String> entity2 = (Map<String, String>) r2.getEntity();
+        assertEquals("NONE", entity2.get("compatibility"));
+    }
+
+    @Test
+    void setCompatibility_invalidMode_returns400() {
+        Response r = resource.setCompatibility(SUBJECT, "{\"compatibility\":\"INVALID\"}");
+        assertEquals(400, r.getStatus());
+    }
+
+    // ── Compatibility enforcement at register time ────────────────────────────
+
+    private static final String RECORD_V1 =
+        "{\"type\":\"record\",\"name\":\"User\",\"fields\":[" +
+        "{\"name\":\"id\",\"type\":\"int\"},{\"name\":\"name\",\"type\":\"string\"}]}";
+
+    @Test
+    void registerSchema_backwardCompatible_addFieldWithDefault_passes() {
+        resource.registerSchema(SUBJECT, body(RECORD_V1));
+        String v2 = "{\"type\":\"record\",\"name\":\"User\",\"fields\":[" +
+            "{\"name\":\"id\",\"type\":\"int\"},{\"name\":\"name\",\"type\":\"string\"}," +
+            "{\"name\":\"email\",\"type\":\"string\",\"default\":\"\"}]}";
+        Response r = resource.registerSchema(SUBJECT, body(v2));
+        assertEquals(201, r.getStatus());
+    }
+
+    @Test
+    void registerSchema_backwardIncompatible_addFieldWithoutDefault_returns409() {
+        resource.registerSchema(SUBJECT, body(RECORD_V1));
+        String v2 = "{\"type\":\"record\",\"name\":\"User\",\"fields\":[" +
+            "{\"name\":\"id\",\"type\":\"int\"},{\"name\":\"name\",\"type\":\"string\"}," +
+            "{\"name\":\"email\",\"type\":\"string\"}]}";  // no default
+        Response r = resource.registerSchema(SUBJECT, body(v2));
+        assertEquals(409, r.getStatus());
+        assertErrorCodeStartsWith(r, "SCHEMA_INCOMPATIBLE");
+    }
+
+    @Test
+    void registerSchema_noneMode_allowsBreakingChange() {
+        resource.registerSchema(SUBJECT, body(RECORD_V1));
+        resource.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
+        String v2 = "{\"type\":\"record\",\"name\":\"User\",\"fields\":[" +
+            "{\"name\":\"id\",\"type\":\"int\"},{\"name\":\"name\",\"type\":\"string\"}," +
+            "{\"name\":\"email\",\"type\":\"string\"}]}";  // no default — normally fails BACKWARD
+        Response r = resource.registerSchema(SUBJECT, body(v2));
+        assertEquals(201, r.getStatus());
+    }
+
+    @Test
+    void registerSchema_typeChange_returns409() {
+        resource.registerSchema(SUBJECT, body("{\"type\":\"string\"}"));
+        Response r = resource.registerSchema(SUBJECT, body("{\"type\":\"int\"}"));
+        assertEquals(409, r.getStatus());
+        assertErrorCodeStartsWith(r, "SCHEMA_INCOMPATIBLE");
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private static String body(String schema) {
@@ -235,5 +316,13 @@ public class SchemaResourceTest {
         Map<String, String> entity = assertInstanceOf(Map.class, r.getEntity());
         assertNotNull(entity.get("error"), "response body should have an 'error' key");
         assertEquals(expectedCode, entity.get("error"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void assertErrorCodeStartsWith(Response r, String prefix) {
+        Map<String, String> entity = assertInstanceOf(Map.class, r.getEntity());
+        assertNotNull(entity.get("error"), "response body should have an 'error' key");
+        assertTrue(entity.get("error").startsWith(prefix),
+            "expected error starting with '" + prefix + "' but was: " + entity.get("error"));
     }
 }

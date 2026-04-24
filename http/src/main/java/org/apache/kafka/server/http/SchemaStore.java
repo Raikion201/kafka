@@ -55,6 +55,10 @@ public final class SchemaStore {
 
     private final AtomicInteger nextId = new AtomicInteger(1);
 
+    // subject → compatibility mode (default BACKWARD if not explicitly set)
+    private final ConcurrentHashMap<String, SchemaCompatibility> subjectCompatibility =
+            new ConcurrentHashMap<>();
+
     /**
      * Register a schema under a subject. If the exact same schema content has
      * already been registered (under any subject), the existing ID is returned
@@ -158,6 +162,31 @@ public final class SchemaStore {
 
     /** Immutable pair of subject name and 1-based version number. */
     public record SubjectVersion(String subject, int version) { }
+
+    /**
+     * Set the compatibility mode for a subject.
+     * Defaults to {@link SchemaCompatibility#BACKWARD} if never set.
+     */
+    public void setCompatibility(String subject, SchemaCompatibility mode) {
+        subjectCompatibility.put(subject, mode);
+    }
+
+    /** Get the compatibility mode for a subject. Returns BACKWARD if not explicitly set. */
+    public SchemaCompatibility getCompatibility(String subject) {
+        return subjectCompatibility.getOrDefault(subject, SchemaCompatibility.BACKWARD);
+    }
+
+    /**
+     * Get the latest schema content for a subject (last registered version),
+     * or {@code null} if the subject has no versions.
+     */
+    public String getLatestSchema(String subject) {
+        CopyOnWriteArrayList<Integer> versions = subjectVersions.get(subject);
+        if (versions == null || versions.isEmpty()) {
+            return null;
+        }
+        return idToSchema.get(versions.get(versions.size() - 1));
+    }
 
     /** Returns a snapshot of all subjects and their version counts — for diagnostics. */
     public Map<String, Integer> subjectSummary() {

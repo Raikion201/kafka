@@ -23,6 +23,7 @@ import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
@@ -44,6 +45,8 @@ import java.util.Map;
  *   GET     /v1/schemas/subjects/{subject}/versions/{v} Fetch a specific version
  *   GET     /v1/schemas/{id}                            Fetch a schema by global ID
  *   DELETE  /v1/schemas/subjects/{subject}              Delete a subject
+ *   GET     /v1/schemas/subjects/{subject}/config       Get compatibility mode
+ *   PUT     /v1/schemas/subjects/{subject}/config       Set compatibility mode
  * </pre>
  *
  * <p>All operations are synchronous — the underlying {@link SchemaStore} is
@@ -97,10 +100,58 @@ public class SchemaResource {
         } catch (Exception e) {
             return error(Response.Status.BAD_REQUEST, "SCHEMA_INVALID_JSON");
         }
+
+        Response compatError = checkCompatibility(subject, schema);
+        if (compatError != null) {
+            return compatError;
+        }
+
         int id = store.register(subject, schema);
         return Response.status(Response.Status.CREATED)
                 .entity(new SchemaRegisteredBody(id))
                 .build();
+    }
+
+    /**
+     * Get the compatibility mode for a subject.
+     * Returns BACKWARD if not explicitly configured.
+     */
+    @GET
+    @Path("/subjects/{subject}/config")
+    public Response getCompatibility(@PathParam("subject") String subject) {
+        SchemaCompatibility mode = store.getCompatibility(subject);
+        return Response.ok(Map.of("compatibility", mode.name())).build();
+    }
+
+    /**
+     * Set the compatibility mode for a subject.
+     * Body: {@code {"compatibility": "BACKWARD"}}
+     * Valid values: BACKWARD, FORWARD, FULL, NONE.
+     */
+    @PUT
+    @Path("/subjects/{subject}/config")
+    public Response setCompatibility(@PathParam("subject") String subject, String rawBody) {
+        if (rawBody == null || rawBody.isBlank()) {
+            return error(Response.Status.BAD_REQUEST, "MISSING_COMPATIBILITY_FIELD");
+        }
+        JsonNode node;
+        try {
+            node = OBJECT_MAPPER.readTree(rawBody);
+        } catch (Exception e) {
+            return error(Response.Status.BAD_REQUEST, "INVALID_REQUEST_BODY");
+        }
+        JsonNode compatNode = node.get("compatibility");
+        if (compatNode == null || compatNode.asText("").isBlank()) {
+            return error(Response.Status.BAD_REQUEST, "MISSING_COMPATIBILITY_FIELD");
+        }
+        SchemaCompatibility mode;
+        try {
+            mode = SchemaCompatibility.fromString(compatNode.asText());
+        } catch (IllegalArgumentException e) {
+            return error(Response.Status.BAD_REQUEST, "INVALID_COMPATIBILITY_MODE: " + e.getMessage());
+        }
+        store.setCompatibility(subject, mode);
+        return Response.ok(Map.of("compatibility", mode.name())).build();
     }
 
     /**
@@ -173,6 +224,20 @@ public class SchemaResource {
             return error(Response.Status.NOT_FOUND, "SUBJECT_NOT_FOUND");
         }
         return Response.ok(Map.of("subject", subject, "versions", deleted)).build();
+    }
+
+    private Response checkCompatibility(String subject, String schema) {
+        String latestSchema = store.getLatestSchema(subject);
+        if (latestSchema == null || latestSchema.equals(schema)) {
+            return null;
+        }
+        SchemaCompatibility mode = store.getCompatibility(subject);
+        try {
+            SchemaCompatibilityChecker.check(latestSchema, schema, mode);
+            return null;
+        } catch (SchemaCompatibilityException e) {
+            return error(Response.Status.CONFLICT, "SCHEMA_INCOMPATIBLE: " + e.getMessage());
+        }
     }
 
     private static Response error(Response.Status status, String code) {
