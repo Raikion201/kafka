@@ -30,9 +30,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Unit tests for {@link SchemaResource}. Uses a real {@link SchemaStore} —
- * the point is to test the HTTP layer (status codes, response shapes, error
- * handling) not the store itself (covered by {@link SchemaStoreTest}).
+ * Unit tests for the Confluent-compatible schema registry HTTP layer.
+ * Uses real {@link SchemaStore} — tests status codes, response shapes, and
+ * error handling across {@link SubjectResource}, {@link SchemaByIdResource},
+ * and {@link SchemaConfigResource}.
  */
 public class SchemaResourceTest {
 
@@ -40,29 +41,34 @@ public class SchemaResourceTest {
     private static final String SCHEMA_B = "{\"type\":\"int\"}";
     private static final String SUBJECT = "user-value";
 
-    private SchemaResource resource;
+    private SubjectResource subjects;
+    private SchemaByIdResource schemasById;
+    private SchemaConfigResource config;
 
     @BeforeEach
     void setUp() {
-        resource = new SchemaResource(new SchemaStore());
+        SchemaStore store = new SchemaStore();
+        subjects = new SubjectResource(store);
+        schemasById = new SchemaByIdResource(store);
+        config = new SchemaConfigResource(store);
     }
 
-    // ── POST /v1/schemas/subjects/{subject} ──────────────────────────────────
+    // ── POST /subjects/{subject}/versions ────────────────────────────────────
 
     @Test
-    void registerSchema_returns201WithId() {
-        Response r = resource.registerSchema(SUBJECT, body(SCHEMA_A));
-        assertEquals(201, r.getStatus());
+    void registerSchema_returns200WithId() {
+        Response r = subjects.registerSchema(SUBJECT, body(SCHEMA_A));
+        assertEquals(200, r.getStatus());
         SchemaRegisteredBody body = assertInstanceOf(SchemaRegisteredBody.class, r.getEntity());
         assertEquals(1, body.id());
     }
 
     @Test
     void registerSameSchema_returnsSameId() {
-        Response r1 = resource.registerSchema(SUBJECT, body(SCHEMA_A));
-        Response r2 = resource.registerSchema(SUBJECT, body(SCHEMA_A));
-        assertEquals(201, r1.getStatus());
-        assertEquals(201, r2.getStatus());
+        Response r1 = subjects.registerSchema(SUBJECT, body(SCHEMA_A));
+        Response r2 = subjects.registerSchema(SUBJECT, body(SCHEMA_A));
+        assertEquals(200, r1.getStatus());
+        assertEquals(200, r2.getStatus());
         int id1 = ((SchemaRegisteredBody) r1.getEntity()).id();
         int id2 = ((SchemaRegisteredBody) r2.getEntity()).id();
         assertEquals(id1, id2);
@@ -70,9 +76,9 @@ public class SchemaResourceTest {
 
     @Test
     void registerDifferentSchema_returnsNewId() {
-        resource.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
-        Response r1 = resource.registerSchema(SUBJECT, body(SCHEMA_A));
-        Response r2 = resource.registerSchema(SUBJECT, body(SCHEMA_B));
+        config.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
+        Response r1 = subjects.registerSchema(SUBJECT, body(SCHEMA_A));
+        Response r2 = subjects.registerSchema(SUBJECT, body(SCHEMA_B));
         int id1 = ((SchemaRegisteredBody) r1.getEntity()).id();
         int id2 = ((SchemaRegisteredBody) r2.getEntity()).id();
         assertEquals(1, id1);
@@ -81,76 +87,99 @@ public class SchemaResourceTest {
 
     @Test
     void registerSchema_nullBody_returns400() {
-        Response r = resource.registerSchema(SUBJECT, null);
+        Response r = subjects.registerSchema(SUBJECT, null);
         assertEquals(400, r.getStatus());
         assertErrorCode(r, "SCHEMA_MISSING");
     }
 
     @Test
     void registerSchema_blankBody_returns400() {
-        Response r = resource.registerSchema(SUBJECT, "   ");
+        Response r = subjects.registerSchema(SUBJECT, "   ");
         assertEquals(400, r.getStatus());
         assertErrorCode(r, "SCHEMA_MISSING");
     }
 
     @Test
     void registerSchema_malformedJson_returns400() {
-        Response r = resource.registerSchema(SUBJECT, "{not valid json}");
+        Response r = subjects.registerSchema(SUBJECT, "{not valid json}");
         assertEquals(400, r.getStatus());
         assertErrorCode(r, "INVALID_REQUEST_BODY");
     }
 
     @Test
     void registerSchema_missingSchemaField_returns400() {
-        // valid JSON but no "schema" key
-        Response r = resource.registerSchema(SUBJECT, "{\"other\":\"field\"}");
+        Response r = subjects.registerSchema(SUBJECT, "{\"other\":\"field\"}");
         assertEquals(400, r.getStatus());
         assertErrorCode(r, "SCHEMA_MISSING");
     }
 
     @Test
     void registerSchema_blankSchemaValue_returns400() {
-        Response r = resource.registerSchema(SUBJECT, "{\"schema\":\"   \"}");
+        Response r = subjects.registerSchema(SUBJECT, "{\"schema\":\"   \"}");
         assertEquals(400, r.getStatus());
         assertErrorCode(r, "SCHEMA_MISSING");
     }
 
     @Test
     void registerSchema_invalidJson_returns400() {
-        Response r = resource.registerSchema(SUBJECT, "{\"schema\":\"{not valid json}\"}");
+        Response r = subjects.registerSchema(SUBJECT, "{\"schema\":\"{not valid json}\"}");
         assertEquals(400, r.getStatus());
         assertErrorCode(r, "SCHEMA_INVALID_JSON");
     }
 
-    // ── GET /v1/schemas/subjects/{subject} ───────────────────────────────────
+    // ── GET /subjects/{subject}/versions ─────────────────────────────────────
 
     @Test
     void getVersions_returns200WithVersionList() {
-        resource.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
-        resource.registerSchema(SUBJECT, body(SCHEMA_A));
-        resource.registerSchema(SUBJECT, body(SCHEMA_B));
+        config.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
+        subjects.registerSchema(SUBJECT, body(SCHEMA_A));
+        subjects.registerSchema(SUBJECT, body(SCHEMA_B));
 
-        Response r = resource.getVersions(SUBJECT);
+        Response r = subjects.getVersions(SUBJECT);
         assertEquals(200, r.getStatus());
         @SuppressWarnings("unchecked")
-        Map<String, List<Integer>> entity = (Map<String, List<Integer>>) r.getEntity();
-        assertEquals(List.of(1, 2), entity.get("versions"));
+        List<Integer> versions = (List<Integer>) r.getEntity();
+        assertEquals(List.of(1, 2), versions);
     }
 
     @Test
     void getVersions_unknownSubject_returns404() {
-        Response r = resource.getVersions("no-such-subject");
+        Response r = subjects.getVersions("no-such-subject");
         assertEquals(404, r.getStatus());
         assertErrorCode(r, "SUBJECT_NOT_FOUND");
     }
 
-    // ── GET /v1/schemas/subjects/{subject}/versions/{version} ────────────────
+    // ── GET /subjects/{subject}/versions/latest ───────────────────────────────
+
+    @Test
+    void getLatestVersion_returns200WithFullDetails() {
+        config.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
+        subjects.registerSchema(SUBJECT, body(SCHEMA_A));
+        subjects.registerSchema(SUBJECT, body(SCHEMA_B));
+
+        Response r = subjects.getLatestVersion(SUBJECT);
+        assertEquals(200, r.getStatus());
+        SchemaVersionBody body = assertInstanceOf(SchemaVersionBody.class, r.getEntity());
+        assertEquals(2, body.id());
+        assertEquals(SUBJECT, body.subject());
+        assertEquals(2, body.version());
+        assertEquals(SCHEMA_B, body.schema());
+    }
+
+    @Test
+    void getLatestVersion_unknownSubject_returns404() {
+        Response r = subjects.getLatestVersion("no-such-subject");
+        assertEquals(404, r.getStatus());
+        assertErrorCode(r, "SUBJECT_NOT_FOUND");
+    }
+
+    // ── GET /subjects/{subject}/versions/{version} ───────────────────────────
 
     @Test
     void getSchemaVersion_returns200WithFullDetails() {
-        resource.registerSchema(SUBJECT, body(SCHEMA_A));
+        subjects.registerSchema(SUBJECT, body(SCHEMA_A));
 
-        Response r = resource.getSchemaVersion(SUBJECT, 1);
+        Response r = subjects.getSchemaVersion(SUBJECT, 1);
         assertEquals(200, r.getStatus());
         SchemaVersionBody body = assertInstanceOf(SchemaVersionBody.class, r.getEntity());
         assertEquals(1, body.id());
@@ -161,78 +190,75 @@ public class SchemaResourceTest {
 
     @Test
     void getSchemaVersion_unknownSubject_returns404() {
-        Response r = resource.getSchemaVersion("no-such-subject", 1);
+        Response r = subjects.getSchemaVersion("no-such-subject", 1);
         assertEquals(404, r.getStatus());
         assertErrorCode(r, "VERSION_NOT_FOUND");
     }
 
     @Test
     void getSchemaVersion_versionOutOfRange_returns404() {
-        resource.registerSchema(SUBJECT, body(SCHEMA_A));
-        Response r = resource.getSchemaVersion(SUBJECT, 99);
+        subjects.registerSchema(SUBJECT, body(SCHEMA_A));
+        Response r = subjects.getSchemaVersion(SUBJECT, 99);
         assertEquals(404, r.getStatus());
         assertErrorCode(r, "VERSION_NOT_FOUND");
     }
 
-    // ── GET /v1/schemas/{id} ─────────────────────────────────────────────────
+    // ── GET /schemas/ids/{id} ─────────────────────────────────────────────────
 
     @Test
-    void getSchemaById_returns200WithFullDetails() {
-        resource.registerSchema(SUBJECT, body(SCHEMA_A));
+    void getSchemaById_returns200WithSchemaString() {
+        subjects.registerSchema(SUBJECT, body(SCHEMA_A));
 
-        Response r = resource.getSchemaById(1);
+        Response r = schemasById.getSchemaById(1);
         assertEquals(200, r.getStatus());
-        SchemaVersionBody body = assertInstanceOf(SchemaVersionBody.class, r.getEntity());
-        assertEquals(1, body.id());
-        assertEquals(SUBJECT, body.subject());
-        assertEquals(1, body.version());
-        assertEquals(SCHEMA_A, body.schema());
+        @SuppressWarnings("unchecked")
+        Map<String, String> entity = (Map<String, String>) r.getEntity();
+        assertEquals(SCHEMA_A, entity.get("schema"));
     }
 
     @Test
     void getSchemaById_unknownId_returns404() {
-        Response r = resource.getSchemaById(999);
+        Response r = schemasById.getSchemaById(999);
         assertEquals(404, r.getStatus());
         assertErrorCode(r, "SCHEMA_NOT_FOUND");
     }
 
-    // ── DELETE /v1/schemas/subjects/{subject} ─────────────────────────────────
+    // ── DELETE /subjects/{subject} ────────────────────────────────────────────
 
     @Test
-    void deleteSubject_returns200WithDeletedVersionIds() {
-        resource.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
-        resource.registerSchema(SUBJECT, body(SCHEMA_A));
-        resource.registerSchema(SUBJECT, body(SCHEMA_B));
+    void deleteSubject_returns200WithDeletedVersionNumbers() {
+        config.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
+        subjects.registerSchema(SUBJECT, body(SCHEMA_A));
+        subjects.registerSchema(SUBJECT, body(SCHEMA_B));
 
-        Response r = resource.deleteSubject(SUBJECT);
+        Response r = subjects.deleteSubject(SUBJECT);
         assertEquals(200, r.getStatus());
         @SuppressWarnings("unchecked")
-        Map<String, Object> entity = (Map<String, Object>) r.getEntity();
-        assertEquals(SUBJECT, entity.get("subject"));
-        assertEquals(List.of(1, 2), entity.get("versions"));
+        List<Integer> deleted = (List<Integer>) r.getEntity();
+        assertEquals(List.of(1, 2), deleted);
     }
 
     @Test
     void deleteSubject_removesSubjectSoGetVersionsReturns404() {
-        resource.registerSchema(SUBJECT, body(SCHEMA_A));
-        resource.deleteSubject(SUBJECT);
+        subjects.registerSchema(SUBJECT, body(SCHEMA_A));
+        subjects.deleteSubject(SUBJECT);
 
-        Response r = resource.getVersions(SUBJECT);
+        Response r = subjects.getVersions(SUBJECT);
         assertEquals(404, r.getStatus());
     }
 
     @Test
     void deleteSubject_unknownSubject_returns404() {
-        Response r = resource.deleteSubject("no-such-subject");
+        Response r = subjects.deleteSubject("no-such-subject");
         assertEquals(404, r.getStatus());
         assertErrorCode(r, "SUBJECT_NOT_FOUND");
     }
 
-    // ── GET/PUT /v1/schemas/subjects/{subject}/config ─────────────────────────
+    // ── GET/PUT /config/{subject} ─────────────────────────────────────────────
 
     @Test
     void getCompatibility_defaultIsBackward() {
-        Response r = resource.getCompatibility(SUBJECT);
+        Response r = config.getCompatibility(SUBJECT);
         assertEquals(200, r.getStatus());
         @SuppressWarnings("unchecked")
         Map<String, String> entity = (Map<String, String>) r.getEntity();
@@ -241,13 +267,13 @@ public class SchemaResourceTest {
 
     @Test
     void setCompatibility_updatesMode() {
-        Response r = resource.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
+        Response r = config.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
         assertEquals(200, r.getStatus());
         @SuppressWarnings("unchecked")
         Map<String, String> entity = (Map<String, String>) r.getEntity();
         assertEquals("NONE", entity.get("compatibility"));
 
-        Response r2 = resource.getCompatibility(SUBJECT);
+        Response r2 = config.getCompatibility(SUBJECT);
         @SuppressWarnings("unchecked")
         Map<String, String> entity2 = (Map<String, String>) r2.getEntity();
         assertEquals("NONE", entity2.get("compatibility"));
@@ -255,7 +281,7 @@ public class SchemaResourceTest {
 
     @Test
     void setCompatibility_invalidMode_returns400() {
-        Response r = resource.setCompatibility(SUBJECT, "{\"compatibility\":\"INVALID\"}");
+        Response r = config.setCompatibility(SUBJECT, "{\"compatibility\":\"INVALID\"}");
         assertEquals(400, r.getStatus());
     }
 
@@ -267,40 +293,40 @@ public class SchemaResourceTest {
 
     @Test
     void registerSchema_backwardCompatible_addFieldWithDefault_passes() {
-        resource.registerSchema(SUBJECT, body(RECORD_V1));
+        subjects.registerSchema(SUBJECT, body(RECORD_V1));
         String v2 = "{\"type\":\"record\",\"name\":\"User\",\"fields\":[" +
             "{\"name\":\"id\",\"type\":\"int\"},{\"name\":\"name\",\"type\":\"string\"}," +
             "{\"name\":\"email\",\"type\":\"string\",\"default\":\"\"}]}";
-        Response r = resource.registerSchema(SUBJECT, body(v2));
-        assertEquals(201, r.getStatus());
+        Response r = subjects.registerSchema(SUBJECT, body(v2));
+        assertEquals(200, r.getStatus());
     }
 
     @Test
     void registerSchema_backwardIncompatible_addFieldWithoutDefault_returns409() {
-        resource.registerSchema(SUBJECT, body(RECORD_V1));
+        subjects.registerSchema(SUBJECT, body(RECORD_V1));
         String v2 = "{\"type\":\"record\",\"name\":\"User\",\"fields\":[" +
             "{\"name\":\"id\",\"type\":\"int\"},{\"name\":\"name\",\"type\":\"string\"}," +
             "{\"name\":\"email\",\"type\":\"string\"}]}";  // no default
-        Response r = resource.registerSchema(SUBJECT, body(v2));
+        Response r = subjects.registerSchema(SUBJECT, body(v2));
         assertEquals(409, r.getStatus());
         assertErrorCodeStartsWith(r, "SCHEMA_INCOMPATIBLE");
     }
 
     @Test
     void registerSchema_noneMode_allowsBreakingChange() {
-        resource.registerSchema(SUBJECT, body(RECORD_V1));
-        resource.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
+        subjects.registerSchema(SUBJECT, body(RECORD_V1));
+        config.setCompatibility(SUBJECT, "{\"compatibility\":\"NONE\"}");
         String v2 = "{\"type\":\"record\",\"name\":\"User\",\"fields\":[" +
             "{\"name\":\"id\",\"type\":\"int\"},{\"name\":\"name\",\"type\":\"string\"}," +
-            "{\"name\":\"email\",\"type\":\"string\"}]}";  // no default — normally fails BACKWARD
-        Response r = resource.registerSchema(SUBJECT, body(v2));
-        assertEquals(201, r.getStatus());
+            "{\"name\":\"email\",\"type\":\"string\"}]}";
+        Response r = subjects.registerSchema(SUBJECT, body(v2));
+        assertEquals(200, r.getStatus());
     }
 
     @Test
     void registerSchema_typeChange_returns409() {
-        resource.registerSchema(SUBJECT, body("{\"type\":\"string\"}"));
-        Response r = resource.registerSchema(SUBJECT, body("{\"type\":\"int\"}"));
+        subjects.registerSchema(SUBJECT, body("{\"type\":\"string\"}"));
+        Response r = subjects.registerSchema(SUBJECT, body("{\"type\":\"int\"}"));
         assertEquals(409, r.getStatus());
         assertErrorCodeStartsWith(r, "SCHEMA_INCOMPATIBLE");
     }
