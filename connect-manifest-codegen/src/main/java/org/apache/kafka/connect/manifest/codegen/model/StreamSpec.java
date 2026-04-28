@@ -36,6 +36,9 @@ public class StreamSpec {
 
     private RetrieverSpec retriever;
 
+    @JsonProperty("incremental_sync")
+    private IncrementalSyncSpec incrementalSync;
+
     public String getType() {
         return type;
     }
@@ -66,5 +69,13 @@ public class StreamSpec {
 
     public void setRetriever(RetrieverSpec retriever) {
         this.retriever = retriever;
+    }
+
+    public IncrementalSyncSpec getIncrementalSync() {
+        return incrementalSync;
+    }
+
+    public void setIncrementalSync(IncrementalSyncSpec incrementalSync) {
+        this.incrementalSync = incrementalSync;
     }
 }

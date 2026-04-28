@@ -88,6 +88,17 @@ public class AuthenticatorSpec {
     @JsonProperty("session_token_path")
     private List<String> sessionTokenPath;
 
+    // ── LegacySessionTokenAuthenticator ──────────────────────────────────────
+
+    @JsonProperty("login_url")
+    private String loginUrl;
+
+    @JsonProperty("session_token_response_key")
+    private String sessionTokenResponseKey;
+
+    @JsonProperty("validate_session_url")
+    private String validateSessionUrl;
+
     // ── JwtAuthenticator ──────────────────────────────────────────────────────
 
     @JsonProperty("secret_key")
@@ -233,6 +244,30 @@ public class AuthenticatorSpec {
         this.sessionTokenPath = sessionTokenPath;
     }
 
+    public String getLoginUrl() {
+        return loginUrl == null ? "" : loginUrl;
+    }
+
+    public void setLoginUrl(String loginUrl) {
+        this.loginUrl = loginUrl;
+    }
+
+    public String getSessionTokenResponseKey() {
+        return sessionTokenResponseKey == null ? "id" : sessionTokenResponseKey;
+    }
+
+    public void setSessionTokenResponseKey(String sessionTokenResponseKey) {
+        this.sessionTokenResponseKey = sessionTokenResponseKey;
+    }
+
+    public String getValidateSessionUrl() {
+        return validateSessionUrl;
+    }
+
+    public void setValidateSessionUrl(String validateSessionUrl) {
+        this.validateSessionUrl = validateSessionUrl;
+    }
+
     public String getSecretKey() {
         return secretKey;
     }
@@ -317,6 +352,10 @@ public class AuthenticatorSpec {
 
     public boolean isSessionToken() {
         return "SessionTokenAuthenticator".equalsIgnoreCase(type);
+    }
+
+    public boolean isLegacySessionToken() {
+        return "LegacySessionTokenAuthenticator".equalsIgnoreCase(type);
     }
 
     public boolean isJwt() {
