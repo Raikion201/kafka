@@ -17,6 +17,7 @@
 package org.apache.kafka.connect.manifest.codegen.generator;
 
 import org.apache.kafka.connect.manifest.codegen.model.AuthenticatorSpec;
+import org.apache.kafka.connect.manifest.codegen.model.IncrementalSyncSpec;
 import org.apache.kafka.connect.manifest.codegen.model.ManifestSpec;
 import org.apache.kafka.connect.manifest.codegen.model.PaginatorSpec;
 import org.apache.kafka.connect.manifest.codegen.model.RecordSelectorSpec;
@@ -147,7 +148,8 @@ public class TaskGenerator {
             typeBuilder.addMethod(buildStreamPollMethod(stream, configClass, auth, listOfSourceRecord));
         }
 
-        addAuthHelperMethods(typeBuilder, configClass, auth);
+        String baseUrl = streams.get(0).getRetriever().getRequester().effectiveBaseUrl();
+        addAuthHelperMethods(typeBuilder, configClass, auth, baseUrl);
         typeBuilder.addMethod(buildSendWithRetry());
         typeBuilder.addMethod(buildStop());
 
@@ -185,6 +187,12 @@ public class TaskGenerator {
                     .build()
             );
         }
+        if (auth != null && auth.isLegacySessionToken()) {
+            typeBuilder.addField(
+                FieldSpec.builder(String.class, "cachedLegacyToken", Modifier.PRIVATE, Modifier.VOLATILE)
+                    .build()
+            );
+        }
     }
 
     private MethodSpec buildStart(
@@ -215,6 +223,13 @@ public class TaskGenerator {
             m.addStatement("loginAndCacheSessionToken()");
             m.nextControlFlow("catch ($T e)", Exception.class);
             m.addStatement("throw new $T(\"Failed to obtain session token\", e)", CONNECT_EXCEPTION);
+            m.endControlFlow();
+        }
+        if (auth != null && auth.isLegacySessionToken()) {
+            m.beginControlFlow("try");
+            m.addStatement("loginAndCacheLegacyToken()");
+            m.nextControlFlow("catch ($T e)", Exception.class);
+            m.addStatement("throw new $T(\"Failed to obtain legacy session token\", e)", CONNECT_EXCEPTION);
             m.endControlFlow();
         }
         return m.build();
@@ -263,7 +278,8 @@ public class TaskGenerator {
             body.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
         }
 
-        body.add(buildUrlBlock(baseUrl, path, requestParams, paginator, hasPagination));
+        IncrementalSyncSpec incrementalSync = stream.getIncrementalSync();
+        body.add(buildUrlBlock(baseUrl, path, requestParams, paginator, hasPagination, auth, incrementalSync));
         body.beginControlFlow("try");
         buildRequestStatement(body, auth, paginator);
         body.add(buildFetchBlock(paginator));
@@ -326,7 +342,9 @@ public class TaskGenerator {
         String baseUrl, String path,
         Map<String, String> requestParams,
         PaginatorSpec paginator,
-        boolean hasPagination
+        boolean hasPagination,
+        AuthenticatorSpec auth,
+        IncrementalSyncSpec incrementalSync
     ) {
         CodeBlock.Builder b = CodeBlock.builder();
 
@@ -352,9 +370,58 @@ public class TaskGenerator {
             }
         }
 
+        boolean hasParams = !paramKeys.isEmpty();
+
+        // ApiKey injected as query parameter (inject_into: request_parameter)
+        if (isApiKeyQueryParam(auth)) {
+            String sep = hasParams ? "&" : "?";
+            String fieldName = auth.getInjectInto().getFieldName();
+            String getter = resolveConfigGetter(auth.getApiToken());
+            b.addStatement("urlBuilder.append($S + config.$L())", sep + fieldName + "=", getter);
+            hasParams = true;
+        }
+
+        // DatetimeBasedCursor: inject start / end date range as query params
+        if (incrementalSync != null && incrementalSync.isDatetimeBased()) {
+            hasParams = appendIncrementalSyncParams(b, incrementalSync, hasParams);
+        }
+
         if (!hasPagination || paginator == null) return b.build();
-        appendPaginationParams(b, paginator, paramKeys.isEmpty());
+        appendPaginationParams(b, paginator, !hasParams);
         return b.build();
+    }
+
+    private boolean isApiKeyQueryParam(AuthenticatorSpec auth) {
+        return auth != null && auth.isApiKey()
+            && auth.getInjectInto() != null
+            && "request_parameter".equalsIgnoreCase(auth.getInjectInto().getInjectInto());
+    }
+
+    private boolean appendIncrementalSyncParams(
+        CodeBlock.Builder b, IncrementalSyncSpec sync, boolean hasParams
+    ) {
+        IncrementalSyncSpec.TimeOptionSpec startOpt = sync.getStartTimeOption();
+        IncrementalSyncSpec.DatetimeSpec startDt = sync.getStartDatetime();
+        if (startOpt != null && startOpt.getFieldName() != null && startDt != null) {
+            String sep = hasParams ? "&" : "?";
+            String getter = resolveConfigGetter(startDt.getDatetime());
+            b.addStatement("urlBuilder.append($S + $T.encode(config.$L(), $T.UTF_8))",
+                sep + startOpt.getFieldName() + "=",
+                ClassName.get("java.net", "URLEncoder"), getter,
+                ClassName.get("java.nio.charset", "StandardCharsets"));
+            hasParams = true;
+        }
+        IncrementalSyncSpec.TimeOptionSpec endOpt = sync.getEndTimeOption();
+        if (endOpt != null && endOpt.getFieldName() != null) {
+            String sep = hasParams ? "&" : "?";
+            b.addStatement("urlBuilder.append($S + $T.encode($T.now().toString(), $T.UTF_8))",
+                sep + endOpt.getFieldName() + "=",
+                ClassName.get("java.net", "URLEncoder"),
+                ClassName.get("java.time", "Instant"),
+                ClassName.get("java.nio.charset", "StandardCharsets"));
+            hasParams = true;
+        }
+        return hasParams;
     }
 
     private void appendPaginationParams(
@@ -520,6 +587,15 @@ public class TaskGenerator {
                     + "        .build()",
                 HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), getterName
             );
+        } else if (auth.isApiKey() && isApiKeyQueryParam(auth)) {
+            // key already appended to URL as query param — no auth header needed
+            body.addStatement(
+                "$T request = $T.newBuilder()\n"
+                    + "        .uri($T.create($L))\n"
+                    + "        .GET()\n"
+                    + "        .build()",
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
+            );
         } else if (auth.isApiKey()) {
             String headerName = resolveApiKeyHeaderName(auth);
             String getterName = resolveConfigGetter(auth.getApiToken());
@@ -559,6 +635,15 @@ public class TaskGenerator {
                     + "        .build()",
                 HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
             );
+        } else if (auth.isLegacySessionToken()) {
+            body.addStatement(
+                "$T request = $T.newBuilder()\n"
+                    + "        .uri($T.create($L))\n"
+                    + "        .header($S, cachedLegacyToken)\n"
+                    + "        .GET()\n"
+                    + "        .build()",
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), auth.getHeader()
+            );
         } else if (auth.isJwt()) {
             body.addStatement("$T jwtToken = buildJwt()", String.class);
             body.addStatement(
@@ -593,13 +678,19 @@ public class TaskGenerator {
         return "urlBuilder.toString()";
     }
 
-    private void addAuthHelperMethods(TypeSpec.Builder typeBuilder, ClassName configClass, AuthenticatorSpec auth) {
+    private void addAuthHelperMethods(
+        TypeSpec.Builder typeBuilder, ClassName configClass, AuthenticatorSpec auth,
+        String baseUrl
+    ) {
         if (auth == null) return;
         if (auth.isOAuth()) {
             typeBuilder.addMethod(buildRefreshAccessToken(configClass, auth));
         }
         if (auth.isSessionToken()) {
             typeBuilder.addMethod(buildLoginAndCacheSessionToken(configClass, auth));
+        }
+        if (auth.isLegacySessionToken()) {
+            typeBuilder.addMethod(buildLoginAndCacheLegacyToken(configClass, auth, baseUrl));
         }
         if (auth.isJwt()) {
             typeBuilder.addMethod(buildBuildJwt(configClass, auth));
@@ -788,6 +879,60 @@ public class TaskGenerator {
         body.addStatement("cachedSessionToken = $T.valueOf(tokenStep)", String.class);
 
         return MethodSpec.methodBuilder("loginAndCacheSessionToken")
+            .addModifiers(Modifier.PRIVATE)
+            .addException(Exception.class)
+            .addCode(body.build())
+            .build();
+    }
+
+    /**
+     * Generates a private {@code loginAndCacheLegacyToken()} method for LegacySessionTokenAuthenticator.
+     * POSTs credentials to the login endpoint, extracts the token key, and caches it.
+     */
+    private MethodSpec buildLoginAndCacheLegacyToken(
+        ClassName configClass, AuthenticatorSpec auth, String baseUrl
+    ) {
+        // Resolve login URL: baseUrl (may be config template) + "/" + loginUrl path
+        Matcher urlMatcher = CONFIG_TEMPLATE.matcher(baseUrl);
+        String loginUrlExpr;
+        if (urlMatcher.find()) {
+            String getter = "get" + ManifestSpec.toClassName(urlMatcher.group(1));
+            String suffix = baseUrl.substring(urlMatcher.end()).replaceAll("\\s*\\}\\}.*", "");
+            loginUrlExpr = "config." + getter + "() + \"" + suffix + auth.getLoginUrl() + "\"";
+        } else {
+            loginUrlExpr = "\"" + baseUrl + auth.getLoginUrl() + "\"";
+        }
+
+        String userGetter = resolveConfigGetter(auth.getUsername());
+        String passGetter = resolveConfigGetter(auth.getPassword());
+        ClassName bodyPublishers = ClassName.get("java.net.http", "HttpRequest.BodyPublishers");
+
+        CodeBlock.Builder body = CodeBlock.builder();
+        body.addStatement("$T loginBody = \"{\\\"username\\\":\\\"\" + config.$L()\n"
+            + "        + \"\\\",\\\"password\\\":\\\"\" + config.$L() + \"\\\"}\"",
+            String.class, userGetter, passGetter);
+        body.addStatement(
+            "$T loginReq = $T.newBuilder()\n"
+                + "        .uri($T.create(" + loginUrlExpr + "))\n"
+                + "        .header(\"Content-Type\", \"application/json\")\n"
+                + "        .POST($T.ofString(loginBody))\n"
+                + "        .build()",
+            HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, bodyPublishers);
+        body.addStatement(
+            "$T<$T> loginResp = httpClient.send(loginReq, $T.BodyHandlers.ofString())",
+            HTTP_RESPONSE, String.class, HTTP_RESPONSE);
+        body.addStatement(
+            "$T rawJson = MAPPER.readValue(loginResp.body(), $T.class)", Object.class, Object.class);
+        body.addStatement("$T tokenVal = (($T<?, ?>) rawJson).get($S)",
+            Object.class, Map.class, auth.getSessionTokenResponseKey());
+        body.beginControlFlow("if (tokenVal == null)");
+        body.addStatement(
+            "throw new $T(\"Token key '$L' not found in login response\")",
+            CONNECT_EXCEPTION, auth.getSessionTokenResponseKey());
+        body.endControlFlow();
+        body.addStatement("cachedLegacyToken = $T.valueOf(tokenVal)", String.class);
+
+        return MethodSpec.methodBuilder("loginAndCacheLegacyToken")
             .addModifiers(Modifier.PRIVATE)
             .addException(Exception.class)
             .addCode(body.build())
