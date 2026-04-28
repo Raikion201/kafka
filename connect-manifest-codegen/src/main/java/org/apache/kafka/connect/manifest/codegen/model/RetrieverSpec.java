@@ -31,6 +31,8 @@ public class RetrieverSpec {
     @JsonProperty("record_selector")
     private RecordSelectorSpec recordSelector;
 
+    private PaginatorSpec paginator;
+
     public String getType() {
         return type;
     }
@@ -53,5 +55,13 @@ public class RetrieverSpec {
 
     public void setRecordSelector(RecordSelectorSpec recordSelector) {
         this.recordSelector = recordSelector;
+    }
+
+    public PaginatorSpec getPaginator() {
+        return paginator;
+    }
+
+    public void setPaginator(PaginatorSpec paginator) {
+        this.paginator = paginator;
     }
 }

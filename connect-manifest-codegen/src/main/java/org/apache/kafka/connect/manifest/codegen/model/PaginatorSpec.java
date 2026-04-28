@@ -1,0 +1,205 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.kafka.connect.manifest.codegen.model;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+/**
+ * Models the {@code paginator} block inside a retriever.
+ *
+ * <p>Airbyte paginators use a two-level structure:
+ * <ul>
+ *   <li>Outer: a {@code DefaultPaginator} that names the page-token and page-size query parameters.</li>
+ *   <li>Inner: a {@code pagination_strategy} that describes the specific strategy
+ *       (CursorPagination, PageIncrement, OffsetIncrement, NoPagination).</li>
+ * </ul>
+ */
+@JsonIgnoreProperties(ignoreUnknown = true)
+public class PaginatorSpec {
+
+    private String type;
+
+    @JsonProperty("page_token_option")
+    private OptionSpec pageTokenOption;
+
+    @JsonProperty("page_size_option")
+    private OptionSpec pageSizeOption;
+
+    @JsonProperty("pagination_strategy")
+    private StrategySpec paginationStrategy;
+
+    public String getType() {
+        return type;
+    }
+
+    public void setType(String type) {
+        this.type = type;
+    }
+
+    public OptionSpec getPageTokenOption() {
+        return pageTokenOption;
+    }
+
+    public void setPageTokenOption(OptionSpec pageTokenOption) {
+        this.pageTokenOption = pageTokenOption;
+    }
+
+    public OptionSpec getPageSizeOption() {
+        return pageSizeOption;
+    }
+
+    public void setPageSizeOption(OptionSpec pageSizeOption) {
+        this.pageSizeOption = pageSizeOption;
+    }
+
+    public StrategySpec getPaginationStrategy() {
+        return paginationStrategy;
+    }
+
+    public void setPaginationStrategy(StrategySpec paginationStrategy) {
+        this.paginationStrategy = paginationStrategy;
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    public boolean isCursor() {
+        return paginationStrategy != null && "CursorPagination".equalsIgnoreCase(paginationStrategy.getType());
+    }
+
+    public boolean isPageIncrement() {
+        return paginationStrategy != null && "PageIncrement".equalsIgnoreCase(paginationStrategy.getType());
+    }
+
+    public boolean isOffsetIncrement() {
+        return paginationStrategy != null && "OffsetIncrement".equalsIgnoreCase(paginationStrategy.getType());
+    }
+
+    public boolean hasNoPagination() {
+        return paginationStrategy == null || "NoPagination".equalsIgnoreCase(paginationStrategy.getType());
+    }
+
+    /** Field name for the page/cursor/offset query parameter, defaulting to "page". */
+    public String pageParamName() {
+        return pageTokenOption != null && pageTokenOption.getFieldName() != null
+            ? pageTokenOption.getFieldName()
+            : "page";
+    }
+
+    /** Field name for the page-size/limit query parameter, defaulting to "per_page". */
+    public String sizeParamName() {
+        return pageSizeOption != null && pageSizeOption.getFieldName() != null
+            ? pageSizeOption.getFieldName()
+            : "per_page";
+    }
+
+    /** Page/batch size from the strategy, defaulting to 100. */
+    public int pageSize() {
+        return paginationStrategy != null ? paginationStrategy.getPageSize() : 100;
+    }
+
+    // ── inner classes ─────────────────────────────────────────────────────────
+
+    /** Models a {@code page_token_option} or {@code page_size_option} entry. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class OptionSpec {
+
+        private String type;
+
+        @JsonProperty("field_name")
+        private String fieldName;
+
+        @JsonProperty("inject_into")
+        private String injectInto;
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public String getFieldName() {
+            return fieldName;
+        }
+
+        public void setFieldName(String fieldName) {
+            this.fieldName = fieldName;
+        }
+
+        public String getInjectInto() {
+            return injectInto;
+        }
+
+        public void setInjectInto(String injectInto) {
+            this.injectInto = injectInto;
+        }
+
+        public boolean isRequestPath() {
+            return "RequestPath".equalsIgnoreCase(type);
+        }
+    }
+
+    /** Models the nested {@code pagination_strategy} block. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class StrategySpec {
+
+        private String type;
+
+        @JsonProperty("page_size")
+        private int pageSize;
+
+        @JsonProperty("cursor_value")
+        private String cursorValue;
+
+        @JsonProperty("start_from_page")
+        private int startFromPage;
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public int getPageSize() {
+            return pageSize;
+        }
+
+        public void setPageSize(int pageSize) {
+            this.pageSize = pageSize;
+        }
+
+        public String getCursorValue() {
+            return cursorValue;
+        }
+
+        public void setCursorValue(String cursorValue) {
+            this.cursorValue = cursorValue;
+        }
+
+        public int getStartFromPage() {
+            return startFromPage;
+        }
+
+        public void setStartFromPage(int startFromPage) {
+            this.startFromPage = startFromPage;
+        }
+    }
+}
