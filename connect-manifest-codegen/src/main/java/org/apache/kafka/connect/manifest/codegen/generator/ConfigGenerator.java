@@ -135,11 +135,14 @@ public class ConfigGenerator {
 
     private MethodSpec buildAccessor(ConfigField f) {
         String getterName = "get" + ManifestSpec.toClassName(f.key());
-        return MethodSpec.methodBuilder(getterName)
-            .addModifiers(Modifier.PUBLIC)
-            .returns(String.class)
-            .addStatement("return getString($L)", f.constantName())
-            .build();
+        MethodSpec.Builder m = MethodSpec.methodBuilder(getterName)
+            .addModifiers(Modifier.PUBLIC);
+        if (f.isBoolean()) {
+            m.returns(boolean.class).addStatement("return getBoolean($L)", f.constantName());
+        } else {
+            m.returns(String.class).addStatement("return getString($L)", f.constantName());
+        }
+        return m.build();
     }
 
     private List<ConfigField> extractFields(ManifestSpec spec) {
@@ -154,8 +157,9 @@ public class ConfigGenerator {
         for (Map.Entry<String, ManifestSpec.PropertyDef> entry : props.entrySet()) {
             String key = entry.getKey();
             String doc = entry.getValue().effectiveDoc();
+            String type = entry.getValue().getType();
             boolean isRequired = required.contains(key);
-            result.add(new ConfigField(key, doc, isRequired));
+            result.add(new ConfigField(key, doc, type, isRequired));
         }
         return result;
     }
@@ -165,11 +169,13 @@ public class ConfigGenerator {
 
         private final String key;
         private final String doc;
+        private final String type;
         private final boolean required;
 
-        ConfigField(String key, String doc, boolean required) {
+        ConfigField(String key, String doc, String type, boolean required) {
             this.key = key;
             this.doc = doc;
+            this.type = type;
             this.required = required;
         }
 
@@ -185,12 +191,21 @@ public class ConfigGenerator {
             return required;
         }
 
+        boolean isBoolean() {
+            return "boolean".equalsIgnoreCase(type);
+        }
+
         String constantName() {
             return key.toUpperCase(java.util.Locale.ROOT).replace('-', '_') + "_CONFIG";
         }
 
         String configDefType() {
-            return "STRING";
+            if (type == null) return "STRING";
+            return switch (type.toLowerCase(java.util.Locale.ROOT)) {
+                case "boolean" -> "BOOLEAN";
+                case "integer", "number" -> "LONG";
+                default -> "STRING";
+            };
         }
 
         String importance() {

@@ -26,7 +26,6 @@ import com.squareup.javapoet.TypeSpec;
 import com.squareup.javapoet.WildcardTypeName;
 
 import java.util.Collections;
-import java.util.List;
 
 import javax.lang.model.element.Modifier;
 
@@ -150,7 +149,6 @@ public class ConnectorGenerator {
         );
 
         return JavaFile.builder(pkgName, typeBuilder.build())
-            .addStaticImport(List.class, "of")
             .skipJavaLangImports(true)
             .build();
     }
