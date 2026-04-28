@@ -36,8 +36,9 @@ dependencies {
     // Logging
     implementation libs.slf4jApi
 
-    // Needed to compile generated code (AbstractConfig, ConfigDef, SourceConnector, Task) in integration tests
-    testImplementation project(':clients')
+    // kafka-clients provides Exit, AbstractConfig, ConfigDef used in main + generated code compilation tests
+    implementation project(':clients')
+    // connect:api provides SourceConnector, SourceTask, Task, Schema for generated code compilation tests
     testImplementation project(':connect:api')
 
     testImplementation libs.junitJupiter

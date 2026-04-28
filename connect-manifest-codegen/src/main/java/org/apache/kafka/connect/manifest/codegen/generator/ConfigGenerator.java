@@ -47,7 +47,7 @@ import java.util.Map;
  */
 public class ConfigGenerator {
 
-    static final String BASE_PACKAGE = "org.apache.kafka.connect.manifest.generated";
+    public static final String BASE_PACKAGE = "org.apache.kafka.connect.manifest.generated";
 
     private static final ClassName CONFIG_DEF =
         ClassName.get("org.apache.kafka.common.config", "ConfigDef");
