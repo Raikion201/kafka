@@ -94,11 +94,11 @@ public class ManifestCodegenCliTest {
         assertEquals(0, code, "Expected exit code 0 (success)");
 
         String pkg = "org/apache/kafka/connect/manifest/generated";
-        assertTrue(Files.exists(tmpDir.resolve(pkg + "/ZapierSupportedStorageConnectorConfig.java")),
+        assertTrue(Files.exists(tmpDir.resolve(pkg + "/ZapierConnectorConfig.java")),
             "Config file not generated");
-        assertTrue(Files.exists(tmpDir.resolve(pkg + "/ZapierSupportedStorageSourceConnector.java")),
+        assertTrue(Files.exists(tmpDir.resolve(pkg + "/ZapierSourceConnector.java")),
             "Connector file not generated");
-        assertTrue(Files.exists(tmpDir.resolve(pkg + "/ZapierSupportedStorageSourceTask.java")),
+        assertTrue(Files.exists(tmpDir.resolve(pkg + "/ZapierSourceTask.java")),
             "Task file not generated");
     }
 
@@ -158,7 +158,7 @@ public class ManifestCodegenCliTest {
         });
         String pkg = "org/apache/kafka/connect/manifest/generated";
         String content = Files.readString(
-            tmpDir.resolve(pkg + "/ZapierSupportedStorageConnectorConfig.java"));
+            tmpDir.resolve(pkg + "/ZapierConnectorConfig.java"));
         assertTrue(content.contains("SECRET_CONFIG"), "Config must declare SECRET_CONFIG constant");
     }
 

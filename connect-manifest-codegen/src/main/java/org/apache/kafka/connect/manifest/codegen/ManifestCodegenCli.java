@@ -136,6 +136,7 @@ public class ManifestCodegenCli {
         ManifestSpec spec;
         try {
             spec = new ManifestParser().parse(manifestFile);
+            spec.setManifestName(manifestFile.getName().replaceFirst("\\.[^.]+$", ""));
         } catch (ManifestParseException e) {
             LOG.error("Failed to parse manifest {}: {}", manifestFile, e.getMessage(), e);
             System.err.println("Parse error: " + e.getMessage());

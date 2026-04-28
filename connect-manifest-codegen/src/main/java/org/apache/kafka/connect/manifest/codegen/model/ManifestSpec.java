@@ -45,6 +45,7 @@ public class ManifestSpec {
     private List<StreamSpec> streams = Collections.emptyList();
     private SpecDef spec;
     private DefinitionsDef definitions;
+    private String manifestName;
 
     public String getVersion() {
         return version;
@@ -94,6 +95,14 @@ public class ManifestSpec {
         this.definitions = definitions;
     }
 
+    public String getManifestName() {
+        return manifestName;
+    }
+
+    public void setManifestName(String manifestName) {
+        this.manifestName = manifestName;
+    }
+
     /**
      * Returns the streams with full definitions resolved.
      *
@@ -114,15 +123,20 @@ public class ManifestSpec {
 
         RequesterSpec baseRequester = definitions != null ? definitions.getBaseRequester() : null;
 
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
         List<StreamSpec> result = new ArrayList<>();
         for (StreamSpec s : streams) {
             if (s.getName() != null && s.getRetriever() != null) {
-                applyBaseRequester(s, baseRequester);
-                result.add(s);
+                if (seen.add(s.getName())) {
+                    applyBaseRequester(s, baseRequester);
+                    result.add(s);
+                }
             } else {
                 for (StreamSpec def : defined.values()) {
-                    applyBaseRequester(def, baseRequester);
-                    result.add(def);
+                    if (def.getName() != null && seen.add(def.getName())) {
+                        applyBaseRequester(def, baseRequester);
+                        result.add(def);
+                    }
                 }
             }
         }
@@ -140,10 +154,16 @@ public class ManifestSpec {
         if (req.effectiveBaseUrl().isBlank() && !baseRequester.effectiveBaseUrl().isBlank()) {
             req.setUrlBase(baseRequester.effectiveBaseUrl());
         }
+        if (req.getAuthenticator() == null && baseRequester.getAuthenticator() != null) {
+            req.setAuthenticator(baseRequester.getAuthenticator());
+        }
     }
 
-    /** Returns a connector class name derived from the first resolved stream name, e.g. "XkcdSource". */
+    /** Returns a connector class name derived from the manifest filename (preferred) or first stream name. */
     public String connectorClassName() {
+        if (manifestName != null && !manifestName.isEmpty()) {
+            return toClassName(manifestName) + "Source";
+        }
         List<StreamSpec> resolved = resolvedStreams();
         if (resolved.isEmpty()) {
             return "GeneratedSource";
