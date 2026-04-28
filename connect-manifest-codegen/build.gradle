@@ -36,8 +36,9 @@ dependencies {
     // Logging
     implementation libs.slf4jApi
 
-    // Needed to compile generated code (AbstractConfig, ConfigDef) in integration tests
+    // Needed to compile generated code (AbstractConfig, ConfigDef, SourceConnector, Task) in integration tests
     testImplementation project(':clients')
+    testImplementation project(':connect:api')
 
     testImplementation libs.junitJupiter
     testImplementation libs.mockitoCore
