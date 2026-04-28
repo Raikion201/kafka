@@ -87,7 +87,11 @@ public class CodegenIntegrationTest {
             Arguments.of("gmail.yaml"),
             Arguments.of("pivotal_tracker.yaml"),
             Arguments.of("sendowl.yaml"),
-            Arguments.of("illumina_basespace.yaml")
+            Arguments.of("illumina_basespace.yaml"),
+            Arguments.of("box.yaml"),
+            Arguments.of("assemblyai.yaml"),
+            Arguments.of("akeneo.yaml"),
+            Arguments.of("google_analytics_jwt.yaml")
         );
     }
 
@@ -235,6 +239,59 @@ public class CodegenIntegrationTest {
             "Illumina Basespace OffsetIncrement task must increment offset");
         assertTrue(taskSrc.contains("Offset="),
             "Illumina Basespace OffsetIncrement task must include Offset query param");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // NEW AUTH TYPES
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void box_generatedTask_containsClientCredentials() throws Exception {
+        String taskSrc = generate("box.yaml").task.toString();
+        assertTrue(taskSrc.contains("client_credentials"),
+            "Box OAuthAuthenticator client_credentials task must use grant_type=client_credentials");
+    }
+
+    @Test
+    void akeneo_generatedTask_containsLoginMethod() throws Exception {
+        String taskSrc = generate("akeneo.yaml").task.toString();
+        assertTrue(taskSrc.contains("loginAndCacheSessionToken"),
+            "Akeneo SessionTokenAuthenticator task must contain loginAndCacheSessionToken method");
+    }
+
+    @Test
+    void akeneo_generatedTask_containsBearerHeader() throws Exception {
+        String taskSrc = generate("akeneo.yaml").task.toString();
+        assertTrue(taskSrc.contains("\"Bearer \""),
+            "Akeneo SessionTokenAuthenticator task must set Authorization: Bearer header");
+    }
+
+    @Test
+    void google_sheets_generatedTask_containsJwtMethod() throws Exception {
+        String taskSrc = generate("google_analytics_jwt.yaml").task.toString();
+        assertTrue(taskSrc.contains("buildJwt"),
+            "Google Sheets JwtAuthenticator task must contain buildJwt method");
+    }
+
+    @Test
+    void google_sheets_generatedTask_containsRsaSigning() throws Exception {
+        String taskSrc = generate("google_analytics_jwt.yaml").task.toString();
+        assertTrue(taskSrc.contains("SHA256withRSA"),
+            "Google Sheets JwtAuthenticator task must sign with SHA256withRSA");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // NEW PAGINATION TYPES
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void assemblyai_generatedTask_usesRequestPathCursor() throws Exception {
+        String taskSrc = generate("assemblyai.yaml").task.toString();
+        assertTrue(taskSrc.contains("nextCursor"),
+            "AssemblyAI RequestPath cursor task must maintain nextCursor variable");
+        // cursor must NOT be appended as a query param — it replaces the whole URL
+        assertTrue(!taskSrc.contains("urlBuilder.append") || taskSrc.contains("url ="),
+            "AssemblyAI RequestPath cursor task must use cursor as full URL, not query param");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
