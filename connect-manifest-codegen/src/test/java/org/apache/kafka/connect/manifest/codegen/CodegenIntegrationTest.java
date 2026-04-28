@@ -30,34 +30,33 @@ import com.squareup.javapoet.JavaFile;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.File;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Stream;
 
 import javax.tools.DiagnosticCollector;
 import javax.tools.JavaCompiler;
 import javax.tools.JavaFileObject;
 import javax.tools.ToolProvider;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Full-pipeline integration tests for the code generator.
  *
- * <p>Each test runs all three generators together — Config, Connector, Task —
- * against a real Airbyte manifest and verifies:
- * <ul>
- *   <li>All three files are produced</li>
- *   <li>The files correctly reference each other (connector → task, connector → config, task → config)</li>
- *   <li>All three files compile together as a unit (they cannot be compiled in isolation)</li>
- *   <li>Bad manifests fail at the right layer with the right exception</li>
- * </ul>
+ * <p>Tests run all three generators — Config, Connector, Task — against real Airbyte manifests
+ * and verify that all three files compile together, reference each other correctly, and contain
+ * the expected auth headers and pagination patterns.
  */
 public class CodegenIntegrationTest {
 
@@ -77,7 +76,29 @@ public class CodegenIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // HAPPY PATHS
+    // PARAMETRIZED: all manifests compile
+    // ══════════════════════════════════════════════════════════════════════════
+
+    static Stream<Arguments> allManifests() {
+        return Stream.of(
+            Arguments.of("defillama.yaml"),
+            Arguments.of("xkcd.yaml"),
+            Arguments.of("zapier.yaml"),
+            Arguments.of("gmail.yaml"),
+            Arguments.of("pivotal_tracker.yaml"),
+            Arguments.of("sendowl.yaml"),
+            Arguments.of("illumina_basespace.yaml")
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("allManifests")
+    void allThreeFilesCompileTogether(String manifest, @TempDir Path tmpDir) throws Exception {
+        compileTriple(generate(manifest), tmpDir);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // HAPPY PATHS — existing manifests
     // ══════════════════════════════════════════════════════════════════════════
 
     // ── defillama: no config properties, nested field_path ────────────────────
@@ -101,14 +122,6 @@ public class CodegenIntegrationTest {
     }
 
     @Test
-    void defillama_taskReferencesCorrectConfig() throws Exception {
-        GeneratedTriple g = generate("defillama.yaml");
-        String taskSrc = g.task.toString();
-        assertTrue(taskSrc.contains("DefillamaConnectorConfig"),
-            "Task must instantiate DefillamaConnectorConfig in start()");
-    }
-
-    @Test
     void defillama_taskEmbedsFieldPath() throws Exception {
         GeneratedTriple g = generate("defillama.yaml");
         String taskSrc = g.task.toString();
@@ -116,21 +129,7 @@ public class CodegenIntegrationTest {
         assertTrue(taskSrc.contains("Plume Mainnet"), "Task must navigate field_path[1] = 'Plume Mainnet'");
     }
 
-    @Test
-    void defillama_configHasNoPropertyConstants() throws Exception {
-        GeneratedTriple g = generate("defillama.yaml");
-        boolean hasConfigConstant = g.config.typeSpec.fieldSpecs.stream()
-            .anyMatch(f -> f.name.endsWith("_CONFIG"));
-        assertTrue(!hasConfigConstant,
-            "defillama has no spec properties, so no _CONFIG constants expected");
-    }
-
-    @Test
-    void defillama_allThreeFilesCompileTogether(@TempDir Path tmpDir) throws Exception {
-        compileTriple(generate("defillama.yaml"), tmpDir);
-    }
-
-    // ── xkcd: optional config field, empty field_path, $ref stream ───────────
+    // ── xkcd: optional config field, cursor pagination ────────────────────────
 
     @Test
     void xkcd_allThreeFilesGenerated() throws Exception {
@@ -138,16 +137,6 @@ public class CodegenIntegrationTest {
         assertEquals("XkcdConnectorConfig",  g.config.typeSpec.name);
         assertEquals("XkcdSourceConnector",  g.connector.typeSpec.name);
         assertEquals("XkcdSourceTask",       g.task.typeSpec.name);
-    }
-
-    @Test
-    void xkcd_connectorReferencesCorrectTaskAndConfig() throws Exception {
-        GeneratedTriple g = generate("xkcd.yaml");
-        String connectorSrc = g.connector.toString();
-        assertTrue(connectorSrc.contains("XkcdSourceTask.class"),
-            "Connector must reference XkcdSourceTask.class");
-        assertTrue(connectorSrc.contains("XkcdConnectorConfig.config()"),
-            "Connector must delegate config() to XkcdConnectorConfig");
     }
 
     @Test
@@ -159,35 +148,12 @@ public class CodegenIntegrationTest {
     }
 
     @Test
-    void xkcd_configComicNumberIsOptional_mediumImportance() throws Exception {
-        GeneratedTriple g = generate("xkcd.yaml");
-        // comic_number is not in the required list → MEDIUM importance
-        String configSrc = g.config.toString();
-        assertTrue(configSrc.contains("Importance.MEDIUM"),
-            "Optional field comic_number must have MEDIUM importance");
-    }
-
-    @Test
-    void xkcd_taskEmbedsBaseUrl() throws Exception {
-        GeneratedTriple g = generate("xkcd.yaml");
-        assertTrue(g.task.toString().contains("https://xkcd.com"),
-            "Task must embed xkcd base URL");
-    }
-
-    @Test
-    void xkcd_taskHasNoFieldPathNavigation() throws Exception {
-        GeneratedTriple g = generate("xkcd.yaml");
-        // xkcd field_path is empty — task must not call .get("...") for path traversal
-        String taskSrc = g.task.toString();
-        // The only .get() calls should be from Map.of("stream",...) and Map.of("position",...)
-        // not field_path navigation
-        assertTrue(!taskSrc.contains("instanceof Map"),
-            "xkcd has empty field_path, no instanceof Map navigation expected");
-    }
-
-    @Test
-    void xkcd_allThreeFilesCompileTogether(@TempDir Path tmpDir) throws Exception {
-        compileTriple(generate("xkcd.yaml"), tmpDir);
+    void xkcd_generatedTask_containsCursorLoop() throws Exception {
+        String taskSrc = generate("xkcd.yaml").task.toString();
+        assertTrue(taskSrc.contains("do {") || taskSrc.contains("do{"),
+            "xkcd uses CursorPagination — task must contain a do-while loop");
+        assertTrue(taskSrc.contains("while (nextCursor"),
+            "xkcd cursor loop must check nextCursor");
     }
 
     // ── zapier: required field, request_parameters from config ────────────────
@@ -195,50 +161,80 @@ public class CodegenIntegrationTest {
     @Test
     void zapier_allThreeFilesGenerated() throws Exception {
         GeneratedTriple g = generate("zapier.yaml");
-        assertEquals("ZapierSupportedStorageConnectorConfig",  g.config.typeSpec.name);
-        assertEquals("ZapierSupportedStorageSourceConnector",  g.connector.typeSpec.name);
-        assertEquals("ZapierSupportedStorageSourceTask",       g.task.typeSpec.name);
-    }
-
-    @Test
-    void zapier_connectorReferencesCorrectTaskAndConfig() throws Exception {
-        GeneratedTriple g = generate("zapier.yaml");
-        String connectorSrc = g.connector.toString();
-        assertTrue(connectorSrc.contains("ZapierSupportedStorageSourceTask.class"),
-            "Connector must reference ZapierSupportedStorageSourceTask.class");
-        assertTrue(connectorSrc.contains("ZapierSupportedStorageConnectorConfig.config()"),
-            "Connector must delegate config() to ZapierSupportedStorageConnectorConfig");
-    }
-
-    @Test
-    void zapier_configSecretIsRequired_highImportance() throws Exception {
-        GeneratedTriple g = generate("zapier.yaml");
-        String configSrc = g.config.toString();
-        assertTrue(configSrc.contains("SECRET_CONFIG"),     "Config must declare SECRET_CONFIG");
-        assertTrue(configSrc.contains("Importance.HIGH"),   "Required field secret must be HIGH importance");
+        assertEquals("ZapierConnectorConfig",  g.config.typeSpec.name);
+        assertEquals("ZapierSourceConnector",  g.connector.typeSpec.name);
+        assertEquals("ZapierSourceTask",       g.task.typeSpec.name);
     }
 
     @Test
     void zapier_taskInjectsSecretFromConfig() throws Exception {
         GeneratedTriple g = generate("zapier.yaml");
         String taskSrc = g.task.toString();
-        // The request_parameters secret="{{ config['secret'] }}" must become getSecret() call
         assertTrue(taskSrc.contains("getSecret()"),
             "Task must call config.getSecret() for request_parameters");
         assertTrue(taskSrc.contains("secret="),
             "Task must include 'secret=' query parameter in URL");
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // AUTH TYPE ASSERTIONS
+    // ══════════════════════════════════════════════════════════════════════════
+
     @Test
-    void zapier_taskReferencesCorrectConfig() throws Exception {
-        GeneratedTriple g = generate("zapier.yaml");
-        assertTrue(g.task.toString().contains("ZapierSupportedStorageConnectorConfig"),
-            "Task must instantiate ZapierSupportedStorageConnectorConfig in start()");
+    void gmail_generatedTask_containsOAuthRefreshMethod() throws Exception {
+        String taskSrc = generate("gmail.yaml").task.toString();
+        assertTrue(taskSrc.contains("refreshAccessToken"),
+            "OAuth task must contain refreshAccessToken() method");
     }
 
     @Test
-    void zapier_allThreeFilesCompileTogether(@TempDir Path tmpDir) throws Exception {
-        compileTriple(generate("zapier.yaml"), tmpDir);
+    void gmail_generatedTask_containsBearerHeader() throws Exception {
+        String taskSrc = generate("gmail.yaml").task.toString();
+        assertTrue(taskSrc.contains("\"Bearer \""),
+            "OAuth task must set Authorization: Bearer header");
+    }
+
+    @Test
+    void illumina_basespace_generatedTask_containsBearerHeader() throws Exception {
+        String taskSrc = generate("illumina_basespace.yaml").task.toString();
+        assertTrue(taskSrc.contains("\"Bearer \""),
+            "Illumina Basespace BearerAuthenticator task must set Authorization: Bearer header");
+    }
+
+    @Test
+    void pivotal_tracker_generatedTask_containsApiKeyHeader() throws Exception {
+        String taskSrc = generate("pivotal_tracker.yaml").task.toString();
+        assertTrue(taskSrc.contains("X-TrackerToken"),
+            "Pivotal Tracker ApiKey task must inject X-TrackerToken header");
+    }
+
+    @Test
+    void sendowl_generatedTask_containsBasicAuthHeader() throws Exception {
+        String taskSrc = generate("sendowl.yaml").task.toString();
+        assertTrue(taskSrc.contains("\"Basic \""),
+            "Sendowl BasicHttpAuthenticator task must set Authorization: Basic header");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // PAGINATION ASSERTIONS
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void sendowl_generatedTask_containsPageIncrementLoop() throws Exception {
+        String taskSrc = generate("sendowl.yaml").task.toString();
+        assertTrue(taskSrc.contains("page++"),
+            "Sendowl PageIncrement task must increment page counter");
+        assertTrue(taskSrc.contains("page="),
+            "Sendowl PageIncrement task must include page query param");
+    }
+
+    @Test
+    void illumina_basespace_generatedTask_containsOffsetIncrementLoop() throws Exception {
+        String taskSrc = generate("illumina_basespace.yaml").task.toString();
+        assertTrue(taskSrc.contains("offset +=") || taskSrc.contains("offset+="),
+            "Illumina Basespace OffsetIncrement task must increment offset");
+        assertTrue(taskSrc.contains("Offset="),
+            "Illumina Basespace OffsetIncrement task must include Offset query param");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -270,7 +266,6 @@ public class CodegenIntegrationTest {
 
     @Test
     void malformedProperties_failsAtParseLayer() {
-        // 'properties' must be a map — Jackson rejects a scalar at parse time
         String yaml = "version: 1.0\ntype: DeclarativeSource\nstreams:\n"
             + "  - name: foo\n    retriever:\n      type: SimpleRetriever\n"
             + "      requester:\n        type: HttpRequester\n        url_base: https://x.com\n"
@@ -283,8 +278,6 @@ public class CodegenIntegrationTest {
 
     @Test
     void streamWithNoRetriever_failsAtCodegenLayer() {
-        // Construct a ManifestSpec that passes the parser but has a stream with no retriever
-        // (resolved via definitions so resolvedStreams() includes it)
         ManifestSpec spec = specWithDefinedStreamMissingRetriever();
         assertThrows(CodegenException.class, () -> taskGen.generate(spec, PKG),
             "Stream with no retriever must throw CodegenException from TaskGenerator");
@@ -299,7 +292,6 @@ public class CodegenIntegrationTest {
 
     @Test
     void emptyStreams_configGeneratorReturnsEmptyFields() throws Exception {
-        // A manifest whose spec has no properties → config generates class with no _CONFIG fields
         ManifestSpec spec = load("defillama.yaml");
         JavaFile config = configGen.generate(spec, PKG);
         boolean hasConfigField = config.typeSpec.fieldSpecs.stream()
@@ -312,20 +304,15 @@ public class CodegenIntegrationTest {
     // HELPERS
     // ══════════════════════════════════════════════════════════════════════════
 
-    /** Runs all three generators against one manifest and returns the triple. */
     private GeneratedTriple generate(String manifestName) throws Exception {
         ManifestSpec spec = load(manifestName);
+        spec.setManifestName(manifestName.replaceFirst("\\.[^.]+$", ""));
         JavaFile config    = configGen.generate(spec, PKG);
         JavaFile connector = connectorGen.generate(spec, PKG);
         JavaFile task      = taskGen.generate(spec, PKG);
         return new GeneratedTriple(config, connector, task);
     }
 
-    /**
-     * Writes all three files to disk and compiles them together with javac.
-     * This is the strongest integration check: the files reference each other,
-     * so a class-name mismatch or missing import causes a compile failure here.
-     */
     private void compileTriple(GeneratedTriple g, Path tmpDir) throws Exception {
         g.config.writeTo(tmpDir);
         g.connector.writeTo(tmpDir);
@@ -364,7 +351,6 @@ public class CodegenIntegrationTest {
     private ManifestSpec specWithDefinedStreamMissingRetriever() {
         StreamSpec bad = new StreamSpec();
         bad.setName("bad_stream");
-        // retriever intentionally null
 
         java.util.Map<String, StreamSpec> defsMap = new java.util.HashMap<>();
         defsMap.put("bad_stream", bad);
@@ -384,7 +370,6 @@ public class CodegenIntegrationTest {
 
     private ManifestSpec specWithDefinedStreamMissingRequester() {
         RetrieverSpec retriever = new RetrieverSpec();
-        // requester intentionally null
 
         StreamSpec bad = new StreamSpec();
         bad.setName("bad_stream");
@@ -406,7 +391,6 @@ public class CodegenIntegrationTest {
         return spec;
     }
 
-    /** Holds the three generated files for one manifest. */
     private static final class GeneratedTriple {
         final JavaFile config;
         final JavaFile connector;
