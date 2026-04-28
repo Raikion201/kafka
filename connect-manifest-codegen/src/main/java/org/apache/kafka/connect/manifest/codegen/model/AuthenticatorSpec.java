@@ -20,6 +20,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Models the {@code authenticator} block inside a requester.
@@ -70,6 +71,45 @@ public class AuthenticatorSpec {
 
     @JsonProperty("scopes")
     private List<String> scopes;
+
+    /** "refresh_token" (default) or "client_credentials" for OAuthAuthenticator. */
+    @JsonProperty("grant_type")
+    private String grantType;
+
+    /** Extra POST body fields for client_credentials flow (e.g. box_subject_id). */
+    @JsonProperty("refresh_request_body")
+    private Map<String, String> refreshRequestBody;
+
+    // ── SessionTokenAuthenticator ─────────────────────────────────────────────
+
+    @JsonProperty("login_requester")
+    private LoginRequesterSpec loginRequester;
+
+    @JsonProperty("session_token_path")
+    private List<String> sessionTokenPath;
+
+    // ── JwtAuthenticator ──────────────────────────────────────────────────────
+
+    @JsonProperty("secret_key")
+    private String secretKey;
+
+    @JsonProperty("algorithm")
+    private String algorithm;
+
+    @JsonProperty("token_duration")
+    private Integer tokenDuration;
+
+    @JsonProperty("header_prefix")
+    private String headerPrefix;
+
+    @JsonProperty("jwt_payload")
+    private Map<String, String> jwtPayload;
+
+    @JsonProperty("additional_jwt_headers")
+    private Map<String, String> additionalJwtHeaders;
+
+    @JsonProperty("additional_jwt_payload")
+    private Map<String, String> additionalJwtPayload;
 
     // ── getters / setters ─────────────────────────────────────────────────────
 
@@ -161,6 +201,94 @@ public class AuthenticatorSpec {
         this.accessTokenName = accessTokenName;
     }
 
+    public String getGrantType() {
+        return grantType;
+    }
+
+    public void setGrantType(String grantType) {
+        this.grantType = grantType;
+    }
+
+    public Map<String, String> getRefreshRequestBody() {
+        return refreshRequestBody;
+    }
+
+    public void setRefreshRequestBody(Map<String, String> refreshRequestBody) {
+        this.refreshRequestBody = refreshRequestBody;
+    }
+
+    public LoginRequesterSpec getLoginRequester() {
+        return loginRequester;
+    }
+
+    public void setLoginRequester(LoginRequesterSpec loginRequester) {
+        this.loginRequester = loginRequester;
+    }
+
+    public List<String> getSessionTokenPath() {
+        return sessionTokenPath;
+    }
+
+    public void setSessionTokenPath(List<String> sessionTokenPath) {
+        this.sessionTokenPath = sessionTokenPath;
+    }
+
+    public String getSecretKey() {
+        return secretKey;
+    }
+
+    public void setSecretKey(String secretKey) {
+        this.secretKey = secretKey;
+    }
+
+    public String getAlgorithm() {
+        return algorithm == null ? "RS256" : algorithm;
+    }
+
+    public void setAlgorithm(String algorithm) {
+        this.algorithm = algorithm;
+    }
+
+    public int getTokenDuration() {
+        return tokenDuration == null ? 3600 : tokenDuration;
+    }
+
+    public void setTokenDuration(Integer tokenDuration) {
+        this.tokenDuration = tokenDuration;
+    }
+
+    public String getHeaderPrefix() {
+        return headerPrefix == null ? "Bearer" : headerPrefix;
+    }
+
+    public void setHeaderPrefix(String headerPrefix) {
+        this.headerPrefix = headerPrefix;
+    }
+
+    public Map<String, String> getJwtPayload() {
+        return jwtPayload;
+    }
+
+    public void setJwtPayload(Map<String, String> jwtPayload) {
+        this.jwtPayload = jwtPayload;
+    }
+
+    public Map<String, String> getAdditionalJwtHeaders() {
+        return additionalJwtHeaders;
+    }
+
+    public void setAdditionalJwtHeaders(Map<String, String> additionalJwtHeaders) {
+        this.additionalJwtHeaders = additionalJwtHeaders;
+    }
+
+    public Map<String, String> getAdditionalJwtPayload() {
+        return additionalJwtPayload;
+    }
+
+    public void setAdditionalJwtPayload(Map<String, String> additionalJwtPayload) {
+        this.additionalJwtPayload = additionalJwtPayload;
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     public boolean isNoAuth() {
@@ -183,7 +311,19 @@ public class AuthenticatorSpec {
         return "OAuthAuthenticator".equalsIgnoreCase(type);
     }
 
-    // ── inner class ───────────────────────────────────────────────────────────
+    public boolean isClientCredentials() {
+        return "client_credentials".equalsIgnoreCase(grantType);
+    }
+
+    public boolean isSessionToken() {
+        return "SessionTokenAuthenticator".equalsIgnoreCase(type);
+    }
+
+    public boolean isJwt() {
+        return "JwtAuthenticator".equalsIgnoreCase(type);
+    }
+
+    // ── inner classes ─────────────────────────────────────────────────────────
 
     /** Describes where to inject a value (header, query param, path, etc.). */
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -223,6 +363,55 @@ public class AuthenticatorSpec {
 
         public boolean isHeader() {
             return "header".equalsIgnoreCase(injectInto);
+        }
+    }
+
+    /** Models the {@code login_requester} block inside a SessionTokenAuthenticator. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class LoginRequesterSpec {
+
+        @JsonProperty("url_base")
+        private String urlBase;
+
+        @JsonProperty("path")
+        private String path;
+
+        @JsonProperty("authenticator")
+        private AuthenticatorSpec authenticator;
+
+        @JsonProperty("request_body_json")
+        private Map<String, String> requestBodyJson;
+
+        public String getUrlBase() {
+            return urlBase;
+        }
+
+        public void setUrlBase(String urlBase) {
+            this.urlBase = urlBase;
+        }
+
+        public String getPath() {
+            return path == null ? "" : path;
+        }
+
+        public void setPath(String path) {
+            this.path = path;
+        }
+
+        public AuthenticatorSpec getAuthenticator() {
+            return authenticator;
+        }
+
+        public void setAuthenticator(AuthenticatorSpec authenticator) {
+            this.authenticator = authenticator;
+        }
+
+        public Map<String, String> getRequestBodyJson() {
+            return requestBodyJson;
+        }
+
+        public void setRequestBodyJson(Map<String, String> requestBodyJson) {
+            this.requestBodyJson = requestBodyJson;
         }
     }
 }

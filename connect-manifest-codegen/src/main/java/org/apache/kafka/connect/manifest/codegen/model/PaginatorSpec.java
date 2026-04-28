@@ -19,6 +19,12 @@ package org.apache.kafka.connect.manifest.codegen.model;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 /**
  * Models the {@code paginator} block inside a retriever.
  *
@@ -192,6 +198,26 @@ public class PaginatorSpec {
 
         public void setCursorValue(String cursorValue) {
             this.cursorValue = cursorValue;
+        }
+
+        /**
+         * Extracts the JSON field path from a Jinja2 {@code cursor_value} expression.
+         *
+         * <p>Handles patterns like:
+         * {@code {{ response.get('page_details', {}).get('next_url') }}}
+         * → {@code ["page_details", "next_url"]}
+         */
+        public List<String> parseCursorJsonPath() {
+            if (cursorValue == null || cursorValue.isBlank()) {
+                return Collections.emptyList();
+            }
+            Pattern p = Pattern.compile("\\.get\\('([^']+)'");
+            Matcher m = p.matcher(cursorValue);
+            List<String> path = new ArrayList<>();
+            while (m.find()) {
+                path.add(m.group(1));
+            }
+            return path;
         }
 
         public int getStartFromPage() {
