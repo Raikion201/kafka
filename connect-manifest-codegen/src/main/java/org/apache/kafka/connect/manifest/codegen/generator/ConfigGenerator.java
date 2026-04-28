@@ -142,62 +142,22 @@ public class ConfigGenerator {
             .build();
     }
 
-    @SuppressWarnings("unchecked")
-    private List<ConfigField> extractFields(ManifestSpec spec) throws CodegenException {
+    private List<ConfigField> extractFields(ManifestSpec spec) {
         if (spec.getSpec() == null) {
             return Collections.emptyList();
         }
-        Map<String, Object> connSpec = spec.getSpec().getConnectionSpecification();
-        Object propsObj = connSpec.get("properties");
-        if (propsObj == null) {
-            return Collections.emptyList();
-        }
-        if (!(propsObj instanceof Map)) {
-            throw new CodegenException("spec.connection_specification.properties must be a map, got: " + propsObj.getClass());
-        }
-        Map<String, Object> props = (Map<String, Object>) propsObj;
-        List<String> required = extractRequired(connSpec);
+        ManifestSpec.ConnectionSpec connSpec = spec.getSpec().getConnectionSpecification();
+        Map<String, ManifestSpec.PropertyDef> props = connSpec.getProperties();
+        List<String> required = connSpec.getRequired();
 
         List<ConfigField> result = new ArrayList<>();
-        for (Map.Entry<String, Object> entry : props.entrySet()) {
+        for (Map.Entry<String, ManifestSpec.PropertyDef> entry : props.entrySet()) {
             String key = entry.getKey();
-            String doc = extractDoc(entry.getValue());
+            String doc = entry.getValue().effectiveDoc();
             boolean isRequired = required.contains(key);
             result.add(new ConfigField(key, doc, isRequired));
         }
         return result;
-    }
-
-    @SuppressWarnings("unchecked")
-    private List<String> extractRequired(Map<String, Object> connSpec) {
-        Object req = connSpec.get("required");
-        if (req instanceof List) {
-            List<?> list = (List<?>) req;
-            List<String> result = new ArrayList<>();
-            for (Object o : list) {
-                if (o instanceof String) {
-                    result.add((String) o);
-                }
-            }
-            return result;
-        }
-        return Collections.emptyList();
-    }
-
-    @SuppressWarnings("unchecked")
-    private String extractDoc(Object propDef) {
-        if (propDef instanceof Map) {
-            Map<String, Object> m = (Map<String, Object>) propDef;
-            Object desc = m.get("description");
-            if (desc != null) {
-                return desc.toString();
-            }
-            Object title = m.get("title");
-            if (title != null) {
-                return title.toString();
-            }
-        }
-        return "";
     }
 
     /** Internal value object representing one config property. */

@@ -36,13 +36,10 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -199,23 +196,6 @@ public class ConfigGeneratorTest {
         assertEquals("STRING", f.configDefType());
     }
 
-    // ── exception path: malformed spec properties ─────────────────────────────
-
-    @Test
-    void propertiesNotAMap_throwsCodegenException() throws Exception {
-        // Build a ManifestSpec whose connection_specification.properties is a String (not a Map)
-        ManifestSpec spec = buildSpecWithBadProperties("not-a-map");
-        assertThrows(CodegenException.class, () -> generator.generate(spec, PKG));
-    }
-
-    @Test
-    void propertiesNotAMap_exceptionMessageDescribesProblem() throws Exception {
-        ManifestSpec spec = buildSpecWithBadProperties(List.of("should-be-a-map"));
-        CodegenException ex = assertThrows(CodegenException.class, () -> generator.generate(spec, PKG));
-        assertTrue(ex.getMessage().contains("properties must be a map"),
-            "Exception message must describe the malformed properties; got: " + ex.getMessage());
-    }
-
     // ── integration test: generated code compiles ─────────────────────────────
 
     @Test
@@ -250,22 +230,6 @@ public class ConfigGeneratorTest {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
-
-    /**
-     * Builds a ManifestSpec whose connection_specification.properties is the given bad value.
-     * The spec still has a valid stream so the parser does not reject it.
-     */
-    private ManifestSpec buildSpecWithBadProperties(Object badProperties) throws Exception {
-        // Use zapier as a base then override the properties in connection_specification
-        ManifestSpec base = load("zapier.yaml");
-        Map<String, Object> connSpec = new LinkedHashMap<>(
-            base.getSpec().getConnectionSpecification());
-        connSpec.put("properties", badProperties);
-        ManifestSpec.SpecDef badSpecDef = new ManifestSpec.SpecDef();
-        badSpecDef.setConnectionSpecification(connSpec);
-        base.setSpec(badSpecDef);
-        return base;
-    }
 
     private void assertGeneratedCodeCompiles(ManifestSpec spec, Path tmpDir) throws Exception {
         JavaFile file = generator.generate(spec, PKG);

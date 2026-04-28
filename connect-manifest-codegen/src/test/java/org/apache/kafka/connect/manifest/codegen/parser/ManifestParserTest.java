@@ -64,8 +64,8 @@ public class ManifestParserTest {
     void defillama_emptySpec() throws Exception {
         ManifestSpec spec = parser.parse(resource("defillama.yaml"));
         assertNotNull(spec.getSpec());
-        assertTrue(spec.getSpec().getConnectionSpecification().isEmpty()
-            || spec.getSpec().getConnectionSpecification().get("properties") != null);
+        // defillama has an empty properties map — ConnectionSpec is typed so no raw cast needed
+        assertTrue(spec.getSpec().getConnectionSpecification().getProperties().isEmpty());
     }
 
     // ── xkcd ─────────────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ public class ManifestParserTest {
     void xkcd_parsesConfigField() throws Exception {
         ManifestSpec spec = parser.parse(resource("xkcd.yaml"));
         assertNotNull(spec.getSpec());
-        var props = (java.util.Map<?, ?>) spec.getSpec().getConnectionSpecification().get("properties");
+        var props = spec.getSpec().getConnectionSpecification().getProperties();
         assertNotNull(props);
         assertTrue(props.containsKey("comic_number"));
     }
@@ -126,7 +126,7 @@ public class ManifestParserTest {
     @Test
     void zapier_parsesRequiredConfigField() throws Exception {
         ManifestSpec spec = parser.parse(resource("zapier.yaml"));
-        var props = (java.util.Map<?, ?>) spec.getSpec().getConnectionSpecification().get("properties");
+        var props = spec.getSpec().getConnectionSpecification().getProperties();
         assertTrue(props.containsKey("secret"));
     }
 
@@ -135,6 +135,37 @@ public class ManifestParserTest {
         ManifestSpec spec = parser.parse(resource("zapier.yaml"));
         var fieldPath = spec.getStreams().get(0).getRetriever().getRecordSelector().getExtractor().getFieldPath();
         assertTrue(fieldPath.isEmpty());
+    }
+
+    // ── typed ConnectionSpec ──────────────────────────────────────────────────
+
+    @Test
+    void zapier_parsesRequiredList() throws Exception {
+        ManifestSpec spec = parser.parse(resource("zapier.yaml"));
+        var required = spec.getSpec().getConnectionSpecification().getRequired();
+        assertTrue(required.contains("secret"), "Expected 'secret' in required list");
+    }
+
+    @Test
+    void xkcd_propertyDefHasDescription() throws Exception {
+        ManifestSpec spec = parser.parse(resource("xkcd.yaml"));
+        ManifestSpec.PropertyDef def = spec.getSpec().getConnectionSpecification()
+            .getProperties().get("comic_number");
+        assertNotNull(def);
+        assertTrue(def.effectiveDoc().contains("comic"), "effectiveDoc must return the description");
+    }
+
+    @Test
+    void malformedProperties_throwsParseException() {
+        // With typed POJOs, Jackson rejects a non-map value for 'properties' at parse time
+        String yaml = "version: 1.0\ntype: DeclarativeSource\n"
+            + "streams:\n  - name: foo\n    retriever:\n      type: SimpleRetriever\n"
+            + "      requester:\n        type: HttpRequester\n        url_base: https://x.com\n"
+            + "      record_selector:\n        type: RecordSelector\n        extractor:\n"
+            + "          type: DpathExtractor\n          field_path: []\n"
+            + "spec:\n  connection_specification:\n    properties: not-a-map\n";
+        InputStream in = new java.io.ByteArrayInputStream(yaml.getBytes());
+        assertThrows(ManifestParseException.class, () -> parser.parse(in));
     }
 
     // ── validation ────────────────────────────────────────────────────────────

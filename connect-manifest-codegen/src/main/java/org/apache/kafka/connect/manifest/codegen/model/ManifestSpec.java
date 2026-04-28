@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Top-level model for an Airbyte-style connector manifest.yaml.
@@ -175,14 +176,82 @@ public class ManifestSpec {
     public static class SpecDef {
 
         @JsonProperty("connection_specification")
-        private Map<String, Object> connectionSpecification;
+        private ConnectionSpec connectionSpecification;
 
-        public Map<String, Object> getConnectionSpecification() {
-            return connectionSpecification == null ? Collections.emptyMap() : connectionSpecification;
+        public ConnectionSpec getConnectionSpecification() {
+            return connectionSpecification == null ? new ConnectionSpec() : connectionSpecification;
         }
 
-        public void setConnectionSpecification(Map<String, Object> v) {
+        public void setConnectionSpecification(ConnectionSpec v) {
             this.connectionSpecification = v;
+        }
+    }
+
+    /**
+     * Models the {@code connection_specification} block — the typed configuration schema
+     * with a map of property definitions and a list of required property keys.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ConnectionSpec {
+
+        private Map<String, PropertyDef> properties = Collections.emptyMap();
+        private List<String> required = Collections.emptyList();
+
+        public Map<String, PropertyDef> getProperties() {
+            return properties == null ? Collections.emptyMap() : properties;
+        }
+
+        public void setProperties(Map<String, PropertyDef> properties) {
+            this.properties = properties;
+        }
+
+        public List<String> getRequired() {
+            return required == null ? Collections.emptyList() : required;
+        }
+
+        public void setRequired(List<String> required) {
+            this.required = required;
+        }
+    }
+
+    /** Models a single property definition within {@code connection_specification.properties}. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class PropertyDef {
+
+        private String type;
+        private String description;
+        private String title;
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public String getDescription() {
+            return description;
+        }
+
+        public void setDescription(String description) {
+            this.description = description;
+        }
+
+        public String getTitle() {
+            return title;
+        }
+
+        public void setTitle(String title) {
+            this.title = title;
+        }
+
+        /** Returns the best available documentation string for this property. */
+        public String effectiveDoc() {
+            if (description != null && !description.isBlank()) {
+                return description;
+            }
+            return Objects.toString(title, "");
         }
     }
 
