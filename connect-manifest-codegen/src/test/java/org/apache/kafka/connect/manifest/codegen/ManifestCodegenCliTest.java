@@ -16,6 +16,8 @@
  */
 package org.apache.kafka.connect.manifest.codegen;
 
+import org.apache.kafka.connect.manifest.codegen.generator.ConfigGenerator;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -93,7 +95,7 @@ public class ManifestCodegenCliTest {
         });
         assertEquals(0, code, "Expected exit code 0 (success)");
 
-        String pkg = "org/apache/kafka/connect/manifest/generated";
+        String pkg = ConfigGenerator.BASE_PACKAGE.replace('.', '/');
         assertTrue(Files.exists(tmpDir.resolve(pkg + "/ZapierConnectorConfig.java")),
             "Config file not generated");
         assertTrue(Files.exists(tmpDir.resolve(pkg + "/ZapierSourceConnector.java")),
@@ -110,7 +112,7 @@ public class ManifestCodegenCliTest {
         });
         assertEquals(0, code, "Expected exit code 0 (success)");
 
-        String pkg = "org/apache/kafka/connect/manifest/generated";
+        String pkg = ConfigGenerator.BASE_PACKAGE.replace('.', '/');
         assertTrue(Files.exists(tmpDir.resolve(pkg + "/XkcdConnectorConfig.java")));
         assertTrue(Files.exists(tmpDir.resolve(pkg + "/XkcdSourceConnector.java")));
         assertTrue(Files.exists(tmpDir.resolve(pkg + "/XkcdSourceTask.java")));
@@ -124,7 +126,7 @@ public class ManifestCodegenCliTest {
         });
         assertEquals(0, code, "Expected exit code 0 (success)");
 
-        String pkg = "org/apache/kafka/connect/manifest/generated";
+        String pkg = ConfigGenerator.BASE_PACKAGE.replace('.', '/');
         assertTrue(Files.exists(tmpDir.resolve(pkg + "/DefillamaConnectorConfig.java")));
         assertTrue(Files.exists(tmpDir.resolve(pkg + "/DefillamaSourceConnector.java")));
         assertTrue(Files.exists(tmpDir.resolve(pkg + "/DefillamaSourceTask.java")));
@@ -156,7 +158,7 @@ public class ManifestCodegenCliTest {
             resource("zapier.yaml").toString(),
             tmpDir.toString()
         });
-        String pkg = "org/apache/kafka/connect/manifest/generated";
+        String pkg = ConfigGenerator.BASE_PACKAGE.replace('.', '/');
         String content = Files.readString(
             tmpDir.resolve(pkg + "/ZapierConnectorConfig.java"));
         assertTrue(content.contains("SECRET_CONFIG"), "Config must declare SECRET_CONFIG constant");
@@ -169,7 +171,7 @@ public class ManifestCodegenCliTest {
             tmpDir.toString()
         });
         // xkcd field_path is empty; BASE_URL must still be present
-        String pkg = "org/apache/kafka/connect/manifest/generated";
+        String pkg = ConfigGenerator.BASE_PACKAGE.replace('.', '/');
         String content = Files.readString(
             tmpDir.resolve(pkg + "/XkcdSourceTask.java"));
         assertTrue(content.contains("https://xkcd.com"), "Task must embed base URL");

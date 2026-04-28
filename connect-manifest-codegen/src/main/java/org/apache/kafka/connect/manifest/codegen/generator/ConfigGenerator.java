@@ -47,7 +47,9 @@ import javax.lang.model.element.Modifier;
  */
 public class ConfigGenerator {
 
-    public static final String BASE_PACKAGE = "org.apache.kafka.connect.manifest.generated";
+    // Must NOT start with "org.apache.kafka" — that namespace is excluded from Kafka Connect's
+    // plugin class isolation, so the delegating class loader would bypass the plugin JAR.
+    public static final String BASE_PACKAGE = "io.kafka.connect.generated";
 
     private static final ClassName CONFIG_DEF =
         ClassName.get("org.apache.kafka.common.config", "ConfigDef");
