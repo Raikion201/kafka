@@ -261,6 +261,10 @@ public class TaskGenerator {
         RequesterSpec requester = stream.getRetriever().getRequester();
         String baseUrl = requester.effectiveBaseUrl();
         String path = requester.getPath();
+        // Ensure exactly one "/" between base URL and path
+        if (!baseUrl.isEmpty() && !baseUrl.endsWith("/") && !path.isEmpty() && !path.startsWith("/")) {
+            baseUrl = baseUrl + "/";
+        }
         String streamName = stream.getName();
         PaginatorSpec paginator = stream.getRetriever().getPaginator();
         Map<String, String> requestParams = requester.getRequestParameters();
@@ -353,8 +357,7 @@ public class TaskGenerator {
             return b.build();
         }
 
-        b.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class,
-            baseUrl + path);
+        addInitialUrlStatement(b, baseUrl, path);
 
         List<String> paramKeys = new ArrayList<>();
         for (Map.Entry<String, String> entry : requestParams.entrySet()) {
@@ -389,6 +392,57 @@ public class TaskGenerator {
         if (!hasPagination || paginator == null) return b.build();
         appendPaginationParams(b, paginator, !hasParams);
         return b.build();
+    }
+
+    /**
+     * Initializes {@code urlBuilder} for the stream poll method.
+     * When the path contains a config template (e.g. {@code {{ config['comic_number'] }}/info.0.json}),
+     * the initializer uses runtime string concatenation so the actual config value is substituted.
+     */
+    private void addInitialUrlStatement(CodeBlock.Builder b, String baseUrl, String path) {
+        Matcher m = CONFIG_TEMPLATE.matcher(path);
+        if (!m.find()) {
+            b.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class,
+                baseUrl + path);
+            return;
+        }
+        // Path has config templates — build a concatenation expression at code-gen time.
+        // E.g. path="{{ config['comic_number'] }}/info.0.json" baseUrl="https://xkcd.com"
+        // → new StringBuilder("https://xkcd.com" + config.getComicNumber() + "/info.0.json")
+        StringBuilder fmt = new StringBuilder("$T urlBuilder = new $T(");
+        List<Object> fmtArgs = new ArrayList<>();
+        fmtArgs.add(StringBuilder.class);
+        fmtArgs.add(StringBuilder.class);
+        boolean needsPlus = false;
+        if (!baseUrl.isEmpty()) {
+            fmt.append("$S");
+            fmtArgs.add(baseUrl);
+            needsPlus = true;
+        }
+        int pos = 0;
+        m.reset();
+        while (m.find()) {
+            String lit = path.substring(pos, m.start());
+            if (!lit.isEmpty()) {
+                if (needsPlus) fmt.append(" + ");
+                fmt.append("$S");
+                fmtArgs.add(lit);
+                needsPlus = true;
+            }
+            if (needsPlus) fmt.append(" + ");
+            fmt.append("config.$L()");
+            fmtArgs.add("get" + ManifestSpec.toClassName(m.group(1)));
+            needsPlus = true;
+            pos = m.end();
+        }
+        String tail = path.substring(pos);
+        if (!tail.isEmpty()) {
+            if (needsPlus) fmt.append(" + ");
+            fmt.append("$S");
+            fmtArgs.add(tail);
+        }
+        fmt.append(")");
+        b.addStatement(fmt.toString(), fmtArgs.toArray());
     }
 
     private boolean isApiKeyQueryParam(AuthenticatorSpec auth) {
@@ -1101,9 +1155,7 @@ public class TaskGenerator {
         return MethodSpec.methodBuilder("stop")
             .addAnnotation(Override.class)
             .addModifiers(Modifier.PUBLIC)
-            .beginControlFlow("if (httpClient != null)")
-            .addStatement("httpClient.close()")
-            .endControlFlow()
+            // HttpClient.close() was added in Java 21; generated code targets Java 17, so just null the reference.
             .addStatement("httpClient = null")
             .build();
     }
