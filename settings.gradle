@@ -63,7 +63,8 @@ buildCache {
     }
 }
 
-include 'clients',
+include 'connect-manifest-codegen',
+    'clients',
     'clients:clients-integration-tests',
     'connect:api',
     'connect:basic-auth-extension',
