@@ -33,6 +33,7 @@ import com.squareup.javapoet.TypeSpec;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -146,10 +147,7 @@ public class TaskGenerator {
             typeBuilder.addMethod(buildStreamPollMethod(stream, configClass, auth, listOfSourceRecord));
         }
 
-        if (auth != null && auth.isOAuth()) {
-            typeBuilder.addMethod(buildRefreshAccessToken(configClass, auth));
-        }
-
+        addAuthHelperMethods(typeBuilder, configClass, auth);
         typeBuilder.addMethod(buildSendWithRetry());
         typeBuilder.addMethod(buildStop());
 
@@ -181,6 +179,12 @@ public class TaskGenerator {
                     .build()
             );
         }
+        if (auth != null && auth.isSessionToken()) {
+            typeBuilder.addField(
+                FieldSpec.builder(String.class, "cachedSessionToken", Modifier.PRIVATE, Modifier.VOLATILE)
+                    .build()
+            );
+        }
     }
 
     private MethodSpec buildStart(
@@ -205,6 +209,13 @@ public class TaskGenerator {
                 userGetter, passGetter,
                 ClassName.get("java.nio.charset", "StandardCharsets")
             );
+        }
+        if (auth != null && auth.isSessionToken()) {
+            m.beginControlFlow("try");
+            m.addStatement("loginAndCacheSessionToken()");
+            m.nextControlFlow("catch ($T e)", Exception.class);
+            m.addStatement("throw new $T(\"Failed to obtain session token\", e)", CONNECT_EXCEPTION);
+            m.endControlFlow();
         }
         return m.build();
     }
@@ -254,8 +265,8 @@ public class TaskGenerator {
 
         body.add(buildUrlBlock(baseUrl, path, requestParams, paginator, hasPagination));
         body.beginControlFlow("try");
-        buildRequestStatement(body, auth);
-        body.add(buildFetchBlock());
+        buildRequestStatement(body, auth, paginator);
+        body.add(buildFetchBlock(paginator));
         body.add(buildFieldPathNav(fieldPath, hasPagination));
         body.add(buildNormalizeAndCollect(hasPagination, paginator));
         if (hasPagination) {
@@ -288,6 +299,9 @@ public class TaskGenerator {
         b.addStatement("$T<$T> allRecords = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
         if (paginator.isCursor()) {
             b.addStatement("$T nextCursor = null", String.class);
+            if (isRequestPath(paginator)) {
+                b.addStatement("$T url = null", String.class);
+            }
             b.beginControlFlow("do");
         } else if (paginator.isPageIncrement()) {
             int start = paginator.getPaginationStrategy() != null
@@ -302,6 +316,12 @@ public class TaskGenerator {
         return b.build();
     }
 
+    private boolean isRequestPath(PaginatorSpec paginator) {
+        return paginator != null && paginator.isCursor()
+            && paginator.getPageTokenOption() != null
+            && paginator.getPageTokenOption().isRequestPath();
+    }
+
     private CodeBlock buildUrlBlock(
         String baseUrl, String path,
         Map<String, String> requestParams,
@@ -309,6 +329,12 @@ public class TaskGenerator {
         boolean hasPagination
     ) {
         CodeBlock.Builder b = CodeBlock.builder();
+
+        if (isRequestPath(paginator)) {
+            b.addStatement("url = (nextCursor != null) ? nextCursor : $S", baseUrl + path);
+            return b.build();
+        }
+
         b.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class,
             baseUrl + path);
 
@@ -351,12 +377,13 @@ public class TaskGenerator {
         }
     }
 
-    private CodeBlock buildFetchBlock() {
+    private CodeBlock buildFetchBlock(PaginatorSpec paginator) {
+        String urlRef = isRequestPath(paginator) ? "url" : "urlBuilder";
         CodeBlock.Builder b = CodeBlock.builder();
         b.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
         b.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");
         b.addStatement(
-            "throw new $T(\"HTTP \" + response.statusCode() + \" from \" + urlBuilder)",
+            "throw new $T(\"HTTP \" + response.statusCode() + \" from \" + " + urlRef + ")",
             CONNECT_EXCEPTION);
         b.endControlFlow();
         b.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
@@ -425,11 +452,29 @@ public class TaskGenerator {
         CodeBlock.Builder b = CodeBlock.builder();
         if (paginator.isCursor()) {
             b.addStatement("nextCursor = null");
-            b.beginControlFlow("if (json instanceof $T)", Map.class);
-            b.addStatement("$T<?, ?> respMap = ($T<?, ?>) json", Map.class, Map.class);
-            b.addStatement("$T nextToken = respMap.get(\"next_page_token\")", Object.class);
-            b.addStatement("nextCursor = nextToken != null ? $T.valueOf(nextToken) : null", String.class);
-            b.endControlFlow();
+            if (isRequestPath(paginator)) {
+                // Extract next URL from JSON path defined by cursor_value Jinja2 expression
+                List<String> jsonPath = paginator.getPaginationStrategy() != null
+                    ? paginator.getPaginationStrategy().parseCursorJsonPath()
+                    : Collections.emptyList();
+                if (!jsonPath.isEmpty()) {
+                    b.addStatement("$T cursorStep = ($T) json", Object.class, Object.class);
+                    for (String segment : jsonPath) {
+                        b.beginControlFlow("if (cursorStep instanceof $T)", Map.class);
+                        b.addStatement("cursorStep = (($T<?, ?>) cursorStep).get($S)", Map.class, segment);
+                        b.nextControlFlow("else");
+                        b.addStatement("cursorStep = null");
+                        b.endControlFlow();
+                    }
+                    b.addStatement("nextCursor = cursorStep != null ? $T.valueOf(cursorStep) : null", String.class);
+                }
+            } else {
+                b.beginControlFlow("if (json instanceof $T)", Map.class);
+                b.addStatement("$T<?, ?> respMap = ($T<?, ?>) json", Map.class, Map.class);
+                b.addStatement("$T nextToken = respMap.get(\"next_page_token\")", Object.class);
+                b.addStatement("nextCursor = nextToken != null ? $T.valueOf(nextToken) : null", String.class);
+                b.endControlFlow();
+            }
         } else if (paginator.isPageIncrement()) {
             b.beginControlFlow("if (records.isEmpty())");
             b.addStatement("break");
@@ -456,63 +501,108 @@ public class TaskGenerator {
     }
 
     /** Generates the {@code HttpRequest.newBuilder()...build()} statement with auth headers. */
-    private void buildRequestStatement(CodeBlock.Builder body, AuthenticatorSpec auth) {
+    private void buildRequestStatement(CodeBlock.Builder body, AuthenticatorSpec auth, PaginatorSpec paginator) {
         if (auth == null || auth.isNoAuth()) {
             body.addStatement(
                 "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create(urlBuilder.toString()))\n"
+                    + "        .uri($T.create($L))\n"
                     + "        .GET()\n"
                     + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
             );
         } else if (auth.isBearer()) {
             String getterName = resolveConfigGetter(auth.getApiToken());
             body.addStatement(
                 "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create(urlBuilder.toString()))\n"
+                    + "        .uri($T.create($L))\n"
                     + "        .header(\"Authorization\", \"Bearer \" + config.$L())\n"
                     + "        .GET()\n"
                     + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, getterName
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), getterName
             );
         } else if (auth.isApiKey()) {
             String headerName = resolveApiKeyHeaderName(auth);
             String getterName = resolveConfigGetter(auth.getApiToken());
             body.addStatement(
                 "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create(urlBuilder.toString()))\n"
+                    + "        .uri($T.create($L))\n"
                     + "        .header($S, config.$L())\n"
                     + "        .GET()\n"
                     + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, headerName, getterName
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), headerName, getterName
             );
         } else if (auth.isBasicHttp()) {
             body.addStatement(
                 "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create(urlBuilder.toString()))\n"
+                    + "        .uri($T.create($L))\n"
                     + "        .header(\"Authorization\", \"Basic \" + cachedCredentials)\n"
                     + "        .GET()\n"
                     + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
             );
         } else if (auth.isOAuth()) {
             body.addStatement("$T accessToken = refreshAccessToken()", String.class);
             body.addStatement(
                 "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create(urlBuilder.toString()))\n"
+                    + "        .uri($T.create($L))\n"
                     + "        .header(\"Authorization\", \"Bearer \" + accessToken)\n"
                     + "        .GET()\n"
                     + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
+            );
+        } else if (auth.isSessionToken()) {
+            body.addStatement(
+                "$T request = $T.newBuilder()\n"
+                    + "        .uri($T.create($L))\n"
+                    + "        .header(\"Authorization\", \"Bearer \" + cachedSessionToken)\n"
+                    + "        .GET()\n"
+                    + "        .build()",
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
+            );
+        } else if (auth.isJwt()) {
+            body.addStatement("$T jwtToken = buildJwt()", String.class);
+            body.addStatement(
+                "$T request = $T.newBuilder()\n"
+                    + "        .uri($T.create($L))\n"
+                    + "        .header(\"Authorization\", \"$L \" + jwtToken)\n"
+                    + "        .GET()\n"
+                    + "        .build()",
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), auth.getHeaderPrefix()
             );
         } else {
             body.addStatement(
                 "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create(urlBuilder.toString()))\n"
+                    + "        .uri($T.create($L))\n"
                     + "        .GET()\n"
                     + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
             );
+        }
+    }
+
+    /**
+     * Returns the URL expression string to use in the request builder.
+     * For RequestPath cursor, the cursor itself is the full URL; otherwise use urlBuilder.
+     */
+    private String urlExpr(AuthenticatorSpec auth, PaginatorSpec paginator) {
+        if (paginator != null && paginator.isCursor()
+                && paginator.getPageTokenOption() != null
+                && paginator.getPageTokenOption().isRequestPath()) {
+            return "url";
+        }
+        return "urlBuilder.toString()";
+    }
+
+    private void addAuthHelperMethods(TypeSpec.Builder typeBuilder, ClassName configClass, AuthenticatorSpec auth) {
+        if (auth == null) return;
+        if (auth.isOAuth()) {
+            typeBuilder.addMethod(buildRefreshAccessToken(configClass, auth));
+        }
+        if (auth.isSessionToken()) {
+            typeBuilder.addMethod(buildLoginAndCacheSessionToken(configClass, auth));
+        }
+        if (auth.isJwt()) {
+            typeBuilder.addMethod(buildBuildJwt(configClass, auth));
         }
     }
 
@@ -531,13 +621,34 @@ public class TaskGenerator {
         body.addStatement("return cachedToken");
         body.endControlFlow();
 
-        body.addStatement("$T reqBody = \"grant_type=refresh_token\"\n"
-                + "        + \"&client_id=\" + config.$L()\n"
-                + "        + \"&client_secret=\" + config.$L()\n"
-                + "        + \"&refresh_token=\" + config.$L()",
-            String.class,
-            clientIdGetter, clientSecretGetter, refreshTokenGetter
-        );
+        if (auth.isClientCredentials()) {
+            StringBuilder extraFields = new StringBuilder();
+            if (auth.getRefreshRequestBody() != null) {
+                for (Map.Entry<String, String> e : auth.getRefreshRequestBody().entrySet()) {
+                    Matcher cfgMatch = CONFIG_TEMPLATE.matcher(e.getValue());
+                    if (cfgMatch.find()) {
+                        String getter = "get" + ManifestSpec.toClassName(cfgMatch.group(1));
+                        extraFields.append("\n        + \"&").append(e.getKey())
+                            .append("=\" + config.").append(getter).append("()");
+                    } else {
+                        extraFields.append("\n        + \"&").append(e.getKey())
+                            .append("=").append(e.getValue()).append("\"");
+                    }
+                }
+            }
+            body.addStatement("$T reqBody = \"grant_type=client_credentials\"\n"
+                    + "        + \"&client_id=\" + config.$L()\n"
+                    + "        + \"&client_secret=\" + config.$L()"
+                    + extraFields,
+                String.class, clientIdGetter, clientSecretGetter);
+        } else {
+            body.addStatement("$T reqBody = \"grant_type=refresh_token\"\n"
+                    + "        + \"&client_id=\" + config.$L()\n"
+                    + "        + \"&client_secret=\" + config.$L()\n"
+                    + "        + \"&refresh_token=\" + config.$L()",
+                String.class,
+                clientIdGetter, clientSecretGetter, refreshTokenGetter);
+        }
         body.beginControlFlow("try");
         body.addStatement(
             "$T tokenRequest = $T.newBuilder()\n"
@@ -578,6 +689,235 @@ public class TaskGenerator {
         body.endControlFlow();
 
         return MethodSpec.methodBuilder("refreshAccessToken")
+            .addModifiers(Modifier.PRIVATE)
+            .returns(String.class)
+            .addCode(body.build())
+            .build();
+    }
+
+    /**
+     * Generates a private {@code loginAndCacheSessionToken()} method for SessionTokenAuthenticator.
+     * POSTs to the login endpoint with Basic auth + JSON body, then navigates session_token_path.
+     */
+    private MethodSpec buildLoginAndCacheSessionToken(ClassName configClass, AuthenticatorSpec auth) {
+        AuthenticatorSpec.LoginRequesterSpec login = auth.getLoginRequester();
+        if (login == null) {
+            return MethodSpec.methodBuilder("loginAndCacheSessionToken")
+                .addModifiers(Modifier.PRIVATE)
+                .addException(Exception.class)
+                .build();
+        }
+
+        // Resolve the login URL — may be a mixed template like "{{ config["host"] }}/api/oauth/v1"
+        String urlBase = login.getUrlBase() == null ? "" : login.getUrlBase();
+        Matcher urlMatcher = CONFIG_TEMPLATE.matcher(urlBase);
+        String loginUrlExpr;
+        if (urlMatcher.find()) {
+            String getter = "get" + ManifestSpec.toClassName(urlMatcher.group(1));
+            String suffix = urlBase.substring(urlMatcher.end()).replaceAll("\\s*\\}\\}.*", "");
+            loginUrlExpr = "config." + getter + "() + \"" + suffix + "/" + login.getPath() + "\"";
+        } else {
+            loginUrlExpr = "\"" + urlBase + "/" + login.getPath() + "\"";
+        }
+
+        // Build JSON body string from requestBodyJson
+        CodeBlock.Builder body = CodeBlock.builder();
+        body.addStatement("$T<$T, $T> bodyMap = new $T<>()", Map.class, String.class, String.class,
+            ClassName.get("java.util", "LinkedHashMap"));
+        if (login.getRequestBodyJson() != null) {
+            for (Map.Entry<String, String> e : login.getRequestBodyJson().entrySet()) {
+                Matcher m = CONFIG_TEMPLATE.matcher(e.getValue());
+                if (m.matches() || m.find()) {
+                    String getter = "get" + ManifestSpec.toClassName(m.group(1));
+                    body.addStatement("bodyMap.put($S, config.$L())", e.getKey(), getter);
+                } else {
+                    body.addStatement("bodyMap.put($S, $S)", e.getKey(), e.getValue());
+                }
+            }
+        }
+        body.addStatement("$T loginBody = MAPPER.writeValueAsString(bodyMap)", String.class);
+
+        // Build the request
+        ClassName bodyPublishers = ClassName.get("java.net.http", "HttpRequest.BodyPublishers");
+        StringBuilder reqBuilder = new StringBuilder(
+            "$T loginReq = $T.newBuilder()\n"
+                + "        .uri($T.create(" + loginUrlExpr + "))\n"
+                + "        .header(\"Content-Type\", \"application/json\")\n");
+
+        List<Object> reqArgs = new ArrayList<>();
+        reqArgs.add(HTTP_REQUEST);
+        reqArgs.add(HTTP_REQUEST);
+        reqArgs.add(URI_CLASS);
+
+        // Add Basic auth header if the inner authenticator is BasicHttp
+        AuthenticatorSpec innerAuth = login.getAuthenticator();
+        if (innerAuth != null && innerAuth.isBasicHttp()) {
+            String userGetter = resolveConfigGetter(innerAuth.getUsername());
+            String passGetter = resolveConfigGetter(innerAuth.getPassword());
+            reqBuilder.append("        .header(\"Authorization\", \"Basic \" + $T.getEncoder().encodeToString(\n"
+                + "                (config.$L() + \":\" + config.$L()).getBytes($T.UTF_8)))\n");
+            reqArgs.add(ClassName.get("java.util", "Base64"));
+            reqArgs.add(userGetter);
+            reqArgs.add(passGetter);
+            reqArgs.add(ClassName.get("java.nio.charset", "StandardCharsets"));
+        }
+        reqBuilder.append("        .POST($T.ofString(loginBody))\n        .build()");
+        reqArgs.add(bodyPublishers);
+
+        body.addStatement(reqBuilder.toString(), reqArgs.toArray());
+        body.addStatement(
+            "$T<$T> loginResp = httpClient.send(loginReq, $T.BodyHandlers.ofString())",
+            HTTP_RESPONSE, String.class, HTTP_RESPONSE);
+        body.addStatement(
+            "$T loginJson = MAPPER.readValue(loginResp.body(), $T.class)", Object.class, Object.class);
+
+        // Navigate session_token_path
+        List<String> tokenPath = auth.getSessionTokenPath() == null
+            ? Collections.emptyList() : auth.getSessionTokenPath();
+        body.addStatement("$T tokenStep = loginJson", Object.class);
+        for (String segment : tokenPath) {
+            body.beginControlFlow("if (tokenStep instanceof $T)", Map.class);
+            body.addStatement("tokenStep = (($T<?, ?>) tokenStep).get($S)", Map.class, segment);
+            body.nextControlFlow("else");
+            body.addStatement("tokenStep = null");
+            body.endControlFlow();
+        }
+        body.beginControlFlow("if (tokenStep == null)");
+        body.addStatement("throw new $T(\"Session token not found in login response\")", CONNECT_EXCEPTION);
+        body.endControlFlow();
+        body.addStatement("cachedSessionToken = $T.valueOf(tokenStep)", String.class);
+
+        return MethodSpec.methodBuilder("loginAndCacheSessionToken")
+            .addModifiers(Modifier.PRIVATE)
+            .addException(Exception.class)
+            .addCode(body.build())
+            .build();
+    }
+
+    /**
+     * Generates a private {@code buildJwt()} method for JwtAuthenticator.
+     * Constructs and signs a JWT using the RSA private key from config (RS256 algorithm).
+     */
+    private MethodSpec buildBuildJwt(ClassName configClass, AuthenticatorSpec auth) {
+        CodeBlock.Builder body = CodeBlock.builder();
+
+        // Resolve how to get the private key PEM
+        String secretKey = auth.getSecretKey() == null ? "" : auth.getSecretKey();
+        // Pattern 1: json_loads(config['key'])['subkey']
+        Pattern jsonLoads = Pattern.compile("json_loads\\(config\\[['\"]([^'\"]+)['\"]\\]\\)\\[['\"]([^'\"]+)['\"]\\]");
+        Matcher jlMatcher = jsonLoads.matcher(secretKey);
+        // Pattern 2: {{ config['outer']['inner'] }}
+        Pattern nestedConfig = Pattern.compile("config\\[['\"]([^'\"]+)['\"]\\]\\[['\"]([^'\"]+)['\"]\\]");
+        Matcher ncMatcher = nestedConfig.matcher(secretKey);
+
+        // Everything from key extraction through signing can throw checked exceptions;
+        // wrap the entire method body in a single try-catch.
+        body.beginControlFlow("try");
+
+        if (jlMatcher.find()) {
+            String cfgGetter = "get" + ManifestSpec.toClassName(jlMatcher.group(1));
+            String jsonKey = jlMatcher.group(2);
+            body.addStatement("$T credsMap = ($T<?, ?>) MAPPER.readValue(config.$L(), $T.class)",
+                ClassName.get("java.util", "Map"), Map.class, cfgGetter, Object.class);
+            body.addStatement("$T privateKeyPem = ($T) credsMap.get($S)", String.class, String.class, jsonKey);
+        } else if (ncMatcher.find()) {
+            String outerGetter = "get" + ManifestSpec.toClassName(ncMatcher.group(1));
+            String innerKey = ncMatcher.group(2);
+            body.addStatement("$T outerVal = config.$L()", String.class, outerGetter);
+            body.addStatement("$T outerMap = ($T<?, ?>) MAPPER.readValue(outerVal, $T.class)",
+                ClassName.get("java.util", "Map"), Map.class, Object.class);
+            body.addStatement("$T privateKeyPem = ($T) outerMap.get($S)", String.class, String.class, innerKey);
+        } else {
+            String getter = resolveConfigGetter(secretKey);
+            body.addStatement("$T privateKeyPem = config.$L()", String.class, getter);
+        }
+
+        // Strip PEM headers and decode
+        body.addStatement(
+            "$T keyContent = privateKeyPem\n"
+                + "        .replace(\"-----BEGIN PRIVATE KEY-----\", \"\")\n"
+                + "        .replace(\"-----END PRIVATE KEY-----\", \"\")\n"
+                + "        .replace(\"-----BEGIN RSA PRIVATE KEY-----\", \"\")\n"
+                + "        .replace(\"-----END RSA PRIVATE KEY-----\", \"\")\n"
+                + "        .replaceAll(\"\\\\s+\", \"\")",
+            String.class);
+        body.addStatement("byte[] keyBytes = $T.getDecoder().decode(keyContent)",
+            ClassName.get("java.util", "Base64"));
+
+        // Build JWT header
+        body.addStatement("long now = $T.currentTimeMillis() / 1000L", System.class);
+        body.addStatement("long exp = now + $L", auth.getTokenDuration());
+        body.addStatement("$T headerJson = \"{\\\"alg\\\":\\\"RS256\\\",\\\"typ\\\":\\\"JWT\\\"}\"",
+            String.class);
+
+        // Build payload from jwtPayload / additional_jwt_payload
+        Map<String, String> payloadFields = new LinkedHashMap<>();
+        if (auth.getJwtPayload() != null) payloadFields.putAll(auth.getJwtPayload());
+        if (auth.getAdditionalJwtPayload() != null) payloadFields.putAll(auth.getAdditionalJwtPayload());
+
+        body.addStatement("$T<$T, $T> payloadMap = new $T<>()",
+            Map.class, String.class, Object.class, ClassName.get("java.util", "LinkedHashMap"));
+        body.addStatement("payloadMap.put(\"iat\", now)");
+        body.addStatement("payloadMap.put(\"exp\", exp)");
+        for (Map.Entry<String, String> e : payloadFields.entrySet()) {
+            Matcher cfgM = CONFIG_TEMPLATE.matcher(e.getValue());
+            // Also handle json_loads pattern in payload fields
+            Matcher jlPayload = jsonLoads.matcher(e.getValue());
+            Matcher ncPayload = nestedConfig.matcher(e.getValue());
+            if (jlPayload.find()) {
+                String cfgGetter = "get" + ManifestSpec.toClassName(jlPayload.group(1));
+                String jsonKey = jlPayload.group(2);
+                body.addStatement(
+                    "payloadMap.put($S, ($T)(($T<?,?>) MAPPER.readValue(config.$L(), $T.class)).get($S))",
+                    e.getKey(), String.class, Map.class, cfgGetter, Object.class, jsonKey);
+            } else if (ncPayload.find()) {
+                String outerGetter = "get" + ManifestSpec.toClassName(ncPayload.group(1));
+                String innerKey = ncPayload.group(2);
+                body.addStatement(
+                    "payloadMap.put($S, ($T)(($T<?,?>) MAPPER.readValue(config.$L(), $T.class)).get($S))",
+                    e.getKey(), String.class, Map.class, outerGetter, Object.class, innerKey);
+            } else if (cfgM.find()) {
+                String getter = "get" + ManifestSpec.toClassName(cfgM.group(1));
+                body.addStatement("payloadMap.put($S, config.$L())", e.getKey(), getter);
+            } else {
+                body.addStatement("payloadMap.put($S, $S)", e.getKey(), e.getValue());
+            }
+        }
+        body.addStatement("$T payloadJson = MAPPER.writeValueAsString(payloadMap)", String.class);
+
+        // Base64url encode header and payload
+        ClassName b64 = ClassName.get("java.util", "Base64");
+        body.addStatement(
+            "$T headerB64 = $T.getUrlEncoder().withoutPadding().encodeToString(headerJson.getBytes($T.UTF_8))",
+            String.class, b64, ClassName.get("java.nio.charset", "StandardCharsets"));
+        body.addStatement(
+            "$T payloadB64 = $T.getUrlEncoder().withoutPadding().encodeToString(payloadJson.getBytes($T.UTF_8))",
+            String.class, b64, ClassName.get("java.nio.charset", "StandardCharsets"));
+        body.addStatement(
+            "byte[] signingInput = (headerB64 + \".\" + payloadB64).getBytes($T.UTF_8)",
+            ClassName.get("java.nio.charset", "StandardCharsets"));
+
+        // Sign with RSA private key
+        body.addStatement(
+            "$T privateKey = $T.getInstance(\"RSA\").generatePrivate(new $T(keyBytes))",
+            ClassName.get("java.security", "PrivateKey"),
+            ClassName.get("java.security", "KeyFactory"),
+            ClassName.get("java.security.spec", "PKCS8EncodedKeySpec"));
+        body.addStatement(
+            "$T sig = $T.getInstance(\"SHA256withRSA\")",
+            ClassName.get("java.security", "Signature"),
+            ClassName.get("java.security", "Signature"));
+        body.addStatement("sig.initSign(privateKey)");
+        body.addStatement("sig.update(signingInput)");
+        body.addStatement(
+            "$T sigB64 = $T.getUrlEncoder().withoutPadding().encodeToString(sig.sign())",
+            String.class, b64);
+        body.addStatement("return headerB64 + \".\" + payloadB64 + \".\" + sigB64");
+        body.nextControlFlow("catch ($T e)", Exception.class);
+        body.addStatement("throw new $T(\"Failed to build JWT\", e)", CONNECT_EXCEPTION);
+        body.endControlFlow();
+
+        return MethodSpec.methodBuilder("buildJwt")
             .addModifiers(Modifier.PRIVATE)
             .returns(String.class)
             .addCode(body.build())
