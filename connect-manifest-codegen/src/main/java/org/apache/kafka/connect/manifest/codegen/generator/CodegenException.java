@@ -14,36 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.kafka.connect.manifest.codegen.generator;
 
-plugins {
-    id 'application'
-}
+/** Thrown when Java source code cannot be generated from a manifest. */
+public class CodegenException extends Exception {
 
-description = 'Kafka Connect connector code generator from Airbyte manifests'
+    public CodegenException(String message) {
+        super(message);
+    }
 
-application {
-    mainClass = 'org.apache.kafka.connect.manifest.codegen.ManifestCodegenCli'
-}
-
-dependencies {
-    // YAML parsing
-    implementation libs.jacksonDataformatYaml
-    implementation libs.jacksonDatabind
-
-    // Java source code generation
-    implementation libs.javapoet
-
-    // Logging
-    implementation libs.slf4jApi
-
-    // Needed to compile generated code (AbstractConfig, ConfigDef) in integration tests
-    testImplementation project(':clients')
-
-    testImplementation libs.junitJupiter
-    testImplementation libs.mockitoCore
-    testRuntimeOnly runtimeTestLibs
-}
-
-checkstyle {
-    configProperties = checkstyleConfigProperties("import-control.xml")
+    public CodegenException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

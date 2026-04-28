@@ -527,6 +527,8 @@
       <allow pkg="org.slf4j" />
       <allow pkg="org.junit" />
       <allow pkg="org.mockito" />
+      <allow pkg="javax.lang.model" />
+      <allow pkg="javax.tools" />
     </subpackage>
 
     <subpackage name="source">
