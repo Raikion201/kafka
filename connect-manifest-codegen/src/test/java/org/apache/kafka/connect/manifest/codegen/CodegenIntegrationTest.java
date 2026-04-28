@@ -91,7 +91,10 @@ public class CodegenIntegrationTest {
             Arguments.of("box.yaml"),
             Arguments.of("assemblyai.yaml"),
             Arguments.of("akeneo.yaml"),
-            Arguments.of("google_analytics_jwt.yaml")
+            Arguments.of("google_analytics_jwt.yaml"),
+            Arguments.of("us_census.yaml"),
+            Arguments.of("metabase.yaml"),
+            Arguments.of("acuity_scheduling.yaml")
         );
     }
 
@@ -292,6 +295,48 @@ public class CodegenIntegrationTest {
         // cursor must NOT be appended as a query param — it replaces the whole URL
         assertTrue(!taskSrc.contains("urlBuilder.append") || taskSrc.contains("url ="),
             "AssemblyAI RequestPath cursor task must use cursor as full URL, not query param");
+    }
+
+    @Test
+    void usCensus_generatedTask_appendsApiKeyAsQueryParam() throws Exception {
+        String taskSrc = generate("us_census.yaml").task.toString();
+        assertTrue(taskSrc.contains("key="),
+            "US Census task must append api key as query param (?key=...)");
+        // must NOT set an Authorization or X-API-Key header
+        assertTrue(!taskSrc.contains("header(\"X-API-Key") && !taskSrc.contains("header(\"Authorization"),
+            "US Census task must not add an auth header when inject_into is request_parameter");
+    }
+
+    @Test
+    void metabase_generatedTask_containsLegacyLoginMethod() throws Exception {
+        String taskSrc = generate("metabase.yaml").task.toString();
+        assertTrue(taskSrc.contains("loginAndCacheLegacyToken"),
+            "Metabase task must contain loginAndCacheLegacyToken() helper");
+    }
+
+    @Test
+    void metabase_generatedTask_usesCustomSessionHeader() throws Exception {
+        String taskSrc = generate("metabase.yaml").task.toString();
+        assertTrue(taskSrc.contains("X-Metabase-Session"),
+            "Metabase task must inject session token via X-Metabase-Session header");
+        assertTrue(taskSrc.contains("cachedLegacyToken"),
+            "Metabase task must use cachedLegacyToken field");
+    }
+
+    @Test
+    void acuityScheduling_generatedTask_containsDateRangeParams() throws Exception {
+        String taskSrc = generate("acuity_scheduling.yaml").task.toString();
+        assertTrue(taskSrc.contains("minDate"),
+            "Acuity Scheduling task must inject start date as minDate query param");
+        assertTrue(taskSrc.contains("maxDate"),
+            "Acuity Scheduling task must inject end date as maxDate query param");
+    }
+
+    @Test
+    void acuityScheduling_generatedTask_containsBasicAuth() throws Exception {
+        String taskSrc = generate("acuity_scheduling.yaml").task.toString();
+        assertTrue(taskSrc.contains("Basic"),
+            "Acuity Scheduling task must use Basic auth header");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
