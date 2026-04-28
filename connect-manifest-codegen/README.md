@@ -231,6 +231,88 @@ check that the generated source contains the expected auth/pagination patterns.
 
 ---
 
+## How the generator picks the right type
+
+The model and the generator have a strict separation of responsibilities:
+
+- **Model** — holds data and exposes boolean helpers (`isXxx()`). It never generates code.
+- **Generator** — reads those helpers and emits the right JavaPoet statements. It never parses strings.
+
+### End-to-end example
+
+Given this YAML:
+```yaml
+authenticator:
+  type: BearerAuthenticator
+  api_token: "{{ config['api_key'] }}"
+paginator:
+  type: DefaultPaginator
+  pagination_strategy:
+    type: CursorPagination
+    cursor_value: "{{ response['next_cursor'] }}"
+```
+
+**Step 1 — parser** deserializes it into the model:
+```
+AuthenticatorSpec { type = "BearerAuthenticator", apiToken = "{{ config['api_key'] }}" }
+PaginatorSpec     { paginationStrategy.type = "CursorPagination" }
+```
+
+**Step 2 — generator** reads the model and branches:
+
+```java
+// auth decision — in buildRequestStatement()
+if      (auth.isNoAuth())       { /* no header */ }
+else if (auth.isBearer())       { emit: request.header("Authorization", "Bearer " + config.getApiKey()) }
+else if (auth.isApiKey())       { /* inject into header or query param */ }
+else if (auth.isBasicHttp())    { /* Authorization: Basic <cached base64> */ }
+else if (auth.isOAuth())        { /* Authorization: Bearer <cached OAuth token> */ }
+else if (auth.isSessionToken()) { /* Authorization: Bearer <cached session token> */ }
+else if (auth.isJwt())          { /* Authorization: Bearer <freshly signed JWT> */ }
+
+// pagination decision — in pollStreamN()
+if      (paginator.hasNoPagination())                { /* single request */ }
+else if (paginator.isCursor() && isRequestPath())    { /* url = nextCursor ?? baseUrl + path */ }
+else if (paginator.isCursor())                       { /* append ?cursor=X each iteration */ }
+else if (paginator.isPageIncrement())                { /* append ?page=N each iteration */ }
+else if (paginator.isOffsetIncrement())              { /* append ?offset=N each iteration */ }
+```
+
+Each `isXxx()` method is a simple string comparison on the `type` field that Jackson read
+from the YAML:
+```java
+public boolean isBearer() {
+    return "BearerAuthenticator".equalsIgnoreCase(type);
+}
+```
+
+So the `type` string in the YAML is the single source of truth that drives which code gets
+emitted. The full flow:
+
+```
+manifest.yaml
+     │  type: BearerAuthenticator
+     ▼
+AuthenticatorSpec.type = "BearerAuthenticator"
+     │  auth.isBearer() == true
+     ▼
+TaskGenerator emits:
+     request.header("Authorization", "Bearer " + config.getApiKey())
+```
+
+### The role of the model layer
+
+Without the model, the generator would have to dig through raw `Map<String, Object>` from
+the YAML parser — fragile, untyped, and hard to extend. The model provides:
+
+- **Type safety** — compiler catches field name typos
+- **Discoverability** — all supported fields and helpers are visible in one class
+- **Isolation** — YAML structure changes only touch model classes, not generator logic
+- **Consistent extension pattern** — adding any new type is always the same two steps:
+  add a field + `isXxx()` to the model, add a branch to the generator
+
+---
+
 ## Extending the generator
 
 To support a new authenticator type:
