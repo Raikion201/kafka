@@ -25,10 +25,10 @@ import com.squareup.javapoet.ParameterizedTypeName;
 import com.squareup.javapoet.TypeSpec;
 import com.squareup.javapoet.WildcardTypeName;
 
-import javax.lang.model.element.Modifier;
-
 import java.util.Collections;
 import java.util.List;
+
+import javax.lang.model.element.Modifier;
 
 /**
  * Generates {@code XxxSourceConnector.java} from an Airbyte manifest.
@@ -37,8 +37,8 @@ import java.util.List;
  * <ul>
  *   <li>Extends {@code SourceConnector}.</li>
  *   <li>Holds and validates configuration via the generated {@code XxxConnectorConfig}.</li>
- *   <li>Returns {@code XxxSourceTask.class} from {@link #taskClass()}.</li>
- *   <li>Propagates the raw props map to each task via {@link #taskConfigs(int)}.</li>
+ *   <li>Returns {@code XxxSourceTask.class} from {@code taskClass()}.</li>
+ *   <li>Propagates the raw props map to each task via {@code taskConfigs(int)}.</li>
  * </ul>
  */
 public class ConnectorGenerator {

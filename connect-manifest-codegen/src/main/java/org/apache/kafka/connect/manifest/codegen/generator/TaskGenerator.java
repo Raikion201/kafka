@@ -29,14 +29,14 @@ import com.squareup.javapoet.MethodSpec;
 import com.squareup.javapoet.ParameterizedTypeName;
 import com.squareup.javapoet.TypeSpec;
 
-import javax.lang.model.element.Modifier;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import javax.lang.model.element.Modifier;
 
 /**
  * Generates {@code XxxSourceTask.java} from an Airbyte manifest stream definition.

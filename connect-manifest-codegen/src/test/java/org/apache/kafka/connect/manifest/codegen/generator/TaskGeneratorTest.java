@@ -19,19 +19,12 @@ package org.apache.kafka.connect.manifest.codegen.generator;
 import org.apache.kafka.connect.manifest.codegen.model.ManifestSpec;
 import org.apache.kafka.connect.manifest.codegen.model.RetrieverSpec;
 import org.apache.kafka.connect.manifest.codegen.model.StreamSpec;
-
-import java.util.HashMap;
 import org.apache.kafka.connect.manifest.codegen.parser.ManifestParser;
 
 import com.squareup.javapoet.JavaFile;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-
-import javax.tools.DiagnosticCollector;
-import javax.tools.JavaCompiler;
-import javax.tools.JavaFileObject;
-import javax.tools.ToolProvider;
 
 import java.io.File;
 import java.io.IOException;
@@ -40,7 +33,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.ToolProvider;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;

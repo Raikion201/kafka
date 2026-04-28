@@ -32,18 +32,23 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Command-line entry point for the Airbyte-manifest-to-Kafka-Connect code generator.
  *
  * <p>Usage:
  * <pre>
- *   java -jar connect-manifest-codegen.jar &lt;manifest.yaml&gt; &lt;output-dir&gt; [package]
+ *   java -jar connect-manifest-codegen.jar &lt;manifest.yaml|manifest-dir&gt; &lt;output-dir&gt; [package]
  * </pre>
  *
  * <ul>
- *   <li>{@code manifest.yaml} — path to the Airbyte connector manifest</li>
+ *   <li>{@code manifest.yaml|manifest-dir} — path to a single Airbyte manifest file, or a
+ *       directory containing {@code *.yaml} manifest files (processed recursively)</li>
  *   <li>{@code output-dir} — directory where generated {@code .java} files are written</li>
  *   <li>{@code package} — (optional) Java package; defaults to
  *       {@link ConfigGenerator#BASE_PACKAGE}</li>
@@ -90,15 +95,44 @@ public class ManifestCodegenCli {
             return EXIT_BAD_ARGS;
         }
 
-        File manifestFile = new File(args[0]);
+        File manifestArg = new File(args[0]);
         Path outputDir = Path.of(args[1]);
         String pkgName = args.length == 3 ? args[2] : ConfigGenerator.BASE_PACKAGE;
 
-        if (!manifestFile.isFile()) {
-            System.err.println("Manifest file not found: " + manifestFile.getAbsolutePath());
+        List<File> manifestFiles;
+        if (manifestArg.isDirectory()) {
+            File[] found = manifestArg.listFiles(f -> f.isFile() && f.getName().endsWith(".yaml"));
+            manifestFiles = found == null ? Collections.emptyList() : Arrays.asList(found);
+            if (manifestFiles.isEmpty()) {
+                LOG.warn("No *.yaml files found in {}", manifestArg.getAbsolutePath());
+                return 0;
+            }
+        } else if (manifestArg.isFile()) {
+            manifestFiles = Collections.singletonList(manifestArg);
+        } else {
+            System.err.println("Manifest file or directory not found: " + manifestArg.getAbsolutePath());
             return EXIT_BAD_ARGS;
         }
 
+        try {
+            Files.createDirectories(outputDir);
+        } catch (IOException e) {
+            LOG.error("Failed to create output directory {}: {}", outputDir, e.getMessage(), e);
+            System.err.println("I/O error: " + e.getMessage());
+            return EXIT_IO_ERROR;
+        }
+
+        for (File manifestFile : manifestFiles) {
+            int code = generateOne(manifestFile, outputDir, pkgName);
+            if (code != 0) {
+                return code;
+            }
+        }
+
+        return 0;
+    }
+
+    private static int generateOne(File manifestFile, Path outputDir, String pkgName) {
         ManifestSpec spec;
         try {
             spec = new ManifestParser().parse(manifestFile);
@@ -121,12 +155,13 @@ public class ManifestCodegenCli {
             LOG.info("Generated {} in {}", connectorFile.typeSpec.name, outputDir);
             LOG.info("Generated {} in {}", taskFile.typeSpec.name, outputDir);
 
-            System.out.println("Generated:");
+            System.out.println("Generated from " + manifestFile.getName() + ":");
             System.out.println("  " + configFile.typeSpec.name + ".java");
             System.out.println("  " + connectorFile.typeSpec.name + ".java");
             System.out.println("  " + taskFile.typeSpec.name + ".java");
+            return 0;
         } catch (CodegenException e) {
-            LOG.error("Code generation failed: {}", e.getMessage(), e);
+            LOG.error("Code generation failed for {}: {}", manifestFile, e.getMessage(), e);
             System.err.println("Codegen error: " + e.getMessage());
             return EXIT_CODEGEN_ERROR;
         } catch (IOException e) {
@@ -134,7 +169,5 @@ public class ManifestCodegenCli {
             System.err.println("I/O error: " + e.getMessage());
             return EXIT_IO_ERROR;
         }
-
-        return 0;
     }
 }

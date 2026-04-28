@@ -25,6 +25,20 @@ application {
     mainClass = 'org.apache.kafka.connect.manifest.codegen.ManifestCodegenCli'
 }
 
+// ── Source set for generated connector classes ─────────────────────────────────
+// Drop a manifest into src/main/manifests/ and ./gradlew build will generate,
+// compile, and package the corresponding connector classes automatically.
+
+sourceSets {
+    generated {
+        java {
+            srcDir layout.buildDirectory.dir('generated-sources/connectors')
+        }
+    }
+}
+
+// ── Dependencies ──────────────────────────────────────────────────────────────
+
 dependencies {
     // YAML parsing
     implementation libs.jacksonDataformatYaml
@@ -44,7 +58,46 @@ dependencies {
     testImplementation libs.junitJupiter
     testImplementation libs.mockitoCore
     testRuntimeOnly runtimeTestLibs
+
+    // Generated connector sources need AbstractConfig/ConfigDef (clients), SourceConnector/SourceTask (connect:api),
+    // and Jackson (ObjectMapper used in poll() to parse HTTP responses)
+    generatedImplementation project(':clients')
+    generatedImplementation project(':connect:api')
+    generatedImplementation libs.slf4jApi
+    generatedImplementation libs.jacksonDatabind
 }
+
+// ── generateConnectors task ───────────────────────────────────────────────────
+
+tasks.register('generateConnectors', JavaExec) {
+    description = 'Generates Kafka Connect connector source files from manifests in src/main/manifests/'
+    group = 'build'
+
+    dependsOn compileJava   // generator classes must be compiled before we can invoke the CLI
+
+    def manifestsDir = file('src/main/manifests')
+    def outputDir = layout.buildDirectory.dir('generated-sources/connectors')
+
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'org.apache.kafka.connect.manifest.codegen.ManifestCodegenCli'
+    args = [manifestsDir.absolutePath, outputDir.get().asFile.absolutePath]
+
+    inputs.dir(manifestsDir).optional()
+    outputs.dir(outputDir)
+}
+
+compileGeneratedJava.dependsOn generateConnectors
+
+// Include generated connector classes in the main jar so they can be deployed as a connector plugin
+jar {
+    from sourceSets.generated.output
+}
+
+// Generated code is not subject to style or static-analysis checks
+checkstyleGenerated.enabled = false
+spotbugsGenerated.enabled = false
+
+// ── Checkstyle ────────────────────────────────────────────────────────────────
 
 checkstyle {
     configProperties = checkstyleConfigProperties("import-control.xml")

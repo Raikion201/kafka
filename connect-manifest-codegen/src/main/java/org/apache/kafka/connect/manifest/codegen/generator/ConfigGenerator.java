@@ -27,12 +27,12 @@ import com.squareup.javapoet.ParameterizedTypeName;
 import com.squareup.javapoet.TypeSpec;
 import com.squareup.javapoet.WildcardTypeName;
 
-import javax.lang.model.element.Modifier;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+
+import javax.lang.model.element.Modifier;
 
 /**
  * Generates {@code XxxConnectorConfig.java} from the {@code spec.connection_specification}
