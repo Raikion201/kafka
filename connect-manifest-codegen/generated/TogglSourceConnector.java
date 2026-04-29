@@ -7,10 +7,10 @@ import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.connect.connector.Task;
 import org.apache.kafka.connect.source.SourceConnector;
 
-public final class PivotalTrackerSourceConnector extends SourceConnector {
+public final class TogglSourceConnector extends SourceConnector {
   private Map<String, String> props;
 
-  private PivotalTrackerConnectorConfig config;
+  private TogglConnectorConfig config;
 
   @Override
   public String version() {
@@ -20,12 +20,12 @@ public final class PivotalTrackerSourceConnector extends SourceConnector {
   @Override
   public void start(Map<String, String> props) {
     this.props = props;
-    this.config = new PivotalTrackerConnectorConfig(props);
+    this.config = new TogglConnectorConfig(props);
   }
 
   @Override
   public Class<? extends Task> taskClass() {
-    return PivotalTrackerSourceTask.class;
+    return TogglSourceTask.class;
   }
 
   @Override
@@ -40,6 +40,6 @@ public final class PivotalTrackerSourceConnector extends SourceConnector {
 
   @Override
   public ConfigDef config() {
-    return PivotalTrackerConnectorConfig.config();
+    return TogglConnectorConfig.config();
   }
 }

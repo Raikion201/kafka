@@ -1,0 +1,55 @@
+version: 0.1.0
+
+type: DeclarativeSource
+
+description: >-
+  Toggl Track connector. Fetches time entries using HTTP Basic Auth.
+  The API token is the username; the literal string "api_token" is the password.
+  Free forever plan available at https://track.toggl.com
+
+check:
+  type: CheckStream
+  stream_names:
+    - time_entries
+
+streams:
+  - type: DeclarativeStream
+    name: time_entries
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: https://api.track.toggl.com/api/v9
+        path: /me/time_entries
+        http_method: GET
+        authenticator:
+          type: BasicHttpAuthenticator
+          username: "{{ config['api_token'] }}"
+          password: "{{ config['api_password'] }}"
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path: []
+
+spec:
+  type: Spec
+  connection_specification:
+    $schema: http://json-schema.org/draft-07/schema#
+    type: object
+    required:
+      - api_token
+      - api_password
+    properties:
+      api_token:
+        type: string
+        description: >-
+          Your Toggl Track API token. Find it under Profile Settings at
+          https://track.toggl.com/profile (scroll to "API Token", click reveal).
+        airbyte_secret: true
+      api_password:
+        type: string
+        description: >-
+          Toggl uses a fixed literal string as the Basic Auth password.
+          Always enter the exact value: api_token
+        airbyte_secret: false

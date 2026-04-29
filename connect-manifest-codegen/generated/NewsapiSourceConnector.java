@@ -7,10 +7,10 @@ import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.connect.connector.Task;
 import org.apache.kafka.connect.source.SourceConnector;
 
-public final class SendowlSourceConnector extends SourceConnector {
+public final class NewsapiSourceConnector extends SourceConnector {
   private Map<String, String> props;
 
-  private SendowlConnectorConfig config;
+  private NewsapiConnectorConfig config;
 
   @Override
   public String version() {
@@ -20,12 +20,12 @@ public final class SendowlSourceConnector extends SourceConnector {
   @Override
   public void start(Map<String, String> props) {
     this.props = props;
-    this.config = new SendowlConnectorConfig(props);
+    this.config = new NewsapiConnectorConfig(props);
   }
 
   @Override
   public Class<? extends Task> taskClass() {
-    return SendowlSourceTask.class;
+    return NewsapiSourceTask.class;
   }
 
   @Override
@@ -40,6 +40,6 @@ public final class SendowlSourceConnector extends SourceConnector {
 
   @Override
   public ConfigDef config() {
-    return SendowlConnectorConfig.config();
+    return NewsapiConnectorConfig.config();
   }
 }

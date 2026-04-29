@@ -85,8 +85,10 @@ public class CodegenIntegrationTest {
             Arguments.of("xkcd.yaml"),
             Arguments.of("zapier.yaml"),
             Arguments.of("gmail.yaml"),
-            Arguments.of("pivotal_tracker.yaml"),
-            Arguments.of("sendowl.yaml"),
+            // ApiKey header — free tier at newsapi.org/register
+            Arguments.of("newsapi.yaml"),
+            // BasicHttp — free forever at track.toggl.com
+            Arguments.of("toggl.yaml"),
             Arguments.of("illumina_basespace.yaml"),
             Arguments.of("box.yaml"),
             Arguments.of("assemblyai.yaml"),
@@ -213,17 +215,17 @@ public class CodegenIntegrationTest {
     }
 
     @Test
-    void pivotal_tracker_generatedTask_containsApiKeyHeader() throws Exception {
-        String taskSrc = generate("pivotal_tracker.yaml").task.toString();
-        assertTrue(taskSrc.contains("X-TrackerToken"),
-            "Pivotal Tracker ApiKey task must inject X-TrackerToken header");
+    void newsapi_generatedTask_containsApiKeyHeader() throws Exception {
+        String taskSrc = generate("newsapi.yaml").task.toString();
+        assertTrue(taskSrc.contains("X-Api-Key"),
+            "NewsAPI ApiKeyAuthenticator task must inject X-Api-Key header");
     }
 
     @Test
-    void sendowl_generatedTask_containsBasicAuthHeader() throws Exception {
-        String taskSrc = generate("sendowl.yaml").task.toString();
+    void toggl_generatedTask_containsBasicAuthHeader() throws Exception {
+        String taskSrc = generate("toggl.yaml").task.toString();
         assertTrue(taskSrc.contains("\"Basic \""),
-            "Sendowl BasicHttpAuthenticator task must set Authorization: Basic header");
+            "Toggl BasicHttpAuthenticator task must set Authorization: Basic header");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -231,12 +233,12 @@ public class CodegenIntegrationTest {
     // ══════════════════════════════════════════════════════════════════════════
 
     @Test
-    void sendowl_generatedTask_containsPageIncrementLoop() throws Exception {
-        String taskSrc = generate("sendowl.yaml").task.toString();
+    void newsapi_generatedTask_containsPageIncrementLoop() throws Exception {
+        String taskSrc = generate("newsapi.yaml").task.toString();
         assertTrue(taskSrc.contains("page++"),
-            "Sendowl PageIncrement task must increment page counter");
+            "NewsAPI PageIncrement task must increment page counter");
         assertTrue(taskSrc.contains("page="),
-            "Sendowl PageIncrement task must include page query param");
+            "NewsAPI PageIncrement task must include page query param");
     }
 
     @Test
