@@ -7,10 +7,10 @@ import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.connect.connector.Task;
 import org.apache.kafka.connect.source.SourceConnector;
 
-public final class ZapierSourceConnector extends SourceConnector {
+public final class IlluminaBasespaceSourceConnector extends SourceConnector {
   private Map<String, String> props;
 
-  private ZapierConnectorConfig config;
+  private IlluminaBasespaceConnectorConfig config;
 
   @Override
   public String version() {
@@ -20,12 +20,12 @@ public final class ZapierSourceConnector extends SourceConnector {
   @Override
   public void start(Map<String, String> props) {
     this.props = props;
-    this.config = new ZapierConnectorConfig(props);
+    this.config = new IlluminaBasespaceConnectorConfig(props);
   }
 
   @Override
   public Class<? extends Task> taskClass() {
-    return ZapierSourceTask.class;
+    return IlluminaBasespaceSourceTask.class;
   }
 
   @Override
@@ -40,6 +40,6 @@ public final class ZapierSourceConnector extends SourceConnector {
 
   @Override
   public ConfigDef config() {
-    return ZapierConnectorConfig.config();
+    return IlluminaBasespaceConnectorConfig.config();
   }
 }
