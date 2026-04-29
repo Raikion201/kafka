@@ -1,0 +1,58 @@
+version: 0.1.0
+type: DeclarativeSource
+
+streams:
+  - type: DeclarativeStream
+    name: appointments
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: https://acuityscheduling.com/api/v1
+        path: appointments
+        http_method: GET
+        authenticator:
+          type: BasicHttpAuthenticator
+          username: "{{ config['username'] }}"
+          password: "{{ config['password'] }}"
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path: []
+    incremental_sync:
+      type: DatetimeBasedCursor
+      cursor_field: datetime
+      start_datetime:
+        type: MinMaxDatetime
+        datetime: "{{ config['start_date'] }}"
+        datetime_format: "%Y-%m-%dT%H:%M:%SZ"
+      start_time_option:
+        type: RequestOption
+        field_name: minDate
+        inject_into: request_parameter
+      end_time_option:
+        type: RequestOption
+        field_name: maxDate
+        inject_into: request_parameter
+
+spec:
+  type: Spec
+  connection_specification:
+    $schema: http://json-schema.org/draft-07/schema#
+    type: object
+    required:
+      - username
+      - start_date
+    properties:
+      username:
+        type: string
+        title: Username
+      password:
+        type: string
+        title: Password
+        airbyte_secret: true
+      start_date:
+        type: string
+        title: Start Date
+        format: date-time
