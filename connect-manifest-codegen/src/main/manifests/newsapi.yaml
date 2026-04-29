@@ -20,10 +20,8 @@ streams:
       requester:
         type: HttpRequester
         url_base: https://newsapi.org/v2
-        path: /top-headlines
+        path: /top-headlines?country=us
         http_method: GET
-        request_parameters:
-          country: us
         authenticator:
           type: ApiKeyAuthenticator
           api_token: "{{ config['api_key'] }}"

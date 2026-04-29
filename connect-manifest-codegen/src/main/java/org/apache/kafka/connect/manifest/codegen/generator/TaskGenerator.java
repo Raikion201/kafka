@@ -61,9 +61,13 @@ import javax.lang.model.element.Modifier;
  */
 public class TaskGenerator {
 
-    /** Matches Airbyte config-interpolation templates like {@code {{ config['key'] }}} or {@code {{ config["key"] }}}. */
+    /**
+     * Matches Airbyte config-interpolation templates like {@code {{ config['key'] }}},
+     * {@code {{ config["key"] }}}, and Jinja2 default-value forms like
+     * {@code {{ config["key"] or 1 }}}.
+     */
     private static final Pattern CONFIG_TEMPLATE = Pattern.compile(
-        "\\{\\{\\s*config\\[['\"]([^'\"]+)['\"]\\]\\s*\\}\\}");
+        "\\{\\{\\s*config\\[['\"]([^'\"]+)['\"]\\](?:\\s+or\\s+[^}]+)?\\s*\\}\\}");
 
     private static final ClassName SOURCE_TASK =
         ClassName.get("org.apache.kafka.connect.source", "SourceTask");
@@ -142,9 +146,19 @@ public class TaskGenerator {
         );
 
         typeBuilder.addMethod(buildStart(mapStringString, configClass, auth));
-        typeBuilder.addMethod(buildPollAll(streams, listOfSourceRecord));
 
-        for (StreamSpec stream : streams) {
+        // Skip sub-streams that require parent-stream partitioning (stream_partition templates)
+        // as those require iteration context that standalone codegen cannot provide.
+        List<StreamSpec> runnableStreams = streams.stream()
+            .filter(s -> {
+                String p = s.getRetriever().getRequester().getPath();
+                return p == null || !p.contains("stream_partition");
+            })
+            .collect(java.util.stream.Collectors.toList());
+
+        typeBuilder.addMethod(buildPollAll(runnableStreams, listOfSourceRecord));
+
+        for (StreamSpec stream : runnableStreams) {
             typeBuilder.addMethod(buildStreamPollMethod(stream, configClass, auth, listOfSourceRecord));
         }
 
@@ -287,11 +301,13 @@ public class TaskGenerator {
         body.beginControlFlow("try");
         buildRequestStatement(body, auth, paginator);
         body.add(buildFetchBlock(paginator));
+        // Cursor state must be extracted from the raw response BEFORE field-path navigation
+        // replaces json with the inner records array.
+        if (hasPagination && paginator.isCursor()) {
+            body.add(buildCursorStateUpdate(paginator));
+        }
         body.add(buildFieldPathNav(fieldPath, hasPagination));
         body.add(buildNormalizeAndCollect(hasPagination, paginator));
-        if (hasPagination) {
-            body.add(buildPaginationStateUpdate(paginator));
-        }
         body.nextControlFlow("catch ($T e)", InterruptedException.class);
         body.addStatement("$T.currentThread().interrupt()", Thread.class);
         body.addStatement(
@@ -316,22 +332,38 @@ public class TaskGenerator {
 
     private CodeBlock buildPaginationInit(PaginatorSpec paginator) {
         CodeBlock.Builder b = CodeBlock.builder();
-        b.addStatement("$T<$T> allRecords = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
+        b.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
+        // Read stored offset so restarts resume from the last committed position.
+        b.addStatement(
+            "$T<$T, $T> _stored = context.offsetStorageReader().offset($T.of($S, streamName))",
+            Map.class, String.class, Object.class, Map.class, "stream");
         if (paginator.isCursor()) {
             b.addStatement("$T nextCursor = null", String.class);
+            b.beginControlFlow("if (_stored != null && _stored.get($S) instanceof $T _c && !_c.isEmpty())",
+                "cursor", String.class);
+            b.addStatement("nextCursor = _c");
+            b.endControlFlow();
             if (isRequestPath(paginator)) {
                 b.addStatement("$T url = null", String.class);
             }
-            b.beginControlFlow("do");
+            // No loop — framework calls poll() in a loop; each call fetches one page.
         } else if (paginator.isPageIncrement()) {
             int start = paginator.getPaginationStrategy() != null
                 ? paginator.getPaginationStrategy().getStartFromPage() : 1;
-            b.addStatement("int page = $L", start);
-            b.beginControlFlow("while (true)");
+            b.addStatement("final int startPage = $L", start);
+            b.addStatement("int page = startPage");
+            b.beginControlFlow(
+                "if (_stored != null && _stored.get($S) instanceof $T _p)", "page", Number.class);
+            b.addStatement("page = _p.intValue()");
+            b.endControlFlow();
+            b.addStatement("final int pageLimit = $L", paginator.pageSize());
         } else if (paginator.isOffsetIncrement()) {
             b.addStatement("int offset = 0");
+            b.beginControlFlow(
+                "if (_stored != null && _stored.get($S) instanceof $T _o)", "offset", Number.class);
+            b.addStatement("offset = _o.intValue()");
+            b.endControlFlow();
             b.addStatement("final int pageLimit = $L", paginator.pageSize());
-            b.beginControlFlow("while (true)");
         }
         return b.build();
     }
@@ -353,11 +385,25 @@ public class TaskGenerator {
         CodeBlock.Builder b = CodeBlock.builder();
 
         if (isRequestPath(paginator)) {
-            b.addStatement("url = (nextCursor != null) ? nextCursor : $S", baseUrl + path);
+            String initialUrl = baseUrl + path;
+            if (!CONFIG_TEMPLATE.matcher(initialUrl).find()) {
+                b.addStatement("url = (nextCursor != null) ? nextCursor : $S", initialUrl);
+            } else {
+                StringBuilder fmt = new StringBuilder("url = (nextCursor != null) ? nextCursor : (");
+                List<Object> fmtArgs = new ArrayList<>();
+                boolean needsPlus = appendUrlSegment(fmt, fmtArgs, baseUrl, false);
+                appendUrlSegment(fmt, fmtArgs, path, needsPlus);
+                fmt.append(")");
+                b.addStatement(fmt.toString(), fmtArgs.toArray());
+            }
             return b.build();
         }
 
         addInitialUrlStatement(b, baseUrl, path);
+
+        // Track whether the URL already has a '?' — paths like "/top-headlines?country=us"
+        // already contain a query string, so subsequent params must use '&' not '?'.
+        boolean pathHasQuery = (baseUrl + path).contains("?");
 
         List<String> paramKeys = new ArrayList<>();
         for (Map.Entry<String, String> entry : requestParams.entrySet()) {
@@ -365,7 +411,8 @@ public class TaskGenerator {
             if (m.matches()) {
                 paramKeys.add(entry.getKey());
                 String getter = "get" + ManifestSpec.toClassName(m.group(1));
-                String sep = paramKeys.size() == 1 ? "?" : "&";
+                boolean firstOfGroup = paramKeys.size() == 1;
+                String sep = (pathHasQuery || !firstOfGroup) ? "&" : "?";
                 b.addStatement("urlBuilder.append($S + $T.encode(config.$L(), $T.UTF_8))",
                     sep + entry.getKey() + "=",
                     ClassName.get("java.net", "URLEncoder"), getter,
@@ -373,7 +420,7 @@ public class TaskGenerator {
             }
         }
 
-        boolean hasParams = !paramKeys.isEmpty();
+        boolean hasParams = pathHasQuery || !paramKeys.isEmpty();
 
         // ApiKey injected as query parameter (inject_into: request_parameter)
         if (isApiKeyQueryParam(auth)) {
@@ -396,33 +443,54 @@ public class TaskGenerator {
 
     /**
      * Initializes {@code urlBuilder} for the stream poll method.
-     * When the path contains a config template (e.g. {@code {{ config['comic_number'] }}/info.0.json}),
+     * When the base URL or path contains a config template (e.g. {@code {{ config['host'] }}}),
      * the initializer uses runtime string concatenation so the actual config value is substituted.
      */
     private void addInitialUrlStatement(CodeBlock.Builder b, String baseUrl, String path) {
-        Matcher m = CONFIG_TEMPLATE.matcher(path);
-        if (!m.find()) {
+        boolean baseHasTemplate = CONFIG_TEMPLATE.matcher(baseUrl).find();
+        boolean pathHasTemplate = CONFIG_TEMPLATE.matcher(path).find();
+
+        if (!baseHasTemplate && !pathHasTemplate) {
             b.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class,
                 baseUrl + path);
             return;
         }
-        // Path has config templates — build a concatenation expression at code-gen time.
-        // E.g. path="{{ config['comic_number'] }}/info.0.json" baseUrl="https://xkcd.com"
-        // → new StringBuilder("https://xkcd.com" + config.getComicNumber() + "/info.0.json")
+
+        // Either base or path (or both) have config templates — build concatenation.
+        // E.g. baseUrl="{{ config['host'] }}", path="/api/rest/v1/products"
+        // → new StringBuilder(config.getHost() + "/api/rest/v1/products")
         StringBuilder fmt = new StringBuilder("$T urlBuilder = new $T(");
         List<Object> fmtArgs = new ArrayList<>();
         fmtArgs.add(StringBuilder.class);
         fmtArgs.add(StringBuilder.class);
-        boolean needsPlus = false;
-        if (!baseUrl.isEmpty()) {
+        boolean needsPlus = appendUrlSegment(fmt, fmtArgs, baseUrl, false);
+        appendUrlSegment(fmt, fmtArgs, path, needsPlus);
+        fmt.append(")");
+        b.addStatement(fmt.toString(), fmtArgs.toArray());
+    }
+
+    /**
+     * Appends one URL segment (base or path) to the format/args buffers used by
+     * {@link #addInitialUrlStatement}. Config-template sub-expressions are expanded
+     * to {@code config.getXxx()} calls; literal parts are emitted as string literals.
+     *
+     * @return the new value of {@code needsPlus} after appending this segment
+     */
+    private boolean appendUrlSegment(
+        StringBuilder fmt, List<Object> fmtArgs, String segment, boolean needsPlus
+    ) {
+        if (segment.isEmpty()) return needsPlus;
+        Matcher m = CONFIG_TEMPLATE.matcher(segment);
+        if (!m.find()) {
+            if (needsPlus) fmt.append(" + ");
             fmt.append("$S");
-            fmtArgs.add(baseUrl);
-            needsPlus = true;
+            fmtArgs.add(segment);
+            return true;
         }
-        int pos = 0;
         m.reset();
+        int pos = 0;
         while (m.find()) {
-            String lit = path.substring(pos, m.start());
+            String lit = segment.substring(pos, m.start());
             if (!lit.isEmpty()) {
                 if (needsPlus) fmt.append(" + ");
                 fmt.append("$S");
@@ -435,14 +503,14 @@ public class TaskGenerator {
             needsPlus = true;
             pos = m.end();
         }
-        String tail = path.substring(pos);
+        String tail = segment.substring(pos);
         if (!tail.isEmpty()) {
             if (needsPlus) fmt.append(" + ");
             fmt.append("$S");
             fmtArgs.add(tail);
+            needsPlus = true;
         }
-        fmt.append(")");
-        b.addStatement(fmt.toString(), fmtArgs.toArray());
+        return needsPlus;
     }
 
     private boolean isApiKeyQueryParam(AuthenticatorSpec auth) {
@@ -517,11 +585,11 @@ public class TaskGenerator {
         b.addStatement("$T current = json", Object.class);
         for (String segment : fieldPath) {
             b.beginControlFlow("if (!(current instanceof $T))", Map.class);
-            b.addStatement(hasPagination ? "return allRecords" : "return $T.emptyList()", Collections.class);
+            b.addStatement(hasPagination ? "return result" : "return $T.emptyList()", Collections.class);
             b.endControlFlow();
             b.addStatement("current = (($T<?, ?>) current).get($S)", Map.class, segment);
             b.beginControlFlow("if (current == null)");
-            b.addStatement(hasPagination ? "return allRecords" : "return $T.emptyList()", Collections.class);
+            b.addStatement(hasPagination ? "return result" : "return $T.emptyList()", Collections.class);
             b.endControlFlow();
         }
         b.addStatement("json = current");
@@ -537,24 +605,24 @@ public class TaskGenerator {
         b.addStatement("records = $T.singletonList(json)", Collections.class);
         b.endControlFlow();
 
-        CodeBlock positionMap = buildPositionMapCode(paginator);
+        // Compute the next position to store in each SourceRecord's offset map.
+        // On the last page (incomplete batch), reset to the start so next cycle re-reads.
+        // Cursor pagination: nextCursor was already extracted by buildCursorStateUpdate.
         if (hasPagination) {
-            b.beginControlFlow("for ($T record : records)", Object.class);
-            b.addStatement("$T value = MAPPER.writeValueAsString(record)", String.class);
-            b.addStatement(
-                "allRecords.add(new $T($T.of(\"stream\", streamName), $L,"
-                    + " streamName, $T.STRING_SCHEMA, value))",
-                SOURCE_RECORD, Map.class, positionMap, SCHEMA);
-            b.endControlFlow();
-        } else {
-            b.beginControlFlow("for ($T record : records)", Object.class);
-            b.addStatement("$T value = MAPPER.writeValueAsString(record)", String.class);
-            b.addStatement(
-                "result.add(new $T($T.of(\"stream\", streamName), $L,"
-                    + " streamName, $T.STRING_SCHEMA, value))",
-                SOURCE_RECORD, Map.class, positionMap, SCHEMA);
-            b.endControlFlow();
+            if (paginator.isPageIncrement()) {
+                b.addStatement("int nextPage = records.size() < pageLimit ? startPage : page + 1");
+            } else if (paginator.isOffsetIncrement()) {
+                b.addStatement("int nextOffset = records.size() < pageLimit ? 0 : offset + pageLimit");
+            }
         }
+
+        CodeBlock positionMap = buildPositionMapCode(paginator);
+        b.beginControlFlow("for ($T record : records)", Object.class);
+        b.addStatement("$T value = MAPPER.writeValueAsString(record)", String.class);
+        b.addStatement(
+            "result.add(new $T($T.of(\"stream\", streamName), $L, streamName, $T.STRING_SCHEMA, value))",
+            SOURCE_RECORD, Map.class, positionMap, SCHEMA);
+        b.endControlFlow();
         return b.build();
     }
 
@@ -562,77 +630,64 @@ public class TaskGenerator {
         if (paginator != null && paginator.isCursor()) {
             return CodeBlock.of("$T.of(\"cursor\", nextCursor != null ? nextCursor : \"\")", Map.class);
         } else if (paginator != null && paginator.isPageIncrement()) {
-            return CodeBlock.of("$T.of(\"page\", page)", Map.class);
+            return CodeBlock.of("$T.of(\"page\", nextPage)", Map.class);
         } else if (paginator != null && paginator.isOffsetIncrement()) {
-            return CodeBlock.of("$T.of(\"offset\", offset)", Map.class);
+            return CodeBlock.of("$T.of(\"offset\", nextOffset)", Map.class);
         }
         return CodeBlock.of("$T.of(\"position\", 0)", Map.class);
     }
 
-    private CodeBlock buildPaginationStateUpdate(PaginatorSpec paginator) {
+    /**
+     * Extracts the next cursor from the raw response JSON (before field-path navigation).
+     * Must be called immediately after the HTTP response is parsed so that {@code json}
+     * still points to the full response object, not the navigated records array.
+     */
+    private CodeBlock buildCursorStateUpdate(PaginatorSpec paginator) {
         CodeBlock.Builder b = CodeBlock.builder();
-        if (paginator.isCursor()) {
-            b.addStatement("nextCursor = null");
-            if (isRequestPath(paginator)) {
-                // Extract next URL from JSON path defined by cursor_value Jinja2 expression
-                List<String> jsonPath = paginator.getPaginationStrategy() != null
-                    ? paginator.getPaginationStrategy().parseCursorJsonPath()
-                    : Collections.emptyList();
-                if (!jsonPath.isEmpty()) {
-                    b.addStatement("$T cursorStep = ($T) json", Object.class, Object.class);
-                    for (String segment : jsonPath) {
-                        b.beginControlFlow("if (cursorStep instanceof $T)", Map.class);
-                        b.addStatement("cursorStep = (($T<?, ?>) cursorStep).get($S)", Map.class, segment);
-                        b.nextControlFlow("else");
-                        b.addStatement("cursorStep = null");
-                        b.endControlFlow();
-                    }
-                    b.addStatement("nextCursor = cursorStep != null ? $T.valueOf(cursorStep) : null", String.class);
-                }
-            } else {
-                List<String> cursorPath = paginator.getPaginationStrategy() != null
-                    ? paginator.getPaginationStrategy().parseCursorJsonPath()
-                    : Collections.emptyList();
-                if (!cursorPath.isEmpty()) {
-                    b.addStatement("$T cursorStep = ($T) json", Object.class, Object.class);
-                    for (String segment : cursorPath) {
-                        b.beginControlFlow("if (cursorStep instanceof $T)", Map.class);
-                        b.addStatement("cursorStep = (($T<?, ?>) cursorStep).get($S)", Map.class, segment);
-                        b.nextControlFlow("else");
-                        b.addStatement("cursorStep = null");
-                        b.endControlFlow();
-                    }
-                    b.addStatement("nextCursor = cursorStep != null ? $T.valueOf(cursorStep) : null", String.class);
-                } else {
-                    b.beginControlFlow("if (json instanceof $T)", Map.class);
-                    b.addStatement("$T<?, ?> respMap = ($T<?, ?>) json", Map.class, Map.class);
-                    b.addStatement("$T nextToken = respMap.get(\"next_page_token\")", Object.class);
-                    b.addStatement("nextCursor = nextToken != null ? $T.valueOf(nextToken) : null", String.class);
+        b.addStatement("nextCursor = null");
+        if (isRequestPath(paginator)) {
+            List<String> jsonPath = paginator.getPaginationStrategy() != null
+                ? paginator.getPaginationStrategy().parseCursorJsonPath()
+                : Collections.emptyList();
+            if (!jsonPath.isEmpty()) {
+                b.addStatement("$T cursorStep = ($T) json", Object.class, Object.class);
+                for (String segment : jsonPath) {
+                    b.beginControlFlow("if (cursorStep instanceof $T)", Map.class);
+                    b.addStatement("cursorStep = (($T<?, ?>) cursorStep).get($S)", Map.class, segment);
+                    b.nextControlFlow("else");
+                    b.addStatement("cursorStep = null");
                     b.endControlFlow();
                 }
+                b.addStatement("nextCursor = cursorStep != null ? $T.valueOf(cursorStep) : null", String.class);
             }
-        } else if (paginator.isPageIncrement()) {
-            b.beginControlFlow("if (records.isEmpty())");
-            b.addStatement("break");
-            b.endControlFlow();
-            b.addStatement("page++");
-        } else if (paginator.isOffsetIncrement()) {
-            b.beginControlFlow("if (records.isEmpty())");
-            b.addStatement("break");
-            b.endControlFlow();
-            b.addStatement("offset += pageLimit");
+        } else {
+            List<String> cursorPath = paginator.getPaginationStrategy() != null
+                ? paginator.getPaginationStrategy().parseCursorJsonPath()
+                : Collections.emptyList();
+            if (!cursorPath.isEmpty()) {
+                b.addStatement("$T cursorStep = ($T) json", Object.class, Object.class);
+                for (String segment : cursorPath) {
+                    b.beginControlFlow("if (cursorStep instanceof $T)", Map.class);
+                    b.addStatement("cursorStep = (($T<?, ?>) cursorStep).get($S)", Map.class, segment);
+                    b.nextControlFlow("else");
+                    b.addStatement("cursorStep = null");
+                    b.endControlFlow();
+                }
+                b.addStatement("nextCursor = cursorStep != null ? $T.valueOf(cursorStep) : null", String.class);
+            } else {
+                b.beginControlFlow("if (json instanceof $T)", Map.class);
+                b.addStatement("$T<?, ?> respMap = ($T<?, ?>) json", Map.class, Map.class);
+                b.addStatement("$T nextToken = respMap.get(\"next_page_token\")", Object.class);
+                b.addStatement("nextCursor = nextToken != null ? $T.valueOf(nextToken) : null", String.class);
+                b.endControlFlow();
+            }
         }
         return b.build();
     }
 
     private CodeBlock buildPaginationLoopClose(PaginatorSpec paginator) {
         CodeBlock.Builder b = CodeBlock.builder();
-        if (paginator.isCursor()) {
-            b.endControlFlow("while (nextCursor != null)");
-        } else {
-            b.endControlFlow();
-        }
-        b.addStatement("return allRecords");
+        b.addStatement("return result");
         return b.build();
     }
 
@@ -1170,7 +1225,13 @@ public class TaskGenerator {
         return MethodSpec.methodBuilder("stop")
             .addAnnotation(Override.class)
             .addModifiers(Modifier.PUBLIC)
-            // HttpClient.close() was added in Java 21; generated code targets Java 17, so just null the reference.
+            // HttpClient.close() requires Java 21+; release threads via shutdown workaround.
+            .beginControlFlow("if (httpClient instanceof $T ac)", AutoCloseable.class)
+            .beginControlFlow("try")
+            .addStatement("ac.close()")
+            .nextControlFlow("catch ($T ignored)", Exception.class)
+            .endControlFlow()
+            .endControlFlow()
             .addStatement("httpClient = null")
             .build();
     }

@@ -50,7 +50,7 @@ public final class MetabaseSourceTask extends SourceTask {
   private List<SourceRecord> pollCards() throws InterruptedException {
     final String streamName = "cards";
     List<SourceRecord> result = new ArrayList<>();
-    StringBuilder urlBuilder = new StringBuilder("{{ config['instance_api_url'] }}/card");
+    StringBuilder urlBuilder = new StringBuilder(config.getInstanceApiUrl() + "/" + "card");
     try {
       HttpRequest request = HttpRequest.newBuilder()
                   .uri(URI.create(urlBuilder.toString()))
@@ -113,6 +113,12 @@ public final class MetabaseSourceTask extends SourceTask {
 
   @Override
   public void stop() {
+    if (httpClient instanceof AutoCloseable ac) {
+      try {
+        ac.close();
+      } catch (Exception ignored) {
+      }
+    }
     httpClient = null;
   }
 }

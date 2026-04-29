@@ -163,12 +163,12 @@ public class CodegenIntegrationTest {
     }
 
     @Test
-    void xkcd_generatedTask_containsCursorLoop() throws Exception {
+    void xkcd_generatedTask_containsCursorPagination() throws Exception {
         String taskSrc = generate("xkcd.yaml").task.toString();
-        assertTrue(taskSrc.contains("do {") || taskSrc.contains("do{"),
-            "xkcd uses CursorPagination — task must contain a do-while loop");
-        assertTrue(taskSrc.contains("while (nextCursor"),
-            "xkcd cursor loop must check nextCursor");
+        assertTrue(taskSrc.contains("nextCursor"),
+            "xkcd uses CursorPagination — task must maintain nextCursor variable");
+        assertTrue(taskSrc.contains("\"cursor\""),
+            "xkcd cursor must be stored in offset map under key 'cursor'");
     }
 
     // ── zapier: required field, request_parameters from config ────────────────
@@ -235,21 +235,25 @@ public class CodegenIntegrationTest {
     // ══════════════════════════════════════════════════════════════════════════
 
     @Test
-    void newsapi_generatedTask_containsPageIncrementLoop() throws Exception {
+    void newsapi_generatedTask_containsPageIncrementPagination() throws Exception {
         String taskSrc = generate("newsapi.yaml").task.toString();
-        assertTrue(taskSrc.contains("page++"),
-            "NewsAPI PageIncrement task must increment page counter");
+        assertTrue(taskSrc.contains("nextPage"),
+            "NewsAPI PageIncrement task must compute nextPage for next poll() call");
+        assertTrue(taskSrc.contains("page + 1"),
+            "NewsAPI PageIncrement task must advance page by 1");
         assertTrue(taskSrc.contains("page="),
             "NewsAPI PageIncrement task must include page query param");
     }
 
     @Test
-    void illumina_basespace_generatedTask_containsOffsetIncrementLoop() throws Exception {
+    void illumina_basespace_generatedTask_containsOffsetIncrementPagination() throws Exception {
         String taskSrc = generate("illumina_basespace.yaml").task.toString();
-        assertTrue(taskSrc.contains("offset +=") || taskSrc.contains("offset+="),
-            "Illumina Basespace OffsetIncrement task must increment offset");
-        assertTrue(taskSrc.contains("Offset="),
-            "Illumina Basespace OffsetIncrement task must include Offset query param");
+        assertTrue(taskSrc.contains("nextOffset"),
+            "Illumina Basespace OffsetIncrement task must compute nextOffset for next poll() call");
+        assertTrue(taskSrc.contains("offset + pageLimit"),
+            "Illumina Basespace OffsetIncrement task must advance offset by pageLimit");
+        assertTrue(taskSrc.contains("offset=") || taskSrc.contains("Offset="),
+            "Illumina Basespace OffsetIncrement task must include offset query param");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -370,10 +374,8 @@ public class CodegenIntegrationTest {
         String taskSrc = generate("rickandmorty.yaml").task.toString();
         assertTrue(taskSrc.contains("nextCursor"),
             "Rick & Morty RequestPath cursor task must maintain nextCursor variable");
-        assertTrue(taskSrc.contains("do {") || taskSrc.contains("do{"),
-            "Rick & Morty cursor task must use a do-while loop");
-        assertTrue(taskSrc.contains("while (nextCursor"),
-            "Rick & Morty cursor loop must check nextCursor");
+        assertTrue(taskSrc.contains("\"cursor\""),
+            "Rick & Morty cursor must be stored in offset map under key 'cursor'");
     }
 
     @Test
@@ -386,10 +388,12 @@ public class CodegenIntegrationTest {
     }
 
     @Test
-    void pokeapi_generatedTask_containsOffsetIncrementLoop() throws Exception {
+    void pokeapi_generatedTask_containsOffsetIncrementPagination() throws Exception {
         String taskSrc = generate("pokeapi.yaml").task.toString();
-        assertTrue(taskSrc.contains("offset +=") || taskSrc.contains("offset+="),
-            "PokéAPI OffsetIncrement task must increment offset");
+        assertTrue(taskSrc.contains("nextOffset"),
+            "PokéAPI OffsetIncrement task must compute nextOffset for next poll() call");
+        assertTrue(taskSrc.contains("offset + pageLimit"),
+            "PokéAPI OffsetIncrement task must advance offset by pageLimit");
         assertTrue(taskSrc.contains("offset="),
             "PokéAPI OffsetIncrement task must include offset query param");
         assertTrue(taskSrc.contains("limit="),
@@ -397,10 +401,12 @@ public class CodegenIntegrationTest {
     }
 
     @Test
-    void jsonplaceholder_generatedTask_containsPageIncrementLoop() throws Exception {
+    void jsonplaceholder_generatedTask_containsPageIncrementPagination() throws Exception {
         String taskSrc = generate("jsonplaceholder.yaml").task.toString();
-        assertTrue(taskSrc.contains("page++"),
-            "JSONPlaceholder PageIncrement task must increment page counter");
+        assertTrue(taskSrc.contains("nextPage"),
+            "JSONPlaceholder PageIncrement task must compute nextPage for next poll() call");
+        assertTrue(taskSrc.contains("page + 1"),
+            "JSONPlaceholder PageIncrement task must advance page by 1");
         assertTrue(taskSrc.contains("_page="),
             "JSONPlaceholder PageIncrement task must include _page query param");
         assertTrue(taskSrc.contains("_limit="),
@@ -408,10 +414,12 @@ public class CodegenIntegrationTest {
     }
 
     @Test
-    void jsonplaceholder_generatedTask_breaksOnEmptyResults() throws Exception {
+    void jsonplaceholder_generatedTask_resetsOnLastPage() throws Exception {
         String taskSrc = generate("jsonplaceholder.yaml").task.toString();
-        assertTrue(taskSrc.contains("records.isEmpty()"),
-            "JSONPlaceholder PageIncrement task must break on empty records");
+        assertTrue(taskSrc.contains("records.size() < pageLimit"),
+            "JSONPlaceholder PageIncrement task must detect last page via incomplete batch");
+        assertTrue(taskSrc.contains("startPage"),
+            "JSONPlaceholder PageIncrement task must reset to startPage after last page");
     }
 
     // ══════════════════════════════════════════════════════════════════════════

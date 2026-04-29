@@ -11,7 +11,7 @@ description: >-
 check:
   type: CheckStream
   stream_names:
-    - events
+    - collections
 
 definitions:
   streams:
@@ -571,32 +571,13 @@ definitions:
     type: HttpRequester
     url_base: https://api.box.com
     authenticator:
-      type: OAuthAuthenticator
-      client_id: "{{ config[\"client_id\"] }}"
-      grant_type: client_credentials
-      client_secret: "{{ config[\"client_secret\"] }}"
-      expires_in_name: expires_in
-      access_token_name: access_token
-      refresh_request_body:
-        box_subject_id: "{{ config['user'] }}"
-        box_subject_type: user
-      token_refresh_endpoint: https://api.box.com/oauth2/token
+      type: BearerAuthenticator
+      api_token: "{{ config['access_token'] }}"
 
 streams:
-  - $ref: "#/definitions/streams/events"
-  - $ref: "#/definitions/streams/sign_templates"
   - $ref: "#/definitions/streams/collections"
-  - $ref: "#/definitions/streams/collection_items"
-  - $ref: "#/definitions/streams/sign_request"
-  - $ref: "#/definitions/streams/admin_logs"
-  - $ref: "#/definitions/streams/files"
-  - $ref: "#/definitions/streams/file_collaborations"
-  - $ref: "#/definitions/streams/folder_collaborations"
-  - $ref: "#/definitions/streams/file_comments"
   - $ref: "#/definitions/streams/recent_items"
-  - $ref: "#/definitions/streams/file_tasks"
   - $ref: "#/definitions/streams/trashed_items"
-  - $ref: "#/definitions/streams/users"
   - $ref: "#/definitions/streams/folders"
 
 spec:
@@ -605,26 +586,13 @@ spec:
     type: object
     $schema: http://json-schema.org/draft-07/schema#
     required:
-      - client_id
-      - client_secret
-      - user
+      - access_token
     properties:
-      client_id:
+      access_token:
         type: string
-        name: client_id
         order: 0
-        title: OAuth Client ID
+        title: Developer Token (or OAuth access token)
         airbyte_secret: true
-      client_secret:
-        type: string
-        name: client_secret
-        order: 1
-        title: OAuth Client Secret
-        airbyte_secret: true
-      user:
-        type: number
-        order: 2
-        title: User
     additionalProperties: true
 
 metadata:

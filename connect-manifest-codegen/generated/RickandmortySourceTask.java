@@ -41,61 +41,63 @@ public final class RickandmortySourceTask extends SourceTask {
 
   private List<SourceRecord> pollCharacters() throws InterruptedException {
     final String streamName = "characters";
-    List<SourceRecord> allRecords = new ArrayList<>();
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
     String nextCursor = null;
+    if (_stored != null && _stored.get("cursor") instanceof String _c && !_c.isEmpty()) {
+      nextCursor = _c;
+    }
     String url = null;
-    do {
-      url = (nextCursor != null) ? nextCursor : "https://rickandmortyapi.com/api/character";
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + url);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("results");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("cursor", nextCursor != null ? nextCursor : ""), streamName, Schema.STRING_SCHEMA, value));
-        }
-        nextCursor = null;
-        Object cursorStep = (Object) json;
-        if (cursorStep instanceof Map) {
-          cursorStep = ((Map<?, ?>) cursorStep).get("info");
-        } else {
-          cursorStep = null;
-        }
-        if (cursorStep instanceof Map) {
-          cursorStep = ((Map<?, ?>) cursorStep).get("next");
-        } else {
-          cursorStep = null;
-        }
-        nextCursor = cursorStep != null ? String.valueOf(cursorStep) : null;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
+    url = (nextCursor != null) ? nextCursor : "https://rickandmortyapi.com/api/character";
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(url))
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + url);
       }
-    } while (nextCursor != null);
-    return allRecords;
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      nextCursor = null;
+      Object cursorStep = (Object) json;
+      if (cursorStep instanceof Map) {
+        cursorStep = ((Map<?, ?>) cursorStep).get("info");
+      } else {
+        cursorStep = null;
+      }
+      if (cursorStep instanceof Map) {
+        cursorStep = ((Map<?, ?>) cursorStep).get("next");
+      } else {
+        cursorStep = null;
+      }
+      nextCursor = cursorStep != null ? String.valueOf(cursorStep) : null;
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("results");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("cursor", nextCursor != null ? nextCursor : ""), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private HttpResponse<String> sendWithRetry(HttpRequest request) throws Exception {
@@ -113,6 +115,12 @@ public final class RickandmortySourceTask extends SourceTask {
 
   @Override
   public void stop() {
+    if (httpClient instanceof AutoCloseable ac) {
+      try {
+        ac.close();
+      } catch (Exception ignored) {
+      }
+    }
     httpClient = null;
   }
 }

@@ -524,9 +524,11 @@
       <allow pkg="org.apache.kafka.connect.manifest" />
       <allow pkg="org.apache.kafka.common.utils" />
       <allow pkg="org.apache.kafka.connect.source" />
+      <allow pkg="org.apache.kafka.connect.storage" />
       <allow pkg="org.apache.kafka.connect.data" />
       <allow pkg="org.apache.kafka.connect.errors" />
       <allow pkg="org.apache.kafka.connect.connector" />
+      <allow pkg="org.apache.kafka.common.metrics" />
       <allow pkg="org.apache.kafka.common.config" />
       <allow pkg="com.fasterxml.jackson" />
       <allow pkg="com.squareup.javapoet" />

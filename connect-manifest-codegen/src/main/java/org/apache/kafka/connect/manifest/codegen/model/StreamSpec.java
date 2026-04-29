@@ -31,6 +31,10 @@ public class StreamSpec {
     private String type;
     private String name;
 
+    /** Holds the raw {@code $ref} value when a stream entry is a reference, e.g. {@code "#/definitions/streams/foo"}. */
+    @JsonProperty("$ref")
+    private String ref;
+
     @JsonProperty("primary_key")
     private List<String> primaryKey = Collections.emptyList();
 
@@ -47,12 +51,31 @@ public class StreamSpec {
         this.type = type;
     }
 
+    public String getRef() {
+        return ref;
+    }
+
+    public void setRef(String ref) {
+        this.ref = ref;
+    }
+
+    /**
+     * Extracts the stream name from a {@code $ref} like {@code "#/definitions/streams/foo"}.
+     * Returns {@code null} if this entry is not a ref or the ref path is unrecognised.
+     */
+    public String refStreamName() {
+        if (ref == null) return null;
+        // Format: "#/definitions/streams/<name>"
+        int idx = ref.lastIndexOf('/');
+        return idx >= 0 ? ref.substring(idx + 1) : null;
+    }
+
     public String getName() {
         return name;
     }
 
     public void setName(String name) {
-        this.name = name;
+        this.name = name == null ? null : name.trim();
     }
 
     public List<String> getPrimaryKey() {

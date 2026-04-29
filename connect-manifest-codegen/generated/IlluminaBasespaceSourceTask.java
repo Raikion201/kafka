@@ -36,440 +36,21 @@ public final class IlluminaBasespaceSourceTask extends SourceTask {
   public List<SourceRecord> poll() throws InterruptedException {
     List<SourceRecord> all = new ArrayList<>();
     all.addAll(pollProjects());
-    all.addAll(pollRuns());
-    all.addAll(pollSamples());
-    all.addAll(pollSampleFiles());
-    all.addAll(pollRunFiles());
-    all.addAll(pollAppsessions());
-    all.addAll(pollAppresults());
-    all.addAll(pollAppresultsFiles());
     return all;
   }
 
   private List<SourceRecord> pollProjects() throws InterruptedException {
     final String streamName = "projects";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int offset = 0;
-    final int pageLimit = 1024;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("https://api.euw2.sh.basespace.illumina.com/v1pre3/users/current/projects");
-      urlBuilder.append("?Offset=" + offset);
-      urlBuilder.append("&Limit=" + pageLimit);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + config.getAccessToken())
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Response");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("offset", offset), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        offset += pageLimit;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
-    }
-    return allRecords;
-  }
-
-  private List<SourceRecord> pollRuns() throws InterruptedException {
-    final String streamName = "runs";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int offset = 0;
-    final int pageLimit = 1024;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("https://api.euw2.sh.basespace.illumina.com/v1pre3/users/current/runs");
-      urlBuilder.append("?Offset=" + offset);
-      urlBuilder.append("&Limit=" + pageLimit);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + config.getAccessToken())
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Response");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("offset", offset), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        offset += pageLimit;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
-    }
-    return allRecords;
-  }
-
-  private List<SourceRecord> pollSamples() throws InterruptedException {
-    final String streamName = "samples";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int offset = 0;
-    final int pageLimit = 1024;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("https://api.euw2.sh.basespace.illumina.com/v1pre3/projects/{{ stream_partition['parent_id'] }}/samples");
-      urlBuilder.append("?Offset=" + offset);
-      urlBuilder.append("&Limit=" + pageLimit);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + config.getAccessToken())
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Response");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("offset", offset), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        offset += pageLimit;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
-    }
-    return allRecords;
-  }
-
-  private List<SourceRecord> pollSampleFiles() throws InterruptedException {
-    final String streamName = "sample_files";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int offset = 0;
-    final int pageLimit = 1024;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("https://api.euw2.sh.basespace.illumina.com/v1pre3/samples/{{ stream_partition['parent_id'] }}/files");
-      urlBuilder.append("?Offset=" + offset);
-      urlBuilder.append("&Limit=" + pageLimit);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + config.getAccessToken())
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Response");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("offset", offset), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        offset += pageLimit;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
-    }
-    return allRecords;
-  }
-
-  private List<SourceRecord> pollRunFiles() throws InterruptedException {
-    final String streamName = "run_files";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int offset = 0;
-    final int pageLimit = 1024;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("https://api.euw2.sh.basespace.illumina.com/v1pre3/runs/{{ stream_partition['parent_id'] }}/files");
-      urlBuilder.append("?Offset=" + offset);
-      urlBuilder.append("&Limit=" + pageLimit);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + config.getAccessToken())
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Response");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("offset", offset), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        offset += pageLimit;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
-    }
-    return allRecords;
-  }
-
-  private List<SourceRecord> pollAppsessions() throws InterruptedException {
-    final String streamName = "appsessions";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int offset = 0;
-    final int pageLimit = 1024;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("https://api.euw2.sh.basespace.illumina.com/v1pre3/users/current/appsessions");
-      urlBuilder.append("?Offset=" + offset);
-      urlBuilder.append("&Limit=" + pageLimit);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + config.getAccessToken())
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Response");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("offset", offset), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        offset += pageLimit;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
-    }
-    return allRecords;
-  }
-
-  private List<SourceRecord> pollAppresults() throws InterruptedException {
-    final String streamName = "appresults";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int offset = 0;
-    final int pageLimit = 1024;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("https://api.euw2.sh.basespace.illumina.com/v1pre3/appsessions/{{ stream_partition[\"parent_id\"] }}/appresults");
-      urlBuilder.append("?Offset=" + offset);
-      urlBuilder.append("&Limit=" + pageLimit);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + config.getAccessToken())
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Response");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("Items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("offset", offset), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        offset += pageLimit;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
-    }
-    return allRecords;
-  }
-
-  private List<SourceRecord> pollAppresultsFiles() throws InterruptedException {
-    final String streamName = "appresults_files";
     List<SourceRecord> result = new ArrayList<>();
-    StringBuilder urlBuilder = new StringBuilder("https://api.euw2.sh.basespace.illumina.com/v1pre3/appresults/{{ stream_partition[\"parent_id\"] }}/files");
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    int offset = 0;
+    if (_stored != null && _stored.get("offset") instanceof Number _o) {
+      offset = _o.intValue();
+    }
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder("https://api.basespace.illumina.com/v2/projects");
+    urlBuilder.append("?offset=" + offset);
+    urlBuilder.append("&pageSize=" + pageLimit);
     try {
       HttpRequest request = HttpRequest.newBuilder()
                   .uri(URI.create(urlBuilder.toString()))
@@ -483,18 +64,11 @@ public final class IlluminaBasespaceSourceTask extends SourceTask {
       Object json = MAPPER.readValue(response.body(), Object.class);
       Object current = json;
       if (!(current instanceof Map)) {
-        return Collections.emptyList();
+        return result;
       }
-      current = ((Map<?, ?>) current).get("Response");
+      current = ((Map<?, ?>) current).get("items");
       if (current == null) {
-        return Collections.emptyList();
-      }
-      if (!(current instanceof Map)) {
-        return Collections.emptyList();
-      }
-      current = ((Map<?, ?>) current).get("Items");
-      if (current == null) {
-        return Collections.emptyList();
+        return result;
       }
       json = current;
       List<Object> records;
@@ -503,9 +77,10 @@ public final class IlluminaBasespaceSourceTask extends SourceTask {
       } else {
         records = Collections.singletonList(json);
       }
+      int nextOffset = records.size() < pageLimit ? 0 : offset + pageLimit;
       for (Object record : records) {
         String value = MAPPER.writeValueAsString(record);
-        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("position", 0), streamName, Schema.STRING_SCHEMA, value));
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("offset", nextOffset), streamName, Schema.STRING_SCHEMA, value));
       }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
@@ -531,6 +106,12 @@ public final class IlluminaBasespaceSourceTask extends SourceTask {
 
   @Override
   public void stop() {
+    if (httpClient instanceof AutoCloseable ac) {
+      try {
+        ac.close();
+      } catch (Exception ignored) {
+      }
+    }
     httpClient = null;
   }
 }

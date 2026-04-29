@@ -41,54 +41,53 @@ public final class PokeapiSourceTask extends SourceTask {
 
   private List<SourceRecord> pollPokemon() throws InterruptedException {
     final String streamName = "pokemon";
-    List<SourceRecord> allRecords = new ArrayList<>();
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
     int offset = 0;
-    final int pageLimit = 100;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("https://pokeapi.co/api/v2/pokemon");
-      urlBuilder.append("?offset=" + offset);
-      urlBuilder.append("&limit=" + pageLimit);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("results");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("offset", offset), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        offset += pageLimit;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    if (_stored != null && _stored.get("offset") instanceof Number _o) {
+      offset = _o.intValue();
     }
-    return allRecords;
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder("https://pokeapi.co/api/v2/pokemon");
+    urlBuilder.append("?offset=" + offset);
+    urlBuilder.append("&limit=" + pageLimit);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
+      }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("results");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextOffset = records.size() < pageLimit ? 0 : offset + pageLimit;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("offset", nextOffset), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private HttpResponse<String> sendWithRetry(HttpRequest request) throws Exception {
@@ -106,6 +105,12 @@ public final class PokeapiSourceTask extends SourceTask {
 
   @Override
   public void stop() {
+    if (httpClient instanceof AutoCloseable ac) {
+      try {
+        ac.close();
+      } catch (Exception ignored) {
+      }
+    }
     httpClient = null;
   }
 }

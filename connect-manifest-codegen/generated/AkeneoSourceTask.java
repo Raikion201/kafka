@@ -49,7 +49,6 @@ public final class AkeneoSourceTask extends SourceTask {
     all.addAll(pollProducts());
     all.addAll(pollCategories());
     all.addAll(pollFamilies());
-    all.addAll(pollFamilyVariants());
     all.addAll(pollAttributes());
     all.addAll(pollAttributeGroups());
     all.addAll(pollAssociationTypes());
@@ -62,651 +61,602 @@ public final class AkeneoSourceTask extends SourceTask {
 
   private List<SourceRecord> pollProducts() throws InterruptedException {
     final String streamName = "products";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("{{ config[\"host\"] }}/api/rest/v1/products-uuid");
-      urlBuilder.append("?page=" + page);
-      urlBuilder.append("&limit=" + 100);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + cachedSessionToken)
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("_embedded");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    final int startPage = 1;
+    int page = startPage;
+    if (_stored != null && _stored.get("page") instanceof Number _p) {
+      page = _p.intValue();
     }
-    return allRecords;
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder(config.getHost() + "/api/rest/v1" + "/products-uuid");
+    urlBuilder.append("?page=" + page);
+    urlBuilder.append("&limit=" + 100);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .header("Authorization", "Bearer " + cachedSessionToken)
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
+      }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("_embedded");
+      if (current == null) {
+        return result;
+      }
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("items");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextPage = records.size() < pageLimit ? startPage : page + 1;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", nextPage), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private List<SourceRecord> pollCategories() throws InterruptedException {
-    final String streamName = "categories ";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("{{ config[\"host\"] }}/api/rest/v1/categories");
-      urlBuilder.append("?page=" + page);
-      urlBuilder.append("&limit=" + 100);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + cachedSessionToken)
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("_embedded");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    final String streamName = "categories";
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    final int startPage = 1;
+    int page = startPage;
+    if (_stored != null && _stored.get("page") instanceof Number _p) {
+      page = _p.intValue();
     }
-    return allRecords;
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder(config.getHost() + "/api/rest/v1" + "/categories");
+    urlBuilder.append("?page=" + page);
+    urlBuilder.append("&limit=" + 100);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .header("Authorization", "Bearer " + cachedSessionToken)
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
+      }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("_embedded");
+      if (current == null) {
+        return result;
+      }
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("items");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextPage = records.size() < pageLimit ? startPage : page + 1;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", nextPage), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private List<SourceRecord> pollFamilies() throws InterruptedException {
     final String streamName = "families";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("{{ config[\"host\"] }}/api/rest/v1/families");
-      urlBuilder.append("?page=" + page);
-      urlBuilder.append("&limit=" + 100);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + cachedSessionToken)
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("_embedded");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    final int startPage = 1;
+    int page = startPage;
+    if (_stored != null && _stored.get("page") instanceof Number _p) {
+      page = _p.intValue();
     }
-    return allRecords;
-  }
-
-  private List<SourceRecord> pollFamilyVariants() throws InterruptedException {
-    final String streamName = "family_variants";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("{{ config[\"host\"] }}/api/rest/v1/families/{{ stream_partition.family_code }}/variants");
-      urlBuilder.append("?page=" + page);
-      urlBuilder.append("&limit=" + 100);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + cachedSessionToken)
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("_embedded");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder(config.getHost() + "/api/rest/v1" + "/families");
+    urlBuilder.append("?page=" + page);
+    urlBuilder.append("&limit=" + 100);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .header("Authorization", "Bearer " + cachedSessionToken)
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
       }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("_embedded");
+      if (current == null) {
+        return result;
+      }
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("items");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextPage = records.size() < pageLimit ? startPage : page + 1;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", nextPage), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
     }
-    return allRecords;
+    return result;
   }
 
   private List<SourceRecord> pollAttributes() throws InterruptedException {
     final String streamName = "attributes";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("{{ config[\"host\"] }}/api/rest/v1/attributes");
-      urlBuilder.append("?page=" + page);
-      urlBuilder.append("&limit=" + 100);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + cachedSessionToken)
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("_embedded");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    final int startPage = 1;
+    int page = startPage;
+    if (_stored != null && _stored.get("page") instanceof Number _p) {
+      page = _p.intValue();
     }
-    return allRecords;
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder(config.getHost() + "/api/rest/v1" + "/attributes");
+    urlBuilder.append("?page=" + page);
+    urlBuilder.append("&limit=" + 100);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .header("Authorization", "Bearer " + cachedSessionToken)
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
+      }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("_embedded");
+      if (current == null) {
+        return result;
+      }
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("items");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextPage = records.size() < pageLimit ? startPage : page + 1;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", nextPage), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private List<SourceRecord> pollAttributeGroups() throws InterruptedException {
     final String streamName = "attribute_groups";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("{{ config[\"host\"] }}/api/rest/v1/attribute-groups");
-      urlBuilder.append("?page=" + page);
-      urlBuilder.append("&limit=" + 100);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + cachedSessionToken)
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("_embedded");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    final int startPage = 1;
+    int page = startPage;
+    if (_stored != null && _stored.get("page") instanceof Number _p) {
+      page = _p.intValue();
     }
-    return allRecords;
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder(config.getHost() + "/api/rest/v1" + "/attribute-groups");
+    urlBuilder.append("?page=" + page);
+    urlBuilder.append("&limit=" + 100);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .header("Authorization", "Bearer " + cachedSessionToken)
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
+      }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("_embedded");
+      if (current == null) {
+        return result;
+      }
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("items");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextPage = records.size() < pageLimit ? startPage : page + 1;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", nextPage), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private List<SourceRecord> pollAssociationTypes() throws InterruptedException {
     final String streamName = "association_types";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("{{ config[\"host\"] }}/api/rest/v1/association-types");
-      urlBuilder.append("?page=" + page);
-      urlBuilder.append("&limit=" + 100);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + cachedSessionToken)
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("_embedded");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    final int startPage = 1;
+    int page = startPage;
+    if (_stored != null && _stored.get("page") instanceof Number _p) {
+      page = _p.intValue();
     }
-    return allRecords;
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder(config.getHost() + "/api/rest/v1" + "/association-types");
+    urlBuilder.append("?page=" + page);
+    urlBuilder.append("&limit=" + 100);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .header("Authorization", "Bearer " + cachedSessionToken)
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
+      }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("_embedded");
+      if (current == null) {
+        return result;
+      }
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("items");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextPage = records.size() < pageLimit ? startPage : page + 1;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", nextPage), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private List<SourceRecord> pollChannels() throws InterruptedException {
     final String streamName = "channels";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("{{ config[\"host\"] }}/api/rest/v1/channels");
-      urlBuilder.append("?page=" + page);
-      urlBuilder.append("&limit=" + 100);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + cachedSessionToken)
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("_embedded");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    final int startPage = 1;
+    int page = startPage;
+    if (_stored != null && _stored.get("page") instanceof Number _p) {
+      page = _p.intValue();
     }
-    return allRecords;
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder(config.getHost() + "/api/rest/v1" + "/channels");
+    urlBuilder.append("?page=" + page);
+    urlBuilder.append("&limit=" + 100);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .header("Authorization", "Bearer " + cachedSessionToken)
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
+      }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("_embedded");
+      if (current == null) {
+        return result;
+      }
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("items");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextPage = records.size() < pageLimit ? startPage : page + 1;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", nextPage), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private List<SourceRecord> pollLocales() throws InterruptedException {
     final String streamName = "locales";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("{{ config[\"host\"] }}/api/rest/v1/locales");
-      urlBuilder.append("?page=" + page);
-      urlBuilder.append("&limit=" + 100);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + cachedSessionToken)
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("_embedded");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    final int startPage = 1;
+    int page = startPage;
+    if (_stored != null && _stored.get("page") instanceof Number _p) {
+      page = _p.intValue();
     }
-    return allRecords;
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder(config.getHost() + "/api/rest/v1" + "/locales");
+    urlBuilder.append("?page=" + page);
+    urlBuilder.append("&limit=" + 100);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .header("Authorization", "Bearer " + cachedSessionToken)
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
+      }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("_embedded");
+      if (current == null) {
+        return result;
+      }
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("items");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextPage = records.size() < pageLimit ? startPage : page + 1;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", nextPage), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private List<SourceRecord> pollCurrencies() throws InterruptedException {
     final String streamName = "currencies";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("{{ config[\"host\"] }}/api/rest/v1/currencies");
-      urlBuilder.append("?page=" + page);
-      urlBuilder.append("&limit=" + 100);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + cachedSessionToken)
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("_embedded");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    final int startPage = 1;
+    int page = startPage;
+    if (_stored != null && _stored.get("page") instanceof Number _p) {
+      page = _p.intValue();
     }
-    return allRecords;
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder(config.getHost() + "/api/rest/v1" + "/currencies");
+    urlBuilder.append("?page=" + page);
+    urlBuilder.append("&limit=" + 100);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .header("Authorization", "Bearer " + cachedSessionToken)
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
+      }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("_embedded");
+      if (current == null) {
+        return result;
+      }
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("items");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextPage = records.size() < pageLimit ? startPage : page + 1;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", nextPage), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private List<SourceRecord> pollMeasureFamilies() throws InterruptedException {
     final String streamName = "measure_families";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("{{ config[\"host\"] }}/api/rest/v1/measure-families");
-      urlBuilder.append("?page=" + page);
-      urlBuilder.append("&limit=" + 100);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .header("Authorization", "Bearer " + cachedSessionToken)
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        Object current = json;
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("_embedded");
-        if (current == null) {
-          return allRecords;
-        }
-        if (!(current instanceof Map)) {
-          return allRecords;
-        }
-        current = ((Map<?, ?>) current).get("items");
-        if (current == null) {
-          return allRecords;
-        }
-        json = current;
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    final int startPage = 1;
+    int page = startPage;
+    if (_stored != null && _stored.get("page") instanceof Number _p) {
+      page = _p.intValue();
     }
-    return allRecords;
+    final int pageLimit = 100;
+    StringBuilder urlBuilder = new StringBuilder(config.getHost() + "/api/rest/v1" + "/measure-families");
+    urlBuilder.append("?page=" + page);
+    urlBuilder.append("&limit=" + 100);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .header("Authorization", "Bearer " + cachedSessionToken)
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
+      }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      Object current = json;
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("_embedded");
+      if (current == null) {
+        return result;
+      }
+      if (!(current instanceof Map)) {
+        return result;
+      }
+      current = ((Map<?, ?>) current).get("items");
+      if (current == null) {
+        return result;
+      }
+      json = current;
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextPage = records.size() < pageLimit ? startPage : page + 1;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", nextPage), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private void loginAndCacheSessionToken() throws Exception {
@@ -751,6 +701,12 @@ public final class AkeneoSourceTask extends SourceTask {
 
   @Override
   public void stop() {
+    if (httpClient instanceof AutoCloseable ac) {
+      try {
+        ac.close();
+      } catch (Exception ignored) {
+      }
+    }
     httpClient = null;
   }
 }

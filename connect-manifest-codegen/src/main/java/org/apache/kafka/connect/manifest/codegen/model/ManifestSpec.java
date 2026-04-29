@@ -127,11 +127,21 @@ public class ManifestSpec {
         List<StreamSpec> result = new ArrayList<>();
         for (StreamSpec s : streams) {
             if (s.getName() != null && s.getRetriever() != null) {
+                // Inline stream — use as-is.
                 if (seen.add(s.getName())) {
                     applyBaseRequester(s, baseRequester);
                     result.add(s);
                 }
+            } else if (s.refStreamName() != null) {
+                // $ref entry — look up only the referenced stream by name.
+                StreamSpec def = defined.get(s.refStreamName());
+                if (def != null && def.getName() != null && seen.add(def.getName())) {
+                    applyBaseRequester(def, baseRequester);
+                    result.add(def);
+                }
             } else {
+                // Legacy fallback for manifests where all streams are inlined under definitions
+                // and the top-level streams list has no names or refs (e.g. older format).
                 for (StreamSpec def : defined.values()) {
                     if (def.getName() != null && seen.add(def.getName())) {
                         applyBaseRequester(def, baseRequester);

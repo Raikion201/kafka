@@ -32,7 +32,11 @@ application {
 sourceSets {
     generated {
         java {
+            // Auto-generated connectors (produced by generateConnectors task)
             srcDir layout.buildDirectory.dir('generated-sources/connectors')
+            // Hand-written connectors for manifests the codegen cannot handle
+            // (e.g. Yahoo Finance uses Jinja2 control flow that requires manual Java)
+            srcDir 'src/main/manual-connectors'
         }
     }
 }

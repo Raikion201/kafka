@@ -141,6 +141,8 @@ public class ConfigGenerator {
             .addModifiers(Modifier.PUBLIC);
         if (f.isBoolean()) {
             m.returns(boolean.class).addStatement("return getBoolean($L)", f.constantName());
+        } else if (f.isLong()) {
+            m.returns(String.class).addStatement("return $T.valueOf(getLong($L))", String.class, f.constantName());
         } else {
             m.returns(String.class).addStatement("return getString($L)", f.constantName());
         }
@@ -195,6 +197,10 @@ public class ConfigGenerator {
 
         boolean isBoolean() {
             return "boolean".equalsIgnoreCase(type);
+        }
+
+        boolean isLong() {
+            return type != null && (type.equalsIgnoreCase("integer") || type.equalsIgnoreCase("number"));
         }
 
         String constantName() {

@@ -41,44 +41,45 @@ public final class JsonplaceholderSourceTask extends SourceTask {
 
   private List<SourceRecord> pollPosts() throws InterruptedException {
     final String streamName = "posts";
-    List<SourceRecord> allRecords = new ArrayList<>();
-    int page = 1;
-    while (true) {
-      StringBuilder urlBuilder = new StringBuilder("https://jsonplaceholder.typicode.com/posts");
-      urlBuilder.append("?_page=" + page);
-      urlBuilder.append("&_limit=" + 10);
-      try {
-        HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(urlBuilder.toString()))
-                    .GET()
-                    .build();
-        HttpResponse<String> response = sendWithRetry(request);
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
-        }
-        Object json = MAPPER.readValue(response.body(), Object.class);
-        List<Object> records;
-        if (json instanceof List) {
-          records = (List<Object>) json;
-        } else {
-          records = Collections.singletonList(json);
-        }
-        for (Object record : records) {
-          String value = MAPPER.writeValueAsString(record);
-          allRecords.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", page), streamName, Schema.STRING_SCHEMA, value));
-        }
-        if (records.isEmpty()) {
-          break;
-        }
-        page++;
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new ConnectException("Interrupted while polling " + streamName, e);
-      } catch (Exception e) {
-        throw new ConnectException("Failed to poll " + streamName, e);
-      }
+    List<SourceRecord> result = new ArrayList<>();
+    Map<String, Object> _stored = context.offsetStorageReader().offset(Map.of("stream", streamName));
+    final int startPage = 1;
+    int page = startPage;
+    if (_stored != null && _stored.get("page") instanceof Number _p) {
+      page = _p.intValue();
     }
-    return allRecords;
+    final int pageLimit = 10;
+    StringBuilder urlBuilder = new StringBuilder("https://jsonplaceholder.typicode.com/posts");
+    urlBuilder.append("?_page=" + page);
+    urlBuilder.append("&_limit=" + 10);
+    try {
+      HttpRequest request = HttpRequest.newBuilder()
+                  .uri(URI.create(urlBuilder.toString()))
+                  .GET()
+                  .build();
+      HttpResponse<String> response = sendWithRetry(request);
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new ConnectException("HTTP " + response.statusCode() + " from " + urlBuilder);
+      }
+      Object json = MAPPER.readValue(response.body(), Object.class);
+      List<Object> records;
+      if (json instanceof List) {
+        records = (List<Object>) json;
+      } else {
+        records = Collections.singletonList(json);
+      }
+      int nextPage = records.size() < pageLimit ? startPage : page + 1;
+      for (Object record : records) {
+        String value = MAPPER.writeValueAsString(record);
+        result.add(new SourceRecord(Map.of("stream", streamName), Map.of("page", nextPage), streamName, Schema.STRING_SCHEMA, value));
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while polling " + streamName, e);
+    } catch (Exception e) {
+      throw new ConnectException("Failed to poll " + streamName, e);
+    }
+    return result;
   }
 
   private HttpResponse<String> sendWithRetry(HttpRequest request) throws Exception {
@@ -96,6 +97,12 @@ public final class JsonplaceholderSourceTask extends SourceTask {
 
   @Override
   public void stop() {
+    if (httpClient instanceof AutoCloseable ac) {
+      try {
+        ac.close();
+      } catch (Exception ignored) {
+      }
+    }
     httpClient = null;
   }
 }
