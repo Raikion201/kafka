@@ -1,0 +1,53 @@
+version: 0.1.0
+
+type: DeclarativeSource
+
+description: >-
+  JSONPlaceholder connector. Fetches all posts (100 total) using page-increment
+  pagination. Uses _page and _limit query parameters. Returns an empty array
+  when the page number exceeds available records, triggering a clean stop.
+
+check:
+  type: CheckStream
+  stream_names:
+    - posts
+
+streams:
+  - type: DeclarativeStream
+    name: posts
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: https://jsonplaceholder.typicode.com
+        path: /posts
+        http_method: GET
+        authenticator:
+          type: NoAuth
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path: []
+      paginator:
+        type: DefaultPaginator
+        page_token_option:
+          type: RequestOption
+          inject_into: request_parameter
+          field_name: _page
+        page_size_option:
+          type: RequestOption
+          field_name: _limit
+          inject_into: request_parameter
+        pagination_strategy:
+          type: PageIncrement
+          page_size: 10
+          start_from_page: 1
+
+spec:
+  type: Spec
+  connection_specification:
+    $schema: http://json-schema.org/draft-07/schema#
+    type: object
+    required: []
+    properties: {}

@@ -1,0 +1,47 @@
+version: 0.1.0
+
+type: DeclarativeSource
+
+description: >-
+  Rick and Morty API connector. Fetches all characters using cursor pagination
+  where each page response contains info.next with the full URL of the next page.
+
+check:
+  type: CheckStream
+  stream_names:
+    - characters
+
+streams:
+  - type: DeclarativeStream
+    name: characters
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: https://rickandmortyapi.com/api
+        path: /character
+        http_method: GET
+        authenticator:
+          type: NoAuth
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - results
+      paginator:
+        type: DefaultPaginator
+        page_token_option:
+          type: RequestPath
+        pagination_strategy:
+          type: CursorPagination
+          cursor_value: "{{ response.get('info', {}).get('next') }}"
+          stop_condition: "{{ not response.get('info', {}).get('next') }}"
+
+spec:
+  type: Spec
+  connection_specification:
+    $schema: http://json-schema.org/draft-07/schema#
+    type: object
+    required: []
+    properties: {}

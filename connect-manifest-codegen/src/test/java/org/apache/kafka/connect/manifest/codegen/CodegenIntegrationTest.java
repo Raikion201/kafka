@@ -94,7 +94,11 @@ public class CodegenIntegrationTest {
             Arguments.of("google_analytics_jwt.yaml"),
             Arguments.of("us_census.yaml"),
             Arguments.of("metabase.yaml"),
-            Arguments.of("acuity_scheduling.yaml")
+            Arguments.of("acuity_scheduling.yaml"),
+            // Public-API manifests covering each pagination type
+            Arguments.of("rickandmorty.yaml"),
+            Arguments.of("pokeapi.yaml"),
+            Arguments.of("jsonplaceholder.yaml")
         );
     }
 
@@ -337,6 +341,59 @@ public class CodegenIntegrationTest {
         String taskSrc = generate("acuity_scheduling.yaml").task.toString();
         assertTrue(taskSrc.contains("Basic"),
             "Acuity Scheduling task must use Basic auth header");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // PUBLIC-API MANIFESTS: real-world pagination types
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void rickandmorty_generatedTask_usesRequestPathCursor() throws Exception {
+        String taskSrc = generate("rickandmorty.yaml").task.toString();
+        assertTrue(taskSrc.contains("nextCursor"),
+            "Rick & Morty RequestPath cursor task must maintain nextCursor variable");
+        assertTrue(taskSrc.contains("do {") || taskSrc.contains("do{"),
+            "Rick & Morty cursor task must use a do-while loop");
+        assertTrue(taskSrc.contains("while (nextCursor"),
+            "Rick & Morty cursor loop must check nextCursor");
+    }
+
+    @Test
+    void rickandmorty_generatedTask_navigatesInfoNext() throws Exception {
+        String taskSrc = generate("rickandmorty.yaml").task.toString();
+        assertTrue(taskSrc.contains("\"info\""),
+            "Rick & Morty task must navigate response[\"info\"] to find next page URL");
+        assertTrue(taskSrc.contains("\"next\""),
+            "Rick & Morty task must extract \"next\" field from info object");
+    }
+
+    @Test
+    void pokeapi_generatedTask_containsOffsetIncrementLoop() throws Exception {
+        String taskSrc = generate("pokeapi.yaml").task.toString();
+        assertTrue(taskSrc.contains("offset +=") || taskSrc.contains("offset+="),
+            "PokéAPI OffsetIncrement task must increment offset");
+        assertTrue(taskSrc.contains("offset="),
+            "PokéAPI OffsetIncrement task must include offset query param");
+        assertTrue(taskSrc.contains("limit="),
+            "PokéAPI OffsetIncrement task must include limit query param");
+    }
+
+    @Test
+    void jsonplaceholder_generatedTask_containsPageIncrementLoop() throws Exception {
+        String taskSrc = generate("jsonplaceholder.yaml").task.toString();
+        assertTrue(taskSrc.contains("page++"),
+            "JSONPlaceholder PageIncrement task must increment page counter");
+        assertTrue(taskSrc.contains("_page="),
+            "JSONPlaceholder PageIncrement task must include _page query param");
+        assertTrue(taskSrc.contains("_limit="),
+            "JSONPlaceholder PageIncrement task must include _limit query param");
+    }
+
+    @Test
+    void jsonplaceholder_generatedTask_breaksOnEmptyResults() throws Exception {
+        String taskSrc = generate("jsonplaceholder.yaml").task.toString();
+        assertTrue(taskSrc.contains("records.isEmpty()"),
+            "JSONPlaceholder PageIncrement task must break on empty records");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
