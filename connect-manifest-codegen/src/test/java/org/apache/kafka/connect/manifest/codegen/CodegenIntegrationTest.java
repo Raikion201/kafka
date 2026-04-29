@@ -94,6 +94,8 @@ public class CodegenIntegrationTest {
             Arguments.of("assemblyai.yaml"),
             Arguments.of("akeneo.yaml"),
             Arguments.of("google_analytics_jwt.yaml"),
+            // JWT RS256 via GCS IAM — no GA4 UI needed
+            Arguments.of("google_cloud_storage_jwt.yaml"),
             Arguments.of("us_census.yaml"),
             Arguments.of("metabase.yaml"),
             Arguments.of("acuity_scheduling.yaml"),
@@ -287,6 +289,20 @@ public class CodegenIntegrationTest {
         String taskSrc = generate("google_analytics_jwt.yaml").task.toString();
         assertTrue(taskSrc.contains("SHA256withRSA"),
             "Google Sheets JwtAuthenticator task must sign with SHA256withRSA");
+    }
+
+    @Test
+    void gcs_generatedTask_containsJwtMethod() throws Exception {
+        String taskSrc = generate("google_cloud_storage_jwt.yaml").task.toString();
+        assertTrue(taskSrc.contains("buildJwt"),
+            "GCS JwtAuthenticator task must contain buildJwt method");
+    }
+
+    @Test
+    void gcs_generatedTask_containsDevstorageScopeInPayload() throws Exception {
+        String taskSrc = generate("google_cloud_storage_jwt.yaml").task.toString();
+        assertTrue(taskSrc.contains("devstorage.read_only"),
+            "GCS task JWT payload must include devstorage.read_only scope");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
