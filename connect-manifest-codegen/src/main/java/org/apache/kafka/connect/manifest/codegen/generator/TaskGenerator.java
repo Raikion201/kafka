@@ -37,6 +37,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -273,6 +274,14 @@ public class TaskGenerator {
         ParameterizedTypeName listOfSourceRecord
     ) throws CodegenException {
         RequesterSpec requester = stream.getRetriever().getRequester();
+
+        // List-cycle pattern: path/params use config['field'].split(',')[page] as array index.
+        // Generate ticker-cycling code instead of a normal pagination loop.
+        String listCycleField = requester.listCycleConfigField();
+        if (listCycleField != null) {
+            return buildListCyclePollMethod(stream, configClass, auth, listOfSourceRecord, listCycleField);
+        }
+
         String baseUrl = requester.effectiveBaseUrl();
         String path = requester.getPath();
         // Ensure exactly one "/" between base URL and path
@@ -321,6 +330,164 @@ public class TaskGenerator {
         } else {
             body.addStatement("return result");
         }
+
+        return MethodSpec.methodBuilder(methodName)
+            .addModifiers(Modifier.PRIVATE)
+            .returns(listOfSourceRecord)
+            .addException(InterruptedException.class)
+            .addCode(body.build())
+            .build();
+    }
+
+    /**
+     * Generates the complete poll method for list-cycle streams.
+     *
+     * <p>A list-cycle stream uses a config field (e.g. {@code tickers}) as a comma-separated list,
+     * iterating through items one per {@code poll()} call using the stored {@code ticker_index} offset.
+     * No Jinja2 parsing is needed — the pattern is detected structurally from the manifest.
+     */
+    private MethodSpec buildListCyclePollMethod(
+        StreamSpec stream,
+        ClassName configClass,
+        AuthenticatorSpec auth,
+        ParameterizedTypeName listOfSourceRecord,
+        String listCycleField
+    ) throws CodegenException {
+        RequesterSpec requester = stream.getRetriever().getRequester();
+        String baseUrl = requester.effectiveBaseUrl();
+        String pathPrefix = requester.listCyclePathPrefix();
+        Map<String, String> requestParams = requester.getRequestParameters();
+        Map<String, String> requestHeaders = requester.getRequestHeaders();
+        Set<Integer> successCodes = requester.successHttpCodes();
+        List<String> fieldPath = extractFieldPath(stream);
+        String streamName = stream.getName();
+        String methodName = "poll" + ManifestSpec.toClassName(streamName);
+        String itemGetter = "get" + ManifestSpec.toClassName(listCycleField);
+
+        CodeBlock.Builder body = CodeBlock.builder();
+        body.addStatement("final $T streamName = $S", String.class, streamName);
+        body.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
+
+        // Read stored ticker index so restarts resume from the right item.
+        body.addStatement(
+            "$T<$T, $T> _stored = context.offsetStorageReader().offset($T.of($S, streamName))",
+            Map.class, String.class, Object.class, Map.class, "stream");
+        body.addStatement("int tickerIndex = 0");
+        body.beginControlFlow(
+            "if (_stored != null && _stored.get($S) instanceof $T _i)", "ticker_index", Number.class);
+        body.addStatement("tickerIndex = _i.intValue()");
+        body.endControlFlow();
+
+        // Split config field into items array
+        body.addStatement("$T[] _items = config.$L().split(\",\")", String.class, itemGetter);
+        body.beginControlFlow("if (_items.length == 0)");
+        body.addStatement("return result");
+        body.endControlFlow();
+        body.beginControlFlow("if (tickerIndex >= _items.length)");
+        body.addStatement("tickerIndex = 0");
+        body.endControlFlow();
+        body.addStatement("$T _item = _items[tickerIndex].strip()", String.class);
+        body.addStatement("int _nextIndex = (tickerIndex + 1 >= _items.length) ? 0 : tickerIndex + 1");
+
+        // Build URL: baseUrl + literal path prefix + URL-encoded current item
+        body.addStatement(
+            "$T urlBuilder = new $T($S + $T.encode(_item, $T.UTF_8))",
+            StringBuilder.class, StringBuilder.class, baseUrl + pathPrefix,
+            ClassName.get("java.net", "URLEncoder"),
+            ClassName.get("java.nio.charset", "StandardCharsets"));
+
+        // Request parameters: list-cycle ones use _item; normal config templates use getter
+        boolean firstParam = !(baseUrl + pathPrefix).contains("?");
+        Pattern listPat = Pattern.compile("config\\['" + listCycleField + "'\\]\\.split");
+        for (Map.Entry<String, String> entry : requestParams.entrySet()) {
+            String sep = firstParam ? "?" : "&";
+            if (listPat.matcher(entry.getValue()).find()) {
+                body.addStatement(
+                    "urlBuilder.append($S + $T.encode(_item, $T.UTF_8))",
+                    sep + entry.getKey() + "=",
+                    ClassName.get("java.net", "URLEncoder"),
+                    ClassName.get("java.nio.charset", "StandardCharsets"));
+            } else {
+                Matcher cm = CONFIG_TEMPLATE.matcher(entry.getValue());
+                if (cm.find()) {
+                    String getter = "get" + ManifestSpec.toClassName(cm.group(1));
+                    body.addStatement(
+                        "urlBuilder.append($S + $T.encode(config.$L(), $T.UTF_8))",
+                        sep + entry.getKey() + "=",
+                        ClassName.get("java.net", "URLEncoder"), getter,
+                        ClassName.get("java.nio.charset", "StandardCharsets"));
+                }
+                // skip params with unresolvable Jinja2 (e.g. finish sentinel)
+            }
+            firstParam = false;
+        }
+
+        // Build HTTP request with optional auth and custom static headers
+        body.beginControlFlow("try");
+        StringBuilder reqFmt = new StringBuilder(
+            "$T request = $T.newBuilder()\n        .uri($T.create(urlBuilder.toString()))");
+        List<Object> reqArgs = new ArrayList<>();
+        reqArgs.add(HTTP_REQUEST);
+        reqArgs.add(HTTP_REQUEST);
+        reqArgs.add(URI_CLASS);
+        if (auth != null && auth.isBearer()) {
+            reqFmt.append("\n        .header(\"Authorization\", \"Bearer \" + config.$L())");
+            reqArgs.add(resolveConfigGetter(auth.getApiToken()));
+        } else if (auth != null && auth.isBasicHttp()) {
+            reqFmt.append("\n        .header(\"Authorization\", \"Basic \" + cachedCredentials)");
+        }
+        for (Map.Entry<String, String> h : requestHeaders.entrySet()) {
+            reqFmt.append("\n        .header($S, $S)");
+            reqArgs.add(h.getKey());
+            reqArgs.add(h.getValue());
+        }
+        reqFmt.append("\n        .GET()\n        .build()");
+        body.addStatement(reqFmt.toString(), reqArgs.toArray());
+
+        // Fetch with retry
+        body.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
+
+        // HTTP codes treated as SUCCESS (e.g. 403) → return empty record with advanced index
+        for (int code : successCodes) {
+            body.beginControlFlow("if (response.statusCode() == $L)", code);
+            body.addStatement(
+                "result.add(new $T($T.of($S, streamName), $T.of($S, _nextIndex), streamName, $T.STRING_SCHEMA, $S))",
+                SOURCE_RECORD, Map.class, "stream", Map.class, "ticker_index", SCHEMA, "{}");
+            body.addStatement("return result");
+            body.endControlFlow();
+        }
+
+        body.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");
+        body.addStatement(
+            "throw new $T(\"HTTP \" + response.statusCode() + \" from \" + urlBuilder)", CONNECT_EXCEPTION);
+        body.endControlFlow();
+        body.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
+
+        if (!fieldPath.isEmpty()) {
+            body.add(buildFieldPathNav(fieldPath, true));
+        }
+
+        body.addStatement("$T<$T> records", List.class, Object.class);
+        body.beginControlFlow("if (json instanceof $T)", List.class);
+        body.addStatement("records = ($T<$T>) json", List.class, Object.class);
+        body.nextControlFlow("else");
+        body.addStatement("records = $T.singletonList(json)", Collections.class);
+        body.endControlFlow();
+
+        body.beginControlFlow("for ($T record : records)", Object.class);
+        body.addStatement("$T value = MAPPER.writeValueAsString(record)", String.class);
+        body.addStatement(
+            "result.add(new $T($T.of($S, streamName), $T.of($S, _nextIndex), streamName, $T.STRING_SCHEMA, value))",
+            SOURCE_RECORD, Map.class, "stream", Map.class, "ticker_index", SCHEMA);
+        body.endControlFlow();
+        body.addStatement("return result");
+
+        body.nextControlFlow("catch ($T e)", InterruptedException.class);
+        body.addStatement("$T.currentThread().interrupt()", Thread.class);
+        body.addStatement("throw new $T(\"Interrupted while polling \" + streamName, e)", CONNECT_EXCEPTION);
+        body.nextControlFlow("catch ($T e)", Exception.class);
+        body.addStatement("throw new $T(\"Failed to poll \" + streamName, e)", CONNECT_EXCEPTION);
+        body.endControlFlow();
 
         return MethodSpec.methodBuilder(methodName)
             .addModifiers(Modifier.PRIVATE)

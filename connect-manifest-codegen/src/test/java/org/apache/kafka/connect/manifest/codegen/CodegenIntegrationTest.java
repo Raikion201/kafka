@@ -46,6 +46,7 @@ import javax.tools.JavaCompiler;
 import javax.tools.JavaFileObject;
 import javax.tools.ToolProvider;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -102,7 +103,9 @@ public class CodegenIntegrationTest {
             // Public-API manifests covering each pagination type
             Arguments.of("rickandmorty.yaml"),
             Arguments.of("pokeapi.yaml"),
-            Arguments.of("jsonplaceholder.yaml")
+            Arguments.of("jsonplaceholder.yaml"),
+            // List-cycle pattern: config field split on comma, iterated by page index
+            Arguments.of("yahoo_finance_price.yaml")
         );
     }
 
@@ -420,6 +423,44 @@ public class CodegenIntegrationTest {
             "JSONPlaceholder PageIncrement task must detect last page via incomplete batch");
         assertTrue(taskSrc.contains("startPage"),
             "JSONPlaceholder PageIncrement task must reset to startPage after last page");
+    }
+
+    @Test
+    void yahooFinancePrice_generatedTask_usesListCycle() throws Exception {
+        String taskSrc = generate("yahoo_finance_price.yaml").task.toString();
+        assertTrue(taskSrc.contains("split(\",\")"),
+            "Yahoo Finance task must split the tickers config field on comma");
+        assertTrue(taskSrc.contains("ticker_index"),
+            "Yahoo Finance task must store position as ticker_index in offset");
+        assertTrue(taskSrc.contains("_nextIndex"),
+            "Yahoo Finance task must compute next ticker index");
+        assertTrue(taskSrc.contains("getTickers"),
+            "Yahoo Finance task must call getTickers() on config");
+    }
+
+    @Test
+    void yahooFinancePrice_generatedTask_handles403AsSuccess() throws Exception {
+        String taskSrc = generate("yahoo_finance_price.yaml").task.toString();
+        assertTrue(taskSrc.contains("statusCode() == 403"),
+            "Yahoo Finance task must treat 403 as success per error_handler");
+    }
+
+    @Test
+    void yahooFinancePrice_generatedTask_containsCustomHeaders() throws Exception {
+        String taskSrc = generate("yahoo_finance_price.yaml").task.toString();
+        assertTrue(taskSrc.contains("User-Agent"),
+            "Yahoo Finance task must include User-Agent request header");
+        assertTrue(taskSrc.contains("Accept"),
+            "Yahoo Finance task must include Accept request header");
+    }
+
+    @Test
+    void yahooFinancePrice_generatedTask_noJinja2InUrl() throws Exception {
+        String taskSrc = generate("yahoo_finance_price.yaml").task.toString();
+        assertFalse(taskSrc.contains("{%"),
+            "Yahoo Finance task must not contain raw Jinja2 control flow in generated code");
+        assertFalse(taskSrc.contains("next_page_token"),
+            "Yahoo Finance task must not reference next_page_token (Airbyte-internal)");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
