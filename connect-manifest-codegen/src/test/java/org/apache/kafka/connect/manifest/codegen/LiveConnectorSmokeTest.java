@@ -97,7 +97,10 @@ public class LiveConnectorSmokeTest {
             Arguments.of("pokeapi.yaml",         "PokeapiSourceTask",         Map.of()),
             Arguments.of("jsonplaceholder.yaml", "JsonplaceholderSourceTask", Map.of()),
             // 614 = "Woodpecker" — stable public comic
-            Arguments.of("xkcd.yaml",            "XkcdSourceTask",            Map.of("comic_number", "614"))
+            Arguments.of("xkcd.yaml",            "XkcdSourceTask",            Map.of("comic_number", "614")),
+            // Yahoo Finance — public API, no auth needed
+            Arguments.of("yahoo_finance_price.yaml", "YahooFinancePriceSourceTask",
+                Map.of("tickers", "AAPL,MSFT", "interval", "1d", "range", "1mo"))
         );
     }
 
