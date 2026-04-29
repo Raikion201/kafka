@@ -204,18 +204,23 @@ public class PaginatorSpec {
          * Extracts the JSON field path from a Jinja2 {@code cursor_value} expression.
          *
          * <p>Handles patterns like:
-         * {@code {{ response.get('page_details', {}).get('next_url') }}}
-         * → {@code ["page_details", "next_url"]}
+         * <ul>
+         *   <li>{@code {{ response.get('page_details', {}).get('next_url') }}} → {@code ["page_details", "next_url"]}</li>
+         *   <li>{@code {{ response['next_stream_position'] }}} → {@code ["next_stream_position"]}</li>
+         * </ul>
+         * Double-quote bracket access ({@code response["key"]}) is intentionally not matched here
+         * because those expressions often embed arithmetic (e.g., {@code response["num"]+1}).
          */
         public List<String> parseCursorJsonPath() {
             if (cursorValue == null || cursorValue.isBlank()) {
                 return Collections.emptyList();
             }
-            Pattern p = Pattern.compile("\\.get\\('([^']+)'");
+            // Match .get('key') or ['key'] (single-quote only to avoid arithmetic expressions)
+            Pattern p = Pattern.compile("(?:\\.get\\('([^']+)'|\\['([^']+)'\\])");
             Matcher m = p.matcher(cursorValue);
             List<String> path = new ArrayList<>();
             while (m.find()) {
-                path.add(m.group(1));
+                path.add(m.group(1) != null ? m.group(1) : m.group(2));
             }
             return path;
         }

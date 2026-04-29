@@ -590,11 +590,26 @@ public class TaskGenerator {
                     b.addStatement("nextCursor = cursorStep != null ? $T.valueOf(cursorStep) : null", String.class);
                 }
             } else {
-                b.beginControlFlow("if (json instanceof $T)", Map.class);
-                b.addStatement("$T<?, ?> respMap = ($T<?, ?>) json", Map.class, Map.class);
-                b.addStatement("$T nextToken = respMap.get(\"next_page_token\")", Object.class);
-                b.addStatement("nextCursor = nextToken != null ? $T.valueOf(nextToken) : null", String.class);
-                b.endControlFlow();
+                List<String> cursorPath = paginator.getPaginationStrategy() != null
+                    ? paginator.getPaginationStrategy().parseCursorJsonPath()
+                    : Collections.emptyList();
+                if (!cursorPath.isEmpty()) {
+                    b.addStatement("$T cursorStep = ($T) json", Object.class, Object.class);
+                    for (String segment : cursorPath) {
+                        b.beginControlFlow("if (cursorStep instanceof $T)", Map.class);
+                        b.addStatement("cursorStep = (($T<?, ?>) cursorStep).get($S)", Map.class, segment);
+                        b.nextControlFlow("else");
+                        b.addStatement("cursorStep = null");
+                        b.endControlFlow();
+                    }
+                    b.addStatement("nextCursor = cursorStep != null ? $T.valueOf(cursorStep) : null", String.class);
+                } else {
+                    b.beginControlFlow("if (json instanceof $T)", Map.class);
+                    b.addStatement("$T<?, ?> respMap = ($T<?, ?>) json", Map.class, Map.class);
+                    b.addStatement("$T nextToken = respMap.get(\"next_page_token\")", Object.class);
+                    b.addStatement("nextCursor = nextToken != null ? $T.valueOf(nextToken) : null", String.class);
+                    b.endControlFlow();
+                }
             }
         } else if (paginator.isPageIncrement()) {
             b.beginControlFlow("if (records.isEmpty())");
