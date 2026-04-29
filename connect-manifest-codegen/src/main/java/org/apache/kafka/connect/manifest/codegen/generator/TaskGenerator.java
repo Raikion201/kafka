@@ -135,7 +135,9 @@ public class TaskGenerator {
             .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
             .superclass(SOURCE_TASK);
 
-        addClassFields(typeBuilder, configClass, auth);
+        boolean hasListCycle = streams.stream().anyMatch(
+            s -> s.getRetriever().getRequester().listCycleConfigField() != null);
+        addClassFields(typeBuilder, configClass, auth, hasListCycle);
 
         typeBuilder.addMethod(
             MethodSpec.methodBuilder("version")
@@ -173,7 +175,7 @@ public class TaskGenerator {
             .build();
     }
 
-    private void addClassFields(TypeSpec.Builder typeBuilder, ClassName configClass, AuthenticatorSpec auth) {
+    private void addClassFields(TypeSpec.Builder typeBuilder, ClassName configClass, AuthenticatorSpec auth, boolean hasListCycle) {
         typeBuilder.addField(
             FieldSpec.builder(OBJECT_MAPPER, "MAPPER", Modifier.PRIVATE, Modifier.STATIC, Modifier.FINAL)
                 .initializer("new $T()", OBJECT_MAPPER)
@@ -205,6 +207,13 @@ public class TaskGenerator {
         if (auth != null && auth.isLegacySessionToken()) {
             typeBuilder.addField(
                 FieldSpec.builder(String.class, "cachedLegacyToken", Modifier.PRIVATE, Modifier.VOLATILE)
+                    .build()
+            );
+        }
+        if (hasListCycle) {
+            typeBuilder.addField(
+                FieldSpec.builder(int.class, "tickerIndex", Modifier.PRIVATE, Modifier.VOLATILE)
+                    .initializer("-1")
                     .build()
             );
         }
@@ -368,14 +377,18 @@ public class TaskGenerator {
         body.addStatement("final $T streamName = $S", String.class, streamName);
         body.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
 
-        // Read stored ticker index so restarts resume from the right item.
+        // On first poll() after start, restore position from offset store.
+        // Afterwards, tickerIndex is kept in-memory to advance every call without
+        // waiting for the 5-second offset flush cycle.
+        body.beginControlFlow("if (tickerIndex < 0)");
         body.addStatement(
             "$T<$T, $T> _stored = context.offsetStorageReader().offset($T.of($S, streamName))",
             Map.class, String.class, Object.class, Map.class, "stream");
-        body.addStatement("int tickerIndex = 0");
+        body.addStatement("tickerIndex = 0");
         body.beginControlFlow(
             "if (_stored != null && _stored.get($S) instanceof $T _i)", "ticker_index", Number.class);
         body.addStatement("tickerIndex = _i.intValue()");
+        body.endControlFlow();
         body.endControlFlow();
 
         // Split config field into items array
@@ -453,6 +466,7 @@ public class TaskGenerator {
             body.addStatement(
                 "result.add(new $T($T.of($S, streamName), $T.of($S, _nextIndex), streamName, $T.STRING_SCHEMA, $S))",
                 SOURCE_RECORD, Map.class, "stream", Map.class, "ticker_index", SCHEMA, "{}");
+            body.addStatement("tickerIndex = _nextIndex");
             body.addStatement("return result");
             body.endControlFlow();
         }
@@ -480,6 +494,7 @@ public class TaskGenerator {
             "result.add(new $T($T.of($S, streamName), $T.of($S, _nextIndex), streamName, $T.STRING_SCHEMA, value))",
             SOURCE_RECORD, Map.class, "stream", Map.class, "ticker_index", SCHEMA);
         body.endControlFlow();
+        body.addStatement("tickerIndex = _nextIndex");
         body.addStatement("return result");
 
         body.nextControlFlow("catch ($T e)", InterruptedException.class);
