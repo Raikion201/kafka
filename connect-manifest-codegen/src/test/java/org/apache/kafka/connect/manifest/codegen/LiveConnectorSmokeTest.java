@@ -130,7 +130,11 @@ public class LiveConnectorSmokeTest {
             // OAuth2 refresh_token — Gmail
             Arguments.of("gmail.yaml",             "GmailSourceTask",             "connector-gmail.properties"),
             // ApiKey query param — US Census Bureau free key
-            Arguments.of("us_census.yaml",         "UsCensusSourceTask",          "connector-us-census.properties")
+            Arguments.of("us_census.yaml",         "UsCensusSourceTask",          "connector-us-census.properties"),
+            // BasicHttp + DatetimeBasedCursor — Delighted survey platform
+            Arguments.of("delighted.yaml",         "DelightedSourceTask",         "connector-delighted.properties"),
+            // OAuth2 + SubstreamPartitionRouter — Google Classroom
+            Arguments.of("google_classroom.yaml",  "GoogleClassroomSourceTask",   "connector-google-classroom.properties")
         );
     }
 

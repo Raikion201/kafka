@@ -20,6 +20,7 @@ import org.apache.kafka.connect.manifest.codegen.model.AuthenticatorSpec;
 import org.apache.kafka.connect.manifest.codegen.model.IncrementalSyncSpec;
 import org.apache.kafka.connect.manifest.codegen.model.ManifestSpec;
 import org.apache.kafka.connect.manifest.codegen.model.PaginatorSpec;
+import org.apache.kafka.connect.manifest.codegen.model.PartitionRouterSpec;
 import org.apache.kafka.connect.manifest.codegen.model.RecordSelectorSpec;
 import org.apache.kafka.connect.manifest.codegen.model.RequesterSpec;
 import org.apache.kafka.connect.manifest.codegen.model.StreamSpec;
@@ -58,6 +59,8 @@ import javax.lang.model.element.Modifier;
  *   <li>Retries transient HTTP 429/5xx errors up to 3 times with exponential backoff.</li>
  *   <li>Polls all streams in one {@code poll()} invocation.</li>
  *   <li>Publishes records as JSON strings to a topic named after the stream.</li>
+ *   <li>Tracks DatetimeBasedCursor state per incremental stream across polls.</li>
+ *   <li>Supports single-level SubstreamPartitionRouter (parent → child streams).</li>
  * </ul>
  */
 public class TaskGenerator {
@@ -69,6 +72,13 @@ public class TaskGenerator {
      */
     private static final Pattern CONFIG_TEMPLATE = Pattern.compile(
         "\\{\\{\\s*config\\[['\"]([^'\"]+)['\"]\\](?:\\s+or\\s+[^}]+)?\\s*\\}\\}");
+
+    /** Matches {@code config['key']} anywhere inside a Jinja2 expression (e.g. format_datetime). */
+    private static final Pattern CONFIG_KEY_IN_EXPR = Pattern.compile("config\\[['\"]([^'\"]+)['\"]\\]");
+
+    /** Matches {@code {{ stream_partition.fieldName }}} in child stream paths. */
+    private static final Pattern STREAM_PARTITION_RE =
+        Pattern.compile("\\{\\{\\s*stream_partition\\.(\\w+)\\s*\\}\\}");
 
     private static final ClassName SOURCE_TASK =
         ClassName.get("org.apache.kafka.connect.source", "SourceTask");
@@ -91,6 +101,11 @@ public class TaskGenerator {
 
     private static final String APP_VERSION = "1.0.0";
 
+    /** Keys declared in the current manifest's spec.connection_specification.properties.
+     *  Set at the start of {@link #generate} so credential resolution can fall back to
+     *  {@code ""} for Airbyte sentinel keys like {@code nothing} that have no real property. */
+    private java.util.Set<String> currentSpecPropKeys = java.util.Collections.emptySet();
+
     /**
      * Generate the source task class source file.
      *
@@ -100,6 +115,10 @@ public class TaskGenerator {
      * @throws CodegenException if the spec is malformed or a stream has no retriever
      */
     public JavaFile generate(ManifestSpec spec, String pkgName) throws CodegenException {
+        this.currentSpecPropKeys = (spec.getSpec() != null
+            && spec.getSpec().getConnectionSpecification() != null)
+            ? spec.getSpec().getConnectionSpecification().getProperties().keySet()
+            : java.util.Collections.emptySet();
         List<StreamSpec> streams = spec.resolvedStreams();
         if (streams.isEmpty()) {
             throw new CodegenException("Manifest has no resolved streams; cannot generate task");
@@ -135,9 +154,25 @@ public class TaskGenerator {
             .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
             .superclass(SOURCE_TASK);
 
-        boolean hasListCycle = streams.stream().anyMatch(
+        // Filter streams:
+        // - Exactly 1 SubstreamPartitionRouter → supported child stream, include it.
+        // - 0 routers AND path has no stream_partition template → normal stream, include.
+        // - 0 routers AND path contains stream_partition → broken ref (no router), skip.
+        // - >1 SubstreamPartitionRouter → multi-level substream, out of scope, skip.
+        List<StreamSpec> runnableStreams = streams.stream()
+            .filter(s -> {
+                long substreamCount = s.getRetriever().getPartitionRouter().stream()
+                    .filter(PartitionRouterSpec::isSubstream).count();
+                if (substreamCount == 1) return true;
+                if (substreamCount > 1) return false;
+                String p = s.getRetriever().getRequester().getPath();
+                return p == null || (!p.contains("stream_partition") && !p.contains("stream_slice"));
+            })
+            .collect(java.util.stream.Collectors.toList());
+
+        boolean hasListCycle = runnableStreams.stream().anyMatch(
             s -> s.getRetriever().getRequester().listCycleConfigField() != null);
-        addClassFields(typeBuilder, configClass, auth, hasListCycle);
+        addClassFields(typeBuilder, configClass, auth, hasListCycle, runnableStreams);
 
         typeBuilder.addMethod(
             MethodSpec.methodBuilder("version")
@@ -148,21 +183,16 @@ public class TaskGenerator {
                 .build()
         );
 
-        typeBuilder.addMethod(buildStart(mapStringString, configClass, auth));
-
-        // Skip sub-streams that require parent-stream partitioning (stream_partition templates)
-        // as those require iteration context that standalone codegen cannot provide.
-        List<StreamSpec> runnableStreams = streams.stream()
-            .filter(s -> {
-                String p = s.getRetriever().getRequester().getPath();
-                return p == null || !p.contains("stream_partition");
-            })
-            .collect(java.util.stream.Collectors.toList());
+        typeBuilder.addMethod(buildStart(mapStringString, configClass, auth, runnableStreams));
 
         typeBuilder.addMethod(buildPollAll(runnableStreams, listOfSourceRecord));
 
         for (StreamSpec stream : runnableStreams) {
             typeBuilder.addMethod(buildStreamPollMethod(stream, configClass, auth, listOfSourceRecord));
+            PartitionRouterSpec router = stream.getRetriever().getSubstreamRouter();
+            if (router != null) {
+                typeBuilder.addMethod(buildFetchPartitionKeys(stream, router, auth, spec));
+            }
         }
 
         String baseUrl = streams.get(0).getRetriever().getRequester().effectiveBaseUrl();
@@ -175,7 +205,13 @@ public class TaskGenerator {
             .build();
     }
 
-    private void addClassFields(TypeSpec.Builder typeBuilder, ClassName configClass, AuthenticatorSpec auth, boolean hasListCycle) {
+    private void addClassFields(
+        TypeSpec.Builder typeBuilder,
+        ClassName configClass,
+        AuthenticatorSpec auth,
+        boolean hasListCycle,
+        List<StreamSpec> streams
+    ) {
         typeBuilder.addField(
             FieldSpec.builder(OBJECT_MAPPER, "MAPPER", Modifier.PRIVATE, Modifier.STATIC, Modifier.FINAL)
                 .initializer("new $T()", OBJECT_MAPPER)
@@ -217,12 +253,45 @@ public class TaskGenerator {
                     .build()
             );
         }
+
+        // DatetimeBasedCursor: one volatile String cursor field per incremental stream.
+        for (StreamSpec s : streams) {
+            IncrementalSyncSpec inc = s.getIncrementalSync();
+            if (inc != null && inc.isDatetimeBased()) {
+                typeBuilder.addField(
+                    FieldSpec.builder(String.class, cursorFieldName(s.getName()),
+                        Modifier.PRIVATE, Modifier.VOLATILE)
+                        .build()
+                );
+            }
+        }
+
+        // SubstreamPartitionRouter: partition key list + current index per child stream.
+        ParameterizedTypeName listString = ParameterizedTypeName.get(
+            ClassName.get("java.util", "List"), ClassName.get(String.class));
+        for (StreamSpec s : streams) {
+            PartitionRouterSpec router = s.getRetriever().getSubstreamRouter();
+            if (router != null) {
+                typeBuilder.addField(
+                    FieldSpec.builder(listString, partitionKeysFieldName(s.getName()),
+                        Modifier.PRIVATE, Modifier.VOLATILE)
+                        .build()
+                );
+                typeBuilder.addField(
+                    FieldSpec.builder(int.class, partitionIdxFieldName(s.getName()),
+                        Modifier.PRIVATE, Modifier.VOLATILE)
+                        .initializer("-1")
+                        .build()
+                );
+            }
+        }
     }
 
     private MethodSpec buildStart(
         ParameterizedTypeName mapStringString,
         ClassName configClass,
-        AuthenticatorSpec auth
+        AuthenticatorSpec auth,
+        List<StreamSpec> streams
     ) {
         MethodSpec.Builder m = MethodSpec.methodBuilder("start")
             .addAnnotation(Override.class)
@@ -232,13 +301,13 @@ public class TaskGenerator {
             .addStatement("this.httpClient = $T.newHttpClient()", HTTP_CLIENT);
 
         if (auth != null && auth.isBasicHttp()) {
-            String userGetter = resolveConfigGetter(auth.getUsername());
-            String passGetter = resolveConfigGetter(auth.getPassword());
+            String userExpr = resolveCredentialExpr(auth.getUsername());
+            String passExpr = resolveCredentialExpr(auth.getPassword());
             m.addStatement(
                 "this.cachedCredentials = $T.getEncoder().encodeToString(\n"
-                    + "        (config.$L() + \":\" + config.$L()).getBytes($T.UTF_8))",
+                    + "        ($L + \":\" + $L).getBytes($T.UTF_8))",
                 ClassName.get("java.util", "Base64"),
-                userGetter, passGetter,
+                userExpr, passExpr,
                 ClassName.get("java.nio.charset", "StandardCharsets")
             );
         }
@@ -256,6 +325,21 @@ public class TaskGenerator {
             m.addStatement("throw new $T(\"Failed to obtain legacy session token\", e)", CONNECT_EXCEPTION);
             m.endControlFlow();
         }
+
+        // Pre-fetch parent partition keys for each substream.
+        for (StreamSpec s : streams) {
+            PartitionRouterSpec router = s.getRetriever().getSubstreamRouter();
+            if (router != null) {
+                String keysField = partitionKeysFieldName(s.getName());
+                String fetchMethod = "fetch" + ManifestSpec.toClassName(s.getName()) + "PartitionKeys";
+                m.beginControlFlow("try");
+                m.addStatement("this.$L = $L()", keysField, fetchMethod);
+                m.nextControlFlow("catch ($T _e)", Exception.class);
+                m.addStatement("this.$L = new $T<>()", keysField, ArrayList.class);
+                m.endControlFlow();
+            }
+        }
+
         return m.build();
     }
 
@@ -285,15 +369,20 @@ public class TaskGenerator {
         RequesterSpec requester = stream.getRetriever().getRequester();
 
         // List-cycle pattern: path/params use config['field'].split(',')[page] as array index.
-        // Generate ticker-cycling code instead of a normal pagination loop.
         String listCycleField = requester.listCycleConfigField();
         if (listCycleField != null) {
             return buildListCyclePollMethod(stream, configClass, auth, listOfSourceRecord, listCycleField);
         }
 
+        // SubstreamPartitionRouter: child stream whose path contains a partition variable.
+        PartitionRouterSpec router = stream.getRetriever().getSubstreamRouter();
+        if (router != null) {
+            return buildSubstreamPollMethod(stream, configClass, auth, listOfSourceRecord, router);
+        }
+
+        // Normal stream (with optional DatetimeBasedCursor).
         String baseUrl = requester.effectiveBaseUrl();
         String path = requester.getPath();
-        // Ensure exactly one "/" between base URL and path
         if (!baseUrl.isEmpty() && !baseUrl.endsWith("/") && !path.isEmpty() && !path.startsWith("/")) {
             baseUrl = baseUrl + "/";
         }
@@ -301,6 +390,9 @@ public class TaskGenerator {
         PaginatorSpec paginator = stream.getRetriever().getPaginator();
         Map<String, String> requestParams = requester.getRequestParameters();
         List<String> fieldPath = extractFieldPath(stream);
+        IncrementalSyncSpec incrementalSync = stream.getIncrementalSync();
+        boolean isIncremental = incrementalSync != null && incrementalSync.isDatetimeBased();
+        String cursorVar = isIncremental ? cursorFieldName(streamName) : null;
 
         String methodName = "poll" + ManifestSpec.toClassName(streamName);
         boolean hasPagination = paginator != null && !paginator.hasNoPagination();
@@ -314,18 +406,22 @@ public class TaskGenerator {
             body.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
         }
 
-        IncrementalSyncSpec incrementalSync = stream.getIncrementalSync();
-        body.add(buildUrlBlock(baseUrl, path, requestParams, paginator, hasPagination, auth, incrementalSync));
+        // Restore or initialise DatetimeBasedCursor from offset store.
+        if (isIncremental) {
+            body.add(buildIncrementalInit(streamName, incrementalSync));
+        }
+
+        body.add(buildUrlBlock(baseUrl, path, requestParams, paginator, hasPagination, auth,
+            incrementalSync, cursorVar));
         body.beginControlFlow("try");
         buildRequestStatement(body, auth, paginator);
         body.add(buildFetchBlock(paginator));
-        // Cursor state must be extracted from the raw response BEFORE field-path navigation
-        // replaces json with the inner records array.
         if (hasPagination && paginator.isCursor()) {
             body.add(buildCursorStateUpdate(paginator));
         }
         body.add(buildFieldPathNav(fieldPath, hasPagination));
-        body.add(buildNormalizeAndCollect(hasPagination, paginator));
+        body.add(buildNormalizeAndCollect(hasPagination, paginator, cursorVar,
+            isIncremental ? incrementalSync.getCursorField() : null));
         body.nextControlFlow("catch ($T e)", InterruptedException.class);
         body.addStatement("$T.currentThread().interrupt()", Thread.class);
         body.addStatement(
@@ -344,6 +440,289 @@ public class TaskGenerator {
             .addModifiers(Modifier.PRIVATE)
             .returns(listOfSourceRecord)
             .addException(InterruptedException.class)
+            .addCode(body.build())
+            .build();
+    }
+
+    /**
+     * Generates the poll method for a child stream that iterates over parent partition keys.
+     * One partition key is consumed per {@code poll()} call; the index wraps around after
+     * all keys have been processed, and keys are re-fetched at that point.
+     */
+    private MethodSpec buildSubstreamPollMethod(
+        StreamSpec stream,
+        ClassName configClass,
+        AuthenticatorSpec auth,
+        ParameterizedTypeName listOfSourceRecord,
+        PartitionRouterSpec router
+    ) throws CodegenException {
+        RequesterSpec requester = stream.getRetriever().getRequester();
+        String baseUrl = requester.effectiveBaseUrl();
+        String rawPath = requester.getPath();
+        String streamName = stream.getName();
+        String methodName = "poll" + ManifestSpec.toClassName(streamName);
+        PaginatorSpec paginator = stream.getRetriever().getPaginator();
+        List<String> fieldPath = extractFieldPath(stream);
+        boolean hasPagination = paginator != null && !paginator.hasNoPagination();
+
+        String keysField = partitionKeysFieldName(streamName);
+        String idxField  = partitionIdxFieldName(streamName);
+
+        CodeBlock.Builder body = CodeBlock.builder();
+        body.addStatement("final $T streamName = $S", String.class, streamName);
+        body.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
+
+        // On first poll, restore partition index from offset store.
+        body.beginControlFlow("if ($L < 0)", idxField);
+        body.addStatement(
+            "$T<$T, $T> _stored = context.offsetStorageReader().offset($T.of($S, streamName))",
+            Map.class, String.class, Object.class, Map.class, "stream");
+        body.addStatement("$L = 0", idxField);
+        body.beginControlFlow(
+            "if (_stored != null && _stored.get($S) instanceof $T _p)", "partition_idx", Number.class);
+        body.addStatement("$L = _p.intValue()", idxField);
+        body.endControlFlow();
+        body.endControlFlow();
+
+        // Guard: no partition keys fetched yet.
+        body.beginControlFlow("if ($L == null || $L.isEmpty())", keysField, keysField);
+        body.addStatement("return result");
+        body.endControlFlow();
+
+        // Wrap around when we've processed all keys; re-fetch on next cycle.
+        body.beginControlFlow("if ($L >= $L.size())", idxField, keysField);
+        body.addStatement("$L = 0", idxField);
+        body.beginControlFlow("try");
+        body.addStatement("$L = fetch$LPartitionKeys()", keysField, ManifestSpec.toClassName(streamName));
+        body.nextControlFlow("catch ($T _e)", Exception.class);
+        body.endControlFlow();
+        body.beginControlFlow("if ($L == null || $L.isEmpty())", keysField, keysField);
+        body.addStatement("return result");
+        body.endControlFlow();
+        body.endControlFlow();
+
+        body.addStatement("$T _partitionKey = $L.get($L)", String.class, keysField, idxField);
+        body.addStatement("int _nextIdx = ($L + 1 >= $L.size()) ? 0 : $L + 1", idxField, keysField, idxField);
+
+        // Declare pagination state variables (fresh per partition-key call, not restored from store).
+        if (hasPagination && paginator != null) {
+            if (paginator.isCursor()) {
+                body.addStatement("$T nextCursor = null", String.class);
+                // RequestPath paginators use the cursor as the full next URL — declare it too.
+                if (isRequestPath(paginator)) {
+                    // `url` is declared by buildSubstreamUrlBlock for RequestPath paginators.
+                }
+            } else if (paginator.isPageIncrement()) {
+                int start = paginator.getPaginationStrategy() != null
+                    ? paginator.getPaginationStrategy().getStartFromPage() : 1;
+                body.addStatement("final int startPage = $L", start);
+                body.addStatement("int page = startPage");
+                body.addStatement("final int pageLimit = $L", paginator.pageSize());
+            } else if (paginator.isOffsetIncrement()) {
+                body.addStatement("int offset = 0");
+                body.addStatement("final int pageLimit = $L", paginator.pageSize());
+            }
+        }
+
+        // Build URL substituting {{ stream_partition.X }} → _partitionKey.
+        body.add(buildSubstreamUrlBlock(baseUrl, rawPath, paginator, hasPagination));
+
+        body.beginControlFlow("try");
+        buildRequestStatement(body, auth, paginator);
+        body.add(buildFetchBlock(paginator));
+        if (hasPagination && paginator.isCursor()) {
+            body.add(buildCursorStateUpdate(paginator));
+        }
+        body.add(buildFieldPathNav(fieldPath, hasPagination));
+        body.add(buildNormalizeAndCollect(hasPagination, paginator, null, null));
+
+        // Advance partition index only after last pagination page is consumed.
+        if (hasPagination && paginator.isCursor()) {
+            body.beginControlFlow("if (nextCursor == null || nextCursor.isEmpty())");
+            body.addStatement("$L = _nextIdx", idxField);
+            body.endControlFlow();
+        } else {
+            body.addStatement("$L = _nextIdx", idxField);
+        }
+
+        body.nextControlFlow("catch ($T e)", InterruptedException.class);
+        body.addStatement("$T.currentThread().interrupt()", Thread.class);
+        body.addStatement("throw new $T(\"Interrupted while polling \" + streamName, e)", CONNECT_EXCEPTION);
+        body.nextControlFlow("catch ($T e)", Exception.class);
+        body.addStatement("throw new $T(\"Failed to poll \" + streamName, e)", CONNECT_EXCEPTION);
+        body.endControlFlow();
+
+        if (hasPagination) {
+            body.add(buildPaginationLoopClose(paginator));
+        } else {
+            body.addStatement("return result");
+        }
+
+        return MethodSpec.methodBuilder(methodName)
+            .addModifiers(Modifier.PRIVATE)
+            .returns(listOfSourceRecord)
+            .addException(InterruptedException.class)
+            .addCode(body.build())
+            .build();
+    }
+
+    /**
+     * Builds URL initialisation for a child stream path that contains
+     * {@code {{ stream_partition.X }}}. Splits the path on the Jinja2 template
+     * and inserts the runtime {@code _partitionKey} value.
+     * For RequestPath cursor paginators, assigns to the {@code url} variable.
+     */
+    private CodeBlock buildSubstreamUrlBlock(
+        String baseUrl, String rawPath,
+        PaginatorSpec paginator, boolean hasPagination
+    ) {
+        CodeBlock.Builder b = CodeBlock.builder();
+
+        // Compute the base URL with partition variable substituted.
+        Matcher m = STREAM_PARTITION_RE.matcher(rawPath);
+        boolean noPartitionVar = !m.find();
+
+        if (isRequestPath(paginator)) {
+            // For RequestPath cursor, the cursor itself is the full URL for page 2+.
+            // For the first page, build the URL from base + path.
+            if (noPartitionVar) {
+                b.addStatement("$T url = (nextCursor != null) ? nextCursor : $S",
+                    String.class, baseUrl + rawPath);
+            } else {
+                String before = rawPath.substring(0, m.start());
+                String after  = rawPath.substring(m.end());
+                b.addStatement(
+                    "$T _baseUrl = $S + $T.encode(_partitionKey, $T.UTF_8) + $S",
+                    String.class, baseUrl + before,
+                    ClassName.get("java.net", "URLEncoder"),
+                    ClassName.get("java.nio.charset", "StandardCharsets"),
+                    after);
+                b.addStatement("$T url = (nextCursor != null) ? nextCursor : _baseUrl", String.class);
+            }
+            return b.build();
+        }
+
+        // Standard urlBuilder path.
+        if (noPartitionVar) {
+            b.addStatement("$T urlBuilder = new $T($S)",
+                StringBuilder.class, StringBuilder.class, baseUrl + rawPath);
+        } else {
+            String before = rawPath.substring(0, m.start());
+            String after  = rawPath.substring(m.end());
+            b.addStatement(
+                "$T urlBuilder = new $T($S + $T.encode(_partitionKey, $T.UTF_8) + $S)",
+                StringBuilder.class, StringBuilder.class,
+                baseUrl + before,
+                ClassName.get("java.net", "URLEncoder"),
+                ClassName.get("java.nio.charset", "StandardCharsets"),
+                after);
+        }
+        if (hasPagination && paginator != null) {
+            appendPaginationParams(b, paginator, !(baseUrl + rawPath).contains("?"));
+        }
+        return b.build();
+    }
+
+    /**
+     * Generates the private {@code fetchXxxPartitionKeys()} method that fetches all records
+     * from the parent stream and returns a list of the extracted parent key values.
+     */
+    private MethodSpec buildFetchPartitionKeys(
+        StreamSpec childStream,
+        PartitionRouterSpec router,
+        AuthenticatorSpec auth,
+        ManifestSpec spec
+    ) throws CodegenException {
+        String parentStreamName = router.parentStreamName();
+        String parentKey        = router.parentKey();
+        String methodName = "fetch" + ManifestSpec.toClassName(childStream.getName()) + "PartitionKeys";
+
+        ParameterizedTypeName listString = ParameterizedTypeName.get(
+            ClassName.get("java.util", "List"), ClassName.get(String.class));
+
+        StreamSpec parentStream = spec.resolvedStreams().stream()
+            .filter(s -> parentStreamName != null && parentStreamName.equals(s.getName()))
+            .findFirst().orElse(null);
+
+        if (parentStream == null || parentStream.getRetriever() == null) {
+            return MethodSpec.methodBuilder(methodName)
+                .addModifiers(Modifier.PRIVATE)
+                .addException(Exception.class)
+                .returns(listString)
+                .addStatement("return $T.emptyList()", Collections.class)
+                .build();
+        }
+
+        RequesterSpec parentRequester = parentStream.getRetriever().getRequester();
+        String baseUrl = parentRequester.effectiveBaseUrl();
+        String path    = parentRequester.getPath();
+        if (!baseUrl.isEmpty() && !baseUrl.endsWith("/") && !path.isEmpty() && !path.startsWith("/")) {
+            baseUrl = baseUrl + "/";
+        }
+        PaginatorSpec parentPaginator = parentStream.getRetriever().getPaginator();
+        List<String> fieldPath = extractFieldPath(parentStream);
+
+        ParameterizedTypeName arrayListString = ParameterizedTypeName.get(
+            ClassName.get("java.util", "ArrayList"), ClassName.get(String.class));
+
+        CodeBlock.Builder body = CodeBlock.builder();
+        body.addStatement("$T keys = new $T()", listString, arrayListString);
+        body.addStatement("$T nextCursor = null", String.class);
+
+        body.beginControlFlow("do");
+        body.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class, baseUrl + path);
+
+        // Append cursor pagination token if present (not RequestPath).
+        if (parentPaginator != null && parentPaginator.isCursor()
+                && parentPaginator.getPageTokenOption() != null
+                && !parentPaginator.getPageTokenOption().isRequestPath()) {
+            body.beginControlFlow("if (nextCursor != null && !nextCursor.isEmpty())");
+            body.addStatement("urlBuilder.append($S + nextCursor)", "?" + parentPaginator.pageParamName() + "=");
+            body.endControlFlow();
+        }
+
+        // Build and send request (same auth as child stream).
+        buildRequestStatement(body, auth, null);
+        body.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
+        body.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");
+        body.addStatement("break");
+        body.endControlFlow();
+        body.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
+
+        // Extract next cursor before navigating field path.
+        if (parentPaginator != null && parentPaginator.isCursor()) {
+            body.add(buildCursorStateUpdate(parentPaginator));
+        } else {
+            body.addStatement("nextCursor = null");
+        }
+
+        if (!fieldPath.isEmpty()) {
+            body.add(buildFieldPathNav(fieldPath, false));
+        }
+
+        body.addStatement("$T<$T> records", List.class, Object.class);
+        body.beginControlFlow("if (json instanceof $T)", List.class);
+        body.addStatement("records = ($T<$T>) json", List.class, Object.class);
+        body.nextControlFlow("else");
+        body.addStatement("records = $T.singletonList(json)", Collections.class);
+        body.endControlFlow();
+
+        body.beginControlFlow("for ($T rec : records)", Object.class);
+        body.beginControlFlow("if (rec instanceof $T<?, ?> _m)", Map.class);
+        body.addStatement("$T val = _m.get($S)", Object.class, parentKey);
+        body.beginControlFlow("if (val != null)");
+        body.addStatement("keys.add($T.valueOf(val))", String.class);
+        body.endControlFlow();
+        body.endControlFlow();
+        body.endControlFlow();
+
+        body.endControlFlow("while (nextCursor != null && !nextCursor.isEmpty())");
+        body.addStatement("return keys");
+
+        return MethodSpec.methodBuilder(methodName)
+            .addModifiers(Modifier.PRIVATE)
+            .returns(listString)
+            .addException(Exception.class)
             .addCode(body.build())
             .build();
     }
@@ -512,6 +891,57 @@ public class TaskGenerator {
             .build();
     }
 
+    /**
+     * Emits the DatetimeBasedCursor initialisation block.
+     * On first poll, restores the cursor from the offset store (if present) or
+     * falls back to the config start date.
+     */
+    private CodeBlock buildIncrementalInit(String streamName, IncrementalSyncSpec sync) {
+        String cursorVar = cursorFieldName(streamName);
+        CodeBlock.Builder b = CodeBlock.builder();
+        b.beginControlFlow("if ($L == null)", cursorVar);
+        // Use a distinct variable name to avoid collision with _stored in buildPaginationInit
+        // when both pagination and incremental sync are active on the same stream.
+        b.addStatement(
+            "$T<$T, $T> _incStored = context.offsetStorageReader().offset($T.of($S, streamName))",
+            Map.class, String.class, Object.class, Map.class, "stream");
+        b.beginControlFlow(
+            "if (_incStored != null && _incStored.get($S) instanceof $T _s && !_s.isEmpty())", "cursor", String.class);
+        b.addStatement("$L = _s", cursorVar);
+        b.nextControlFlow("else");
+        IncrementalSyncSpec.DatetimeSpec startDt = sync.getStartDatetime();
+        if (startDt != null && startDt.getDatetime() != null) {
+            String getter = resolveConfigGetterLoose(startDt.getDatetime());
+            b.addStatement("$L = config.$L()", cursorVar, getter);
+        } else {
+            b.addStatement("$L = $S", cursorVar, "0");
+        }
+        b.endControlFlow();
+        b.endControlFlow();
+        return b.build();
+    }
+
+    /**
+     * Scans {@code records} for the max value of {@code jsonCursorField} and advances
+     * the in-memory {@code cursorVarName} field. Must run before SourceRecords are emitted
+     * so that every record's offset already reflects the most advanced position in the batch.
+     */
+    private CodeBlock buildIncrementalCursorUpdate(String cursorVarName, String jsonCursorField) {
+        CodeBlock.Builder b = CodeBlock.builder();
+        b.beginControlFlow("for ($T _rec : records)", Object.class);
+        b.beginControlFlow("if (_rec instanceof $T<?, ?> _m)", Map.class);
+        b.addStatement("$T _cv = _m.get($S)", Object.class, jsonCursorField);
+        b.beginControlFlow("if (_cv != null)");
+        b.addStatement("$T _cvStr = $T.valueOf(_cv)", String.class, String.class);
+        b.beginControlFlow("if ($L == null || _cvStr.compareTo($L) > 0)", cursorVarName, cursorVarName);
+        b.addStatement("$L = _cvStr", cursorVarName);
+        b.endControlFlow();
+        b.endControlFlow();
+        b.endControlFlow();
+        b.endControlFlow();
+        return b.build();
+    }
+
     private CodeBlock buildPaginationInit(PaginatorSpec paginator) {
         CodeBlock.Builder b = CodeBlock.builder();
         b.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
@@ -562,7 +992,8 @@ public class TaskGenerator {
         PaginatorSpec paginator,
         boolean hasPagination,
         AuthenticatorSpec auth,
-        IncrementalSyncSpec incrementalSync
+        IncrementalSyncSpec incrementalSync,
+        String cursorVarName
     ) {
         CodeBlock.Builder b = CodeBlock.builder();
 
@@ -615,7 +1046,7 @@ public class TaskGenerator {
 
         // DatetimeBasedCursor: inject start / end date range as query params
         if (incrementalSync != null && incrementalSync.isDatetimeBased()) {
-            hasParams = appendIncrementalSyncParams(b, incrementalSync, hasParams);
+            hasParams = appendIncrementalSyncParams(b, incrementalSync, hasParams, cursorVarName);
         }
 
         if (!hasPagination || paginator == null) return b.build();
@@ -638,9 +1069,6 @@ public class TaskGenerator {
             return;
         }
 
-        // Either base or path (or both) have config templates — build concatenation.
-        // E.g. baseUrl="{{ config['host'] }}", path="/api/rest/v1/products"
-        // → new StringBuilder(config.getHost() + "/api/rest/v1/products")
         StringBuilder fmt = new StringBuilder("$T urlBuilder = new $T(");
         List<Object> fmtArgs = new ArrayList<>();
         fmtArgs.add(StringBuilder.class);
@@ -701,28 +1129,43 @@ public class TaskGenerator {
             && "request_parameter".equalsIgnoreCase(auth.getInjectInto().getInjectInto());
     }
 
+    /**
+     * Appends {@code since} and {@code until} query parameters for DatetimeBasedCursor.
+     * When {@code cursorVarName} is provided, the in-memory cursor variable is used for
+     * {@code since} instead of the config start date, enabling incremental advancement.
+     * The {@code until} value is always the current epoch-second timestamp.
+     */
     private boolean appendIncrementalSyncParams(
-        CodeBlock.Builder b, IncrementalSyncSpec sync, boolean hasParams
+        CodeBlock.Builder b, IncrementalSyncSpec sync, boolean hasParams, String cursorVarName
     ) {
         IncrementalSyncSpec.TimeOptionSpec startOpt = sync.getStartTimeOption();
-        IncrementalSyncSpec.DatetimeSpec startDt = sync.getStartDatetime();
-        if (startOpt != null && startOpt.getFieldName() != null && startDt != null) {
+        if (startOpt != null && startOpt.getFieldName() != null) {
             String sep = hasParams ? "&" : "?";
-            String getter = resolveConfigGetter(startDt.getDatetime());
-            b.addStatement("urlBuilder.append($S + $T.encode(config.$L(), $T.UTF_8))",
-                sep + startOpt.getFieldName() + "=",
-                ClassName.get("java.net", "URLEncoder"), getter,
-                ClassName.get("java.nio.charset", "StandardCharsets"));
+            if (cursorVarName != null) {
+                // Use the in-memory cursor variable (epoch seconds or ISO string).
+                b.addStatement("urlBuilder.append($S + $T.encode($L, $T.UTF_8))",
+                    sep + startOpt.getFieldName() + "=",
+                    ClassName.get("java.net", "URLEncoder"), cursorVarName,
+                    ClassName.get("java.nio.charset", "StandardCharsets"));
+            } else {
+                IncrementalSyncSpec.DatetimeSpec startDt = sync.getStartDatetime();
+                if (startDt != null && startDt.getDatetime() != null) {
+                    String getter = resolveConfigGetterLoose(startDt.getDatetime());
+                    b.addStatement("urlBuilder.append($S + $T.encode(config.$L(), $T.UTF_8))",
+                        sep + startOpt.getFieldName() + "=",
+                        ClassName.get("java.net", "URLEncoder"), getter,
+                        ClassName.get("java.nio.charset", "StandardCharsets"));
+                }
+            }
             hasParams = true;
         }
         IncrementalSyncSpec.TimeOptionSpec endOpt = sync.getEndTimeOption();
         if (endOpt != null && endOpt.getFieldName() != null) {
             String sep = hasParams ? "&" : "?";
-            b.addStatement("urlBuilder.append($S + $T.encode($T.now().toString(), $T.UTF_8))",
+            // Epoch seconds — many APIs (e.g. Delighted) expect integer timestamps.
+            b.addStatement("urlBuilder.append($S + $T.valueOf($T.currentTimeMillis() / 1000))",
                 sep + endOpt.getFieldName() + "=",
-                ClassName.get("java.net", "URLEncoder"),
-                ClassName.get("java.time", "Instant"),
-                ClassName.get("java.nio.charset", "StandardCharsets"));
+                String.class, System.class);
             hasParams = true;
         }
         return hasParams;
@@ -778,7 +1221,9 @@ public class TaskGenerator {
         return b.build();
     }
 
-    private CodeBlock buildNormalizeAndCollect(boolean hasPagination, PaginatorSpec paginator) {
+    private CodeBlock buildNormalizeAndCollect(
+        boolean hasPagination, PaginatorSpec paginator, String cursorVarName, String jsonCursorField
+    ) {
         CodeBlock.Builder b = CodeBlock.builder();
         b.addStatement("$T<$T> records", List.class, Object.class);
         b.beginControlFlow("if (json instanceof $T)", List.class);
@@ -787,9 +1232,7 @@ public class TaskGenerator {
         b.addStatement("records = $T.singletonList(json)", Collections.class);
         b.endControlFlow();
 
-        // Compute the next position to store in each SourceRecord's offset map.
-        // On the last page (incomplete batch), reset to the start so next cycle re-reads.
-        // Cursor pagination: nextCursor was already extracted by buildCursorStateUpdate.
+        // Compute next page/offset position.
         if (hasPagination) {
             if (paginator.isPageIncrement()) {
                 b.addStatement("int nextPage = records.size() < pageLimit ? startPage : page + 1");
@@ -798,7 +1241,14 @@ public class TaskGenerator {
             }
         }
 
-        CodeBlock positionMap = buildPositionMapCode(paginator);
+        // For DatetimeBasedCursor: scan records for the max cursor value BEFORE emitting
+        // SourceRecords so that the offset stored in each record already reflects the
+        // most advanced position in this batch.
+        if (cursorVarName != null && jsonCursorField != null) {
+            b.add(buildIncrementalCursorUpdate(cursorVarName, jsonCursorField));
+        }
+
+        CodeBlock positionMap = buildPositionMapCode(paginator, cursorVarName);
         b.beginControlFlow("for ($T record : records)", Object.class);
         b.addStatement("$T value = MAPPER.writeValueAsString(record)", String.class);
         b.addStatement(
@@ -808,7 +1258,11 @@ public class TaskGenerator {
         return b.build();
     }
 
-    private CodeBlock buildPositionMapCode(PaginatorSpec paginator) {
+    private CodeBlock buildPositionMapCode(PaginatorSpec paginator, String cursorVarName) {
+        if (cursorVarName != null) {
+            return CodeBlock.of("$T.of(\"cursor\", $L != null ? $L : \"\")",
+                Map.class, cursorVarName, cursorVarName);
+        }
         if (paginator != null && paginator.isCursor()) {
             return CodeBlock.of("$T.of(\"cursor\", nextCursor != null ? nextCursor : \"\")", Map.class);
         } else if (paginator != null && paginator.isPageIncrement()) {
@@ -868,9 +1322,7 @@ public class TaskGenerator {
     }
 
     private CodeBlock buildPaginationLoopClose(PaginatorSpec paginator) {
-        CodeBlock.Builder b = CodeBlock.builder();
-        b.addStatement("return result");
-        return b.build();
+        return CodeBlock.builder().addStatement("return result").build();
     }
 
     /** Generates the {@code HttpRequest.newBuilder()...build()} statement with auth headers. */
@@ -1149,13 +1601,13 @@ public class TaskGenerator {
         // Add Basic auth header if the inner authenticator is BasicHttp
         AuthenticatorSpec innerAuth = login.getAuthenticator();
         if (innerAuth != null && innerAuth.isBasicHttp()) {
-            String userGetter = resolveConfigGetter(innerAuth.getUsername());
-            String passGetter = resolveConfigGetter(innerAuth.getPassword());
+            String userExpr = resolveCredentialExpr(innerAuth.getUsername());
+            String passExpr = resolveCredentialExpr(innerAuth.getPassword());
             reqBuilder.append("        .header(\"Authorization\", \"Basic \" + $T.getEncoder().encodeToString(\n"
-                + "                (config.$L() + \":\" + config.$L()).getBytes($T.UTF_8)))\n");
+                + "                ($L + \":\" + $L).getBytes($T.UTF_8)))\n");
             reqArgs.add(ClassName.get("java.util", "Base64"));
-            reqArgs.add(userGetter);
-            reqArgs.add(passGetter);
+            reqArgs.add(userExpr);
+            reqArgs.add(passExpr);
             reqArgs.add(ClassName.get("java.nio.charset", "StandardCharsets"));
         }
         reqBuilder.append("        .POST($T.ofString(loginBody))\n        .build()");
@@ -1198,7 +1650,6 @@ public class TaskGenerator {
     private MethodSpec buildLoginAndCacheLegacyToken(
         ClassName configClass, AuthenticatorSpec auth, String baseUrl
     ) {
-        // Resolve login URL: baseUrl (may be config template) + "/" + loginUrl path
         Matcher urlMatcher = CONFIG_TEMPLATE.matcher(baseUrl);
         String loginUrlExpr;
         if (urlMatcher.find()) {
@@ -1209,14 +1660,14 @@ public class TaskGenerator {
             loginUrlExpr = "\"" + baseUrl + auth.getLoginUrl() + "\"";
         }
 
-        String userGetter = resolveConfigGetter(auth.getUsername());
-        String passGetter = resolveConfigGetter(auth.getPassword());
+        String userExpr = resolveCredentialExpr(auth.getUsername());
+        String passExpr = resolveCredentialExpr(auth.getPassword());
         ClassName bodyPublishers = ClassName.get("java.net.http", "HttpRequest.BodyPublishers");
 
         CodeBlock.Builder body = CodeBlock.builder();
-        body.addStatement("$T loginBody = \"{\\\"username\\\":\\\"\" + config.$L()\n"
-            + "        + \"\\\",\\\"password\\\":\\\"\" + config.$L() + \"\\\"}\"",
-            String.class, userGetter, passGetter);
+        body.addStatement("$T loginBody = \"{\\\"username\\\":\\\"\" + $L\n"
+            + "        + \"\\\",\\\"password\\\":\\\"\" + $L + \"\\\"}\"",
+            String.class, userExpr, passExpr);
         body.addStatement(
             "$T loginReq = $T.newBuilder()\n"
                 + "        .uri($T.create(" + loginUrlExpr + "))\n"
@@ -1252,17 +1703,12 @@ public class TaskGenerator {
     private MethodSpec buildBuildJwt(ClassName configClass, AuthenticatorSpec auth) {
         CodeBlock.Builder body = CodeBlock.builder();
 
-        // Resolve how to get the private key PEM
         String secretKey = auth.getSecretKey() == null ? "" : auth.getSecretKey();
-        // Pattern 1: json_loads(config['key'])['subkey']
         Pattern jsonLoads = Pattern.compile("json_loads\\(config\\[['\"]([^'\"]+)['\"]\\]\\)\\[['\"]([^'\"]+)['\"]\\]");
         Matcher jlMatcher = jsonLoads.matcher(secretKey);
-        // Pattern 2: {{ config['outer']['inner'] }}
         Pattern nestedConfig = Pattern.compile("config\\[['\"]([^'\"]+)['\"]\\]\\[['\"]([^'\"]+)['\"]\\]");
         Matcher ncMatcher = nestedConfig.matcher(secretKey);
 
-        // Everything from key extraction through signing can throw checked exceptions;
-        // wrap the entire method body in a single try-catch.
         body.beginControlFlow("try");
 
         if (jlMatcher.find()) {
@@ -1283,7 +1729,6 @@ public class TaskGenerator {
             body.addStatement("$T privateKeyPem = config.$L()", String.class, getter);
         }
 
-        // Strip PEM headers and decode
         body.addStatement(
             "$T keyContent = privateKeyPem\n"
                 + "        .replace(\"-----BEGIN PRIVATE KEY-----\", \"\")\n"
@@ -1295,13 +1740,11 @@ public class TaskGenerator {
         body.addStatement("byte[] keyBytes = $T.getDecoder().decode(keyContent)",
             ClassName.get("java.util", "Base64"));
 
-        // Build JWT header
         body.addStatement("long now = $T.currentTimeMillis() / 1000L", System.class);
         body.addStatement("long exp = now + $L", auth.getTokenDuration());
         body.addStatement("$T headerJson = \"{\\\"alg\\\":\\\"RS256\\\",\\\"typ\\\":\\\"JWT\\\"}\"",
             String.class);
 
-        // Build payload from jwtPayload / additional_jwt_payload
         Map<String, String> payloadFields = new LinkedHashMap<>();
         if (auth.getJwtPayload() != null) payloadFields.putAll(auth.getJwtPayload());
         if (auth.getAdditionalJwtPayload() != null) payloadFields.putAll(auth.getAdditionalJwtPayload());
@@ -1312,7 +1755,6 @@ public class TaskGenerator {
         body.addStatement("payloadMap.put(\"exp\", exp)");
         for (Map.Entry<String, String> e : payloadFields.entrySet()) {
             Matcher cfgM = CONFIG_TEMPLATE.matcher(e.getValue());
-            // Also handle json_loads pattern in payload fields
             Matcher jlPayload = jsonLoads.matcher(e.getValue());
             Matcher ncPayload = nestedConfig.matcher(e.getValue());
             if (jlPayload.find()) {
@@ -1336,7 +1778,6 @@ public class TaskGenerator {
         }
         body.addStatement("$T payloadJson = MAPPER.writeValueAsString(payloadMap)", String.class);
 
-        // Base64url encode header and payload
         ClassName b64 = ClassName.get("java.util", "Base64");
         body.addStatement(
             "$T headerB64 = $T.getUrlEncoder().withoutPadding().encodeToString(headerJson.getBytes($T.UTF_8))",
@@ -1348,7 +1789,6 @@ public class TaskGenerator {
             "byte[] signingInput = (headerB64 + \".\" + payloadB64).getBytes($T.UTF_8)",
             ClassName.get("java.nio.charset", "StandardCharsets"));
 
-        // Sign with RSA private key
         body.addStatement(
             "$T privateKey = $T.getInstance(\"RSA\").generatePrivate(new $T(keyBytes))",
             ClassName.get("java.security", "PrivateKey"),
@@ -1407,7 +1847,6 @@ public class TaskGenerator {
         return MethodSpec.methodBuilder("stop")
             .addAnnotation(Override.class)
             .addModifiers(Modifier.PUBLIC)
-            // HttpClient.close() requires Java 21+; release threads via shutdown workaround.
             .beginControlFlow("if (httpClient instanceof $T ac)", AutoCloseable.class)
             .beginControlFlow("try")
             .addStatement("ac.close()")
@@ -1418,10 +1857,30 @@ public class TaskGenerator {
             .build();
     }
 
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
     /**
-     * Resolves a config template like {@code {{ config['key'] }}} to the accessor name
-     * (e.g., {@code getKey}), or falls back to a safe default when the template doesn't match.
+     * Returns a Java expression for a credential value (username or password).
+     * If the config key referenced by {@code template} is not in the current spec's declared
+     * properties (e.g. Airbyte's sentinel {@code config['nothing']}), returns {@code "\"\""} so
+     * the generated code uses an empty string literal rather than a non-existent getter.
      */
+    private String resolveCredentialExpr(String template) {
+        if (template == null) return "\"\"";
+        Matcher m = CONFIG_TEMPLATE.matcher(template.trim());
+        String key = null;
+        if (m.matches()) {
+            key = m.group(1);
+        } else {
+            Matcher p = CONFIG_TEMPLATE.matcher(template);
+            if (p.find()) key = p.group(1);
+        }
+        if (key != null && !currentSpecPropKeys.isEmpty() && !currentSpecPropKeys.contains(key)) {
+            return "\"\"";
+        }
+        return "config." + resolveConfigGetter(template) + "()";
+    }
+
     private String resolveConfigGetter(String template) {
         if (template == null) {
             return "get";
@@ -1433,6 +1892,21 @@ public class TaskGenerator {
         Matcher partial = CONFIG_TEMPLATE.matcher(template);
         if (partial.find()) {
             return "get" + ManifestSpec.toClassName(partial.group(1));
+        }
+        return "get";
+    }
+
+    /**
+     * Like {@link #resolveConfigGetter} but also matches {@code config['key']} inside
+     * complex Jinja2 expressions such as {@code format_datetime(config['since'], ...)}.
+     */
+    private String resolveConfigGetterLoose(String expr) {
+        if (expr == null) return "get";
+        String getter = resolveConfigGetter(expr);
+        if (!"get".equals(getter)) return getter;
+        Matcher m = CONFIG_KEY_IN_EXPR.matcher(expr);
+        if (m.find()) {
+            return "get" + ManifestSpec.toClassName(m.group(1));
         }
         return "get";
     }
@@ -1458,5 +1932,21 @@ public class TaskGenerator {
         }
         List<String> fp = selector.getExtractor().getFieldPath();
         return fp == null ? Collections.emptyList() : fp;
+    }
+
+    private static String toJavaName(String streamName) {
+        return streamName.replace('-', '_').replace(' ', '_');
+    }
+
+    private static String cursorFieldName(String streamName) {
+        return "cursor_" + toJavaName(streamName);
+    }
+
+    private static String partitionKeysFieldName(String streamName) {
+        return toJavaName(streamName) + "_partitionKeys";
+    }
+
+    private static String partitionIdxFieldName(String streamName) {
+        return toJavaName(streamName) + "_partitionIdx";
     }
 }

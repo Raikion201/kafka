@@ -105,7 +105,11 @@ public class CodegenIntegrationTest {
             Arguments.of("pokeapi.yaml"),
             Arguments.of("jsonplaceholder.yaml"),
             // List-cycle pattern: config field split on comma, iterated by page index
-            Arguments.of("yahoo_finance_price.yaml")
+            Arguments.of("yahoo_finance_price.yaml"),
+            // DatetimeBasedCursor — incremental sync via since/until epoch params
+            Arguments.of("delighted.yaml"),
+            // SubstreamPartitionRouter — parent→child streams (courses → teachers/students/etc.)
+            Arguments.of("google_classroom.yaml")
         );
     }
 
@@ -461,6 +465,103 @@ public class CodegenIntegrationTest {
             "Yahoo Finance task must not contain raw Jinja2 control flow in generated code");
         assertFalse(taskSrc.contains("next_page_token"),
             "Yahoo Finance task must not reference next_page_token (Airbyte-internal)");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // DATETIME-BASED CURSOR (delighted.yaml)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void delighted_generatedTask_tracksIncrementalCursor() throws Exception {
+        String taskSrc = generate("delighted.yaml").task.toString();
+        // Each incremental stream gets a volatile cursor_ field
+        assertTrue(taskSrc.contains("cursor_unsubscribes"),
+            "Delighted task must have cursor_unsubscribes field for DatetimeBasedCursor stream");
+        assertTrue(taskSrc.contains("cursor_people"),
+            "Delighted task must have cursor_people field for DatetimeBasedCursor stream");
+        // Cursor value is loaded from offset store on first poll
+        assertTrue(taskSrc.contains("_incStored") || taskSrc.contains("offsetStorageReader"),
+            "Delighted task must read cursor from offset store");
+    }
+
+    @Test
+    void delighted_generatedTask_injectsSinceUntilParams() throws Exception {
+        String taskSrc = generate("delighted.yaml").task.toString();
+        assertTrue(taskSrc.contains("since="),
+            "Delighted task must inject 'since=' query param from DatetimeBasedCursor start_time_option");
+        assertTrue(taskSrc.contains("until="),
+            "Delighted task must inject 'until=' query param from DatetimeBasedCursor end_time_option");
+    }
+
+    @Test
+    void delighted_generatedTask_usesEpochSecondsForUntil() throws Exception {
+        String taskSrc = generate("delighted.yaml").task.toString();
+        assertTrue(taskSrc.contains("currentTimeMillis() / 1000"),
+            "Delighted task must use epoch seconds (currentTimeMillis / 1000) for 'until' — not ISO-8601");
+    }
+
+    @Test
+    void delighted_generatedTask_containsBasicAuth() throws Exception {
+        String taskSrc = generate("delighted.yaml").task.toString();
+        assertTrue(taskSrc.contains("\"Basic \""),
+            "Delighted task must use Basic auth (BasicHttpAuthenticator)");
+    }
+
+    @Test
+    void delighted_generatedTask_advancesCursorFromRecord() throws Exception {
+        String taskSrc = generate("delighted.yaml").task.toString();
+        // The cursor update block compares record field value against current cursor
+        assertTrue(taskSrc.contains("compareTo"),
+            "Delighted task must advance cursor using lexicographic compareTo on record values");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // SUBSTREAM PARTITION ROUTER (google_classroom.yaml)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void googleClassroom_generatedTask_fetchesPartitionKeys() throws Exception {
+        String taskSrc = generate("google_classroom.yaml").task.toString();
+        // fetchXxxPartitionKeys() is generated for each child stream
+        assertTrue(taskSrc.contains("fetchTeachersPartitionKeys"),
+            "Google Classroom task must have fetchTeachersPartitionKeys() method for SubstreamPartitionRouter");
+        assertTrue(taskSrc.contains("fetchStudentsPartitionKeys"),
+            "Google Classroom task must have fetchStudentsPartitionKeys() method");
+    }
+
+    @Test
+    void googleClassroom_generatedTask_skipsMultiLevelSubstreams() throws Exception {
+        String taskSrc = generate("google_classroom.yaml").task.toString();
+        // studentsubmissions has 2 partition routers (course + coursework), must be skipped
+        assertFalse(taskSrc.contains("pollStudentsubmissions"),
+            "Google Classroom task must not generate pollStudentsubmissions — it requires 2-level nesting");
+    }
+
+    @Test
+    void googleClassroom_generatedTask_substitutesPartitionKeyInUrl() throws Exception {
+        String taskSrc = generate("google_classroom.yaml").task.toString();
+        // The child stream URL template {{ stream_partition.course }} must be resolved at runtime
+        assertFalse(taskSrc.contains("stream_partition"),
+            "Google Classroom task must not contain raw 'stream_partition' Jinja2 template in generated code");
+        assertTrue(taskSrc.contains("_partitionKey"),
+            "Google Classroom task must use _partitionKey variable in URL construction");
+    }
+
+    @Test
+    void googleClassroom_generatedTask_containsOAuth() throws Exception {
+        String taskSrc = generate("google_classroom.yaml").task.toString();
+        assertTrue(taskSrc.contains("refreshAccessToken"),
+            "Google Classroom task must contain refreshAccessToken() for OAuth2 auth");
+        assertTrue(taskSrc.contains("\"Bearer \""),
+            "Google Classroom task must set Authorization: Bearer header");
+    }
+
+    @Test
+    void googleClassroom_generatedTask_storesPartitionIndex() throws Exception {
+        String taskSrc = generate("google_classroom.yaml").task.toString();
+        // Partition index is persisted in offset store so polls resume across restarts
+        assertTrue(taskSrc.contains("partition_idx"),
+            "Google Classroom task must persist partition_idx in offset map for resume-on-restart");
     }
 
     // ══════════════════════════════════════════════════════════════════════════

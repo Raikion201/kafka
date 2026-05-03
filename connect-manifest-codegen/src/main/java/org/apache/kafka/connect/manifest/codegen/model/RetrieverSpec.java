@@ -18,6 +18,10 @@ package org.apache.kafka.connect.manifest.codegen.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Models the {@code retriever} block of a stream — how data is fetched.
@@ -32,6 +36,10 @@ public class RetrieverSpec {
     private RecordSelectorSpec recordSelector;
 
     private PaginatorSpec paginator;
+
+    @JsonProperty("partition_router")
+    @JsonDeserialize(using = PartitionRouterListDeserializer.class)
+    private List<PartitionRouterSpec> partitionRouter = Collections.emptyList();
 
     public String getType() {
         return type;
@@ -63,5 +71,25 @@ public class RetrieverSpec {
 
     public void setPaginator(PaginatorSpec paginator) {
         this.paginator = paginator;
+    }
+
+    public List<PartitionRouterSpec> getPartitionRouter() {
+        return partitionRouter == null ? Collections.emptyList() : partitionRouter;
+    }
+
+    public void setPartitionRouter(List<PartitionRouterSpec> partitionRouter) {
+        this.partitionRouter = partitionRouter;
+    }
+
+    public boolean hasSubstreamPartition() {
+        return getPartitionRouter().stream().anyMatch(PartitionRouterSpec::isSubstream);
+    }
+
+    /** Returns the single SubstreamPartitionRouter, or null if none / more than one. */
+    public PartitionRouterSpec getSubstreamRouter() {
+        List<PartitionRouterSpec> subs = getPartitionRouter().stream()
+            .filter(PartitionRouterSpec::isSubstream)
+            .toList();
+        return subs.size() == 1 ? subs.get(0) : null;
     }
 }
