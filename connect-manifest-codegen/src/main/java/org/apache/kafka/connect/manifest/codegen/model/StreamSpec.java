@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.connect.manifest.codegen.model;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -34,6 +35,14 @@ public class StreamSpec {
     /** Holds the raw {@code $ref} value when a stream entry is a reference, e.g. {@code "#/definitions/streams/foo"}. */
     @JsonProperty("$ref")
     private String ref;
+
+    /** Deserializes plain-string stream entries like {@code "- \"#/definitions/my_stream\""} in the streams list. */
+    @JsonCreator
+    public static StreamSpec fromString(String ref) {
+        StreamSpec s = new StreamSpec();
+        s.ref = ref;
+        return s;
+    }
 
     @JsonProperty("primary_key")
     private List<String> primaryKey = Collections.emptyList();

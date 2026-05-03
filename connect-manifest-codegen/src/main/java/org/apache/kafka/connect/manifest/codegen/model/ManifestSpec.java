@@ -16,8 +16,10 @@
  */
 package org.apache.kafka.connect.manifest.codegen.model;
 
+import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -117,8 +119,8 @@ public class ManifestSpec {
         if (streams.isEmpty()) {
             return Collections.emptyList();
         }
-        Map<String, StreamSpec> defined = definitions != null && definitions.getStreams() != null
-            ? definitions.getStreams()
+        Map<String, StreamSpec> defined = definitions != null
+            ? definitions.allStreamDefs()
             : Collections.emptyMap();
 
         RequesterSpec baseRequester = definitions != null ? definitions.getBaseRequester() : null;
@@ -189,16 +191,24 @@ public class ManifestSpec {
         StringBuilder sb = new StringBuilder();
         boolean nextUpper = true;
         for (char c : name.toCharArray()) {
-            if (c == '_' || c == '-' || c == ' ') {
+            if (c == '_' || c == '-' || c == ' ' || c == '&' || c == '/' || c == '(') {
                 nextUpper = true;
-            } else if (nextUpper) {
-                sb.append(Character.toUpperCase(c));
-                nextUpper = false;
-            } else {
-                sb.append(c);
+            } else if (Character.isLetterOrDigit(c)) {
+                if (nextUpper) {
+                    sb.append(Character.toUpperCase(c));
+                    nextUpper = false;
+                } else {
+                    sb.append(c);
+                }
             }
+            // skip any other non-alphanumeric, non-separator characters
         }
-        return sb.toString();
+        String result = sb.toString();
+        // Java identifiers cannot start with a digit — prefix with "S" (for Source)
+        if (!result.isEmpty() && Character.isDigit(result.charAt(0))) {
+            result = "S" + result;
+        }
+        return result.isEmpty() ? "Generated" : result;
     }
 
     /** Models the {@code spec} block — the user-facing configuration schema. */
@@ -294,6 +304,11 @@ public class ManifestSpec {
         @JsonProperty("base_requester")
         private RequesterSpec baseRequester;
 
+        /** Catches top-level definition entries that are stream definitions (not under streams: subkey). */
+        private final Map<String, Object> topLevelDefs = new java.util.LinkedHashMap<>();
+
+        private static final ObjectMapper MAPPER = new ObjectMapper();
+
         public Map<String, StreamSpec> getStreams() {
             return streams == null ? Collections.emptyMap() : streams;
         }
@@ -308,6 +323,27 @@ public class ManifestSpec {
 
         public void setBaseRequester(RequesterSpec baseRequester) {
             this.baseRequester = baseRequester;
+        }
+
+        @JsonAnySetter
+        public void setTopLevelDef(String key, Object value) {
+            topLevelDefs.put(key, value);
+        }
+
+        /** Returns a merged view of streams: definitions.streams + top-level StreamSpec entries. */
+        public Map<String, StreamSpec> allStreamDefs() {
+            Map<String, StreamSpec> result = new java.util.LinkedHashMap<>(getStreams());
+            for (Map.Entry<String, Object> e : topLevelDefs.entrySet()) {
+                if (e.getValue() instanceof Map) {
+                    try {
+                        StreamSpec s = MAPPER.convertValue(e.getValue(), StreamSpec.class);
+                        if (s.getName() != null || s.getRetriever() != null) {
+                            result.putIfAbsent(e.getKey(), s);
+                        }
+                    } catch (Exception ignored) { /* not a stream */ }
+                }
+            }
+            return result;
         }
     }
 }

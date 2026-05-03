@@ -804,9 +804,10 @@ public class TaskGenerator {
                 if (cm.find()) {
                     String getter = "get" + ManifestSpec.toClassName(cm.group(1));
                     body.addStatement(
-                        "urlBuilder.append($S + $T.encode(config.$L(), $T.UTF_8))",
+                        "urlBuilder.append($S + $T.encode($T.valueOf(config.$L()), $T.UTF_8))",
                         sep + entry.getKey() + "=",
-                        ClassName.get("java.net", "URLEncoder"), getter,
+                        ClassName.get("java.net", "URLEncoder"),
+                        ClassName.get(String.class), getter,
                         ClassName.get("java.nio.charset", "StandardCharsets"));
                 }
                 // skip params with unresolvable Jinja2 (e.g. finish sentinel)
@@ -1026,9 +1027,10 @@ public class TaskGenerator {
                 String getter = "get" + ManifestSpec.toClassName(m.group(1));
                 boolean firstOfGroup = paramKeys.size() == 1;
                 String sep = (pathHasQuery || !firstOfGroup) ? "&" : "?";
-                b.addStatement("urlBuilder.append($S + $T.encode(config.$L(), $T.UTF_8))",
+                b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf(config.$L()), $T.UTF_8))",
                     sep + entry.getKey() + "=",
-                    ClassName.get("java.net", "URLEncoder"), getter,
+                    ClassName.get("java.net", "URLEncoder"),
+                    ClassName.get(String.class), getter,
                     ClassName.get("java.nio.charset", "StandardCharsets"));
             }
         }
@@ -1151,9 +1153,10 @@ public class TaskGenerator {
                 IncrementalSyncSpec.DatetimeSpec startDt = sync.getStartDatetime();
                 if (startDt != null && startDt.getDatetime() != null) {
                     String getter = resolveConfigGetterLoose(startDt.getDatetime());
-                    b.addStatement("urlBuilder.append($S + $T.encode(config.$L(), $T.UTF_8))",
+                    b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf(config.$L()), $T.UTF_8))",
                         sep + startOpt.getFieldName() + "=",
-                        ClassName.get("java.net", "URLEncoder"), getter,
+                        ClassName.get("java.net", "URLEncoder"),
+                        ClassName.get(String.class), getter,
                         ClassName.get("java.nio.charset", "StandardCharsets"));
                 }
             }
@@ -1875,7 +1878,11 @@ public class TaskGenerator {
             Matcher p = CONFIG_TEMPLATE.matcher(template);
             if (p.find()) key = p.group(1);
         }
-        if (key != null && !currentSpecPropKeys.isEmpty() && !currentSpecPropKeys.contains(key)) {
+        if (key == null) {
+            // Plain literal string (e.g. Toggl uses password = "api_token" as a literal)
+            return "\"" + template.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+        }
+        if (!currentSpecPropKeys.isEmpty() && !currentSpecPropKeys.contains(key)) {
             return "\"\"";
         }
         return "config." + resolveConfigGetter(template) + "()";
@@ -1935,7 +1942,15 @@ public class TaskGenerator {
     }
 
     private static String toJavaName(String streamName) {
-        return streamName.replace('-', '_').replace(' ', '_');
+        // Strip file-like extensions (e.g. ".json" suffix in some Airbyte stream names)
+        String n = streamName.replaceAll("\\.[a-z]+$", "");
+        // Replace all non-alphanumeric chars with underscore
+        n = n.replaceAll("[^a-zA-Z0-9]", "_");
+        // Collapse consecutive underscores and strip leading/trailing underscores
+        n = n.replaceAll("_+", "_").replaceAll("^_|_$", "");
+        // Prefix with _ if starts with a digit
+        if (!n.isEmpty() && Character.isDigit(n.charAt(0))) n = "_" + n;
+        return n.isEmpty() ? "stream" : n;
     }
 
     private static String cursorFieldName(String streamName) {

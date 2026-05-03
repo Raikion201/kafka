@@ -18,6 +18,7 @@ package org.apache.kafka.connect.manifest.codegen.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 
 import java.util.Collections;
 import java.util.HashSet;
@@ -182,6 +183,7 @@ public class RequesterSpec {
         private List<ErrorHandlerSpec> errorHandlers = Collections.emptyList();
 
         @JsonProperty("response_filters")
+        @JsonDeserialize(using = ResponseFilterListDeserializer.class)
         private List<ResponseFilterSpec> responseFilters = Collections.emptyList();
 
         public String getType() {

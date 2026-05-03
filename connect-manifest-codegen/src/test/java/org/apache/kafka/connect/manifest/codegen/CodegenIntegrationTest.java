@@ -36,6 +36,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.File;
 import java.io.InputStream;
+import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
@@ -80,37 +82,13 @@ public class CodegenIntegrationTest {
     // PARAMETRIZED: all manifests compile
     // ══════════════════════════════════════════════════════════════════════════
 
-    static Stream<Arguments> allManifests() {
-        return Stream.of(
-            Arguments.of("defillama.yaml"),
-            Arguments.of("xkcd.yaml"),
-            Arguments.of("zapier.yaml"),
-            Arguments.of("gmail.yaml"),
-            // ApiKey header — free tier at newsapi.org/register
-            Arguments.of("newsapi.yaml"),
-            // BasicHttp — free forever at track.toggl.com
-            Arguments.of("toggl.yaml"),
-            Arguments.of("illumina_basespace.yaml"),
-            Arguments.of("box.yaml"),
-            Arguments.of("assemblyai.yaml"),
-            Arguments.of("akeneo.yaml"),
-            Arguments.of("google_analytics_jwt.yaml"),
-            // JWT RS256 via GCS IAM — no GA4 UI needed
-            Arguments.of("google_cloud_storage_jwt.yaml"),
-            Arguments.of("us_census.yaml"),
-            Arguments.of("metabase.yaml"),
-            Arguments.of("acuity_scheduling.yaml"),
-            // Public-API manifests covering each pagination type
-            Arguments.of("rickandmorty.yaml"),
-            Arguments.of("pokeapi.yaml"),
-            Arguments.of("jsonplaceholder.yaml"),
-            // List-cycle pattern: config field split on comma, iterated by page index
-            Arguments.of("yahoo_finance_price.yaml"),
-            // DatetimeBasedCursor — incremental sync via since/until epoch params
-            Arguments.of("delighted.yaml"),
-            // SubstreamPartitionRouter — parent→child streams (courses → teachers/students/etc.)
-            Arguments.of("google_classroom.yaml")
-        );
+    static Stream<Arguments> allManifests() throws Exception {
+        URL dir = CodegenIntegrationTest.class.getClassLoader().getResource("manifests");
+        assertNotNull(dir, "manifests/ resource directory not found on classpath");
+        return Files.list(Path.of(dir.toURI()))
+            .filter(p -> p.toString().endsWith(".yaml"))
+            .map(p -> Arguments.of(p.getFileName().toString()))
+            .sorted(java.util.Comparator.comparing(a -> (String) a.get()[0]));
     }
 
     @ParameterizedTest(name = "{0}")
