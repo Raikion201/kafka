@@ -76,6 +76,16 @@ public class TaskGenerator {
     /** Matches {@code config['key']} anywhere inside a Jinja2 expression (e.g. format_datetime). */
     private static final Pattern CONFIG_KEY_IN_EXPR = Pattern.compile("config\\[['\"]([^'\"]+)['\"]\\]");
 
+    /**
+     * Matches Jinja2 dot-notation {@code {{ config.key }}} (with optional default-value form).
+     * Some Airbyte manifests use this in addition to the bracket form.
+     */
+    private static final Pattern CONFIG_DOT_TEMPLATE = Pattern.compile(
+        "\\{\\{\\s*config\\.([a-zA-Z_]\\w*)(?:\\s+or\\s+[^}]+)?\\s*\\}\\}");
+
+    /** Matches {@code config.key} dot-notation anywhere inside a Jinja2 expression. */
+    private static final Pattern CONFIG_DOT_KEY_IN_EXPR = Pattern.compile("config\\.([a-zA-Z_]\\w*)");
+
     /** Matches {@code {{ stream_partition.fieldName }}} in child stream paths. */
     private static final Pattern STREAM_PARTITION_RE =
         Pattern.compile("\\{\\{\\s*stream_partition\\.(\\w+)\\s*\\}\\}");
@@ -1359,14 +1369,14 @@ public class TaskGenerator {
             );
         } else if (auth.isApiKey()) {
             String headerName = resolveApiKeyHeaderName(auth);
-            String getterName = resolveConfigGetter(auth.getApiToken());
+            String headerValueExpr = interpolateTemplate(auth.getApiToken());
             body.addStatement(
                 "$T request = $T.newBuilder()\n"
                     + "        .uri($T.create($L))\n"
-                    + "        .header($S, config.$L())\n"
+                    + "        .header($S, $L)\n"
                     + "        .GET()\n"
                     + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), headerName, getterName
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), headerName, headerValueExpr
             );
         } else if (auth.isBasicHttp()) {
             body.addStatement(
@@ -1870,14 +1880,7 @@ public class TaskGenerator {
      */
     private String resolveCredentialExpr(String template) {
         if (template == null) return "\"\"";
-        Matcher m = CONFIG_TEMPLATE.matcher(template.trim());
-        String key = null;
-        if (m.matches()) {
-            key = m.group(1);
-        } else {
-            Matcher p = CONFIG_TEMPLATE.matcher(template);
-            if (p.find()) key = p.group(1);
-        }
+        String key = extractConfigKey(template);
         if (key == null) {
             // Plain literal string (e.g. Toggl uses password = "api_token" as a literal)
             return "\"" + template.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
@@ -1888,6 +1891,66 @@ public class TaskGenerator {
         return "config." + resolveConfigGetter(template) + "()";
     }
 
+    /**
+     * Returns the first config key referenced in {@code template} via either bracket
+     * ({@code config['key']}) or dot ({@code config.key}) notation, or {@code null}
+     * if the template contains no config reference.
+     */
+    private static String extractConfigKey(String template) {
+        if (template == null) return null;
+        Matcher m = CONFIG_TEMPLATE.matcher(template);
+        if (m.find()) return m.group(1);
+        Matcher d = CONFIG_DOT_TEMPLATE.matcher(template);
+        if (d.find()) return d.group(1);
+        return null;
+    }
+
+    /** Matches a single Jinja2 config interpolation in either bracket or dot form. */
+    private static final Pattern CONFIG_ANY_INTERPOLATION = Pattern.compile(
+        "\\{\\{\\s*config(?:\\[['\"]([^'\"]+)['\"]\\]|\\.([a-zA-Z_]\\w*))(?:\\s+or\\s+[^}]+)?\\s*\\}\\}");
+
+    /**
+     * Converts a Jinja2 template containing zero or more {@code {{ config.x }}} or
+     * {@code {{ config['x'] }}} references into a Java string expression that
+     * concatenates the literal segments with the corresponding {@code config.getX()}
+     * calls. Returns {@code "\"\""} for null input.
+     *
+     * <p>Examples:
+     * <pre>
+     *   "Token token={{ config.api_key }}"       -&gt; "\"Token token=\" + config.getApiKey()"
+     *   "{{ config['api_key'] }}"                -&gt; "config.getApiKey()"
+     *   "Bearer {{ config['t'] }} suffix"        -&gt; "\"Bearer \" + config.getT() + \" suffix\""
+     *   "literal"                                -&gt; "\"literal\""
+     * </pre>
+     */
+    private static String interpolateTemplate(String template) {
+        if (template == null) return "\"\"";
+        StringBuilder out = new StringBuilder();
+        int last = 0;
+        Matcher m = CONFIG_ANY_INTERPOLATION.matcher(template);
+        while (m.find()) {
+            if (m.start() > last) {
+                if (out.length() > 0) out.append(" + ");
+                out.append('"').append(escapeJavaString(template.substring(last, m.start()))).append('"');
+            }
+            String key = m.group(1) != null ? m.group(1) : m.group(2);
+            if (out.length() > 0) out.append(" + ");
+            out.append("config.get").append(ManifestSpec.toClassName(key)).append("()");
+            last = m.end();
+        }
+        if (last < template.length()) {
+            if (out.length() > 0) out.append(" + ");
+            out.append('"').append(escapeJavaString(template.substring(last))).append('"');
+        }
+        if (out.length() == 0) return "\"\"";
+        return out.toString();
+    }
+
+    private static String escapeJavaString(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+            .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+    }
+
     private String resolveConfigGetter(String template) {
         if (template == null) {
             return "get";
@@ -1896,16 +1959,25 @@ public class TaskGenerator {
         if (m.matches()) {
             return "get" + ManifestSpec.toClassName(m.group(1));
         }
+        Matcher md = CONFIG_DOT_TEMPLATE.matcher(template.trim());
+        if (md.matches()) {
+            return "get" + ManifestSpec.toClassName(md.group(1));
+        }
         Matcher partial = CONFIG_TEMPLATE.matcher(template);
         if (partial.find()) {
             return "get" + ManifestSpec.toClassName(partial.group(1));
+        }
+        Matcher partialDot = CONFIG_DOT_TEMPLATE.matcher(template);
+        if (partialDot.find()) {
+            return "get" + ManifestSpec.toClassName(partialDot.group(1));
         }
         return "get";
     }
 
     /**
-     * Like {@link #resolveConfigGetter} but also matches {@code config['key']} inside
-     * complex Jinja2 expressions such as {@code format_datetime(config['since'], ...)}.
+     * Like {@link #resolveConfigGetter} but also matches {@code config['key']} or
+     * {@code config.key} inside complex Jinja2 expressions such as
+     * {@code format_datetime(config['since'], ...)}.
      */
     private String resolveConfigGetterLoose(String expr) {
         if (expr == null) return "get";
@@ -1914,6 +1986,10 @@ public class TaskGenerator {
         Matcher m = CONFIG_KEY_IN_EXPR.matcher(expr);
         if (m.find()) {
             return "get" + ManifestSpec.toClassName(m.group(1));
+        }
+        Matcher d = CONFIG_DOT_KEY_IN_EXPR.matcher(expr);
+        if (d.find()) {
+            return "get" + ManifestSpec.toClassName(d.group(1));
         }
         return "get";
     }
