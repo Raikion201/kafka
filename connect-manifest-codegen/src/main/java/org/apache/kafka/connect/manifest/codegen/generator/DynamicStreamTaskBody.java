@@ -33,6 +33,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -171,7 +172,8 @@ final class DynamicStreamTaskBody {
             .addCode(""
                 + "if (exhausted || currentSheetIdx >= sheetNames.size()) {\n"
                 + "    Thread.sleep(60000L);\n"
-                + "    return $T.emptyList();\n"
+                + "    currentSheetIdx = 0;\n"
+                + "    exhausted = false;\n"
                 + "}\n"
                 + "String sheet = sheetNames.get(currentSheetIdx);\n"
                 + "currentSheetIdx++;\n"
@@ -181,7 +183,7 @@ final class DynamicStreamTaskBody {
                 + "} catch (Exception e) {\n"
                 + "    throw new $T(\"Failed to fetch sheet: \" + sheet, e);\n"
                 + "}\n",
-                Collections.class, CONNECT_EXCEPTION)
+                CONNECT_EXCEPTION)
             .build();
     }
 
@@ -328,15 +330,26 @@ final class DynamicStreamTaskBody {
                 + "$T<$T> records = new $T<>();\n"
                 + "String topic = sanitizeTopic(\"google_sheets_\" + sheet);\n"
                 + "$T<String, Object> sourcePartition = $T.singletonMap(\"sheet\", sheet);\n"
+                + "$T<String, Object> storedOffset = context.offsetStorageReader().offset(sourcePartition);\n"
+                + "long committedRow = 0L;\n"
+                + "if (storedOffset != null && storedOffset.get(\"row\") instanceof Number n) committedRow = n.longValue();\n"
                 + "for ($T vr : root.path(\"valueRanges\")) {\n"
                 + "    $T rows = vr.path(\"values\");\n"
                 + "    if (!rows.isArray() || rows.size() < 2) continue;\n"
                 + "    $T header = rows.get(0);\n"
+                + "    $T<String, Integer> headerSeen = new $T<>();\n"
+                + "    $T<String> headerKeys = new $T<>();\n"
+                + "    for (int c = 0; c < header.size(); c++) {\n"
+                + "        String raw = header.get(c).asText(\"col_\" + c);\n"
+                + "        int cnt = headerSeen.merge(raw, 1, Integer::sum);\n"
+                + "        headerKeys.add(cnt == 1 ? raw : raw + \"_\" + c);\n"
+                + "    }\n"
                 + "    for (int i = 1; i < rows.size(); i++) {\n"
+                + "        if (i <= committedRow) continue;\n"
                 + "        $T rowArr = rows.get(i);\n"
                 + "        $T rowObj = MAPPER.createObjectNode();\n"
-                + "        for (int c = 0; c < header.size(); c++) {\n"
-                + "            String key = header.get(c).asText(\"col_\" + c);\n"
+                + "        for (int c = 0; c < headerKeys.size(); c++) {\n"
+                + "            String key = headerKeys.get(c);\n"
                 + "            String val = c < rowArr.size() ? rowArr.get(c).asText(\"\") : \"\";\n"
                 + "            rowObj.put(key, val);\n"
                 + "        }\n"
@@ -349,8 +362,9 @@ final class DynamicStreamTaskBody {
                 URL_ENCODER, STANDARD_CHARSETS, URI_CLASS, URI_CLASS, baseUrlPrefix,
                 HTTP_REQUEST, HTTP_REQUEST, HTTP_RESPONSE, CONNECT_EXCEPTION,
                 JSON_NODE, List.class, SOURCE_RECORD, ArrayList.class,
-                Map.class, Collections.class,
-                JSON_NODE, JSON_NODE, JSON_NODE, JSON_NODE, OBJECT_NODE,
+                Map.class, Collections.class, Map.class,
+                JSON_NODE, JSON_NODE, JSON_NODE, Map.class, HashMap.class,
+                List.class, ArrayList.class, JSON_NODE, OBJECT_NODE,
                 Map.class, Collections.class, SOURCE_RECORD, SCHEMA)
             .build();
     }
