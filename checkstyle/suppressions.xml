@@ -198,6 +198,8 @@
     <!-- connect-manifest-codegen: code-generator methods inherently have high complexity -->
     <suppress checks="NPathComplexity|CyclomaticComplexity|MethodLength|JavaNCSS"
               files="TaskGenerator.java"/>
+    <suppress checks="NPathComplexity|CyclomaticComplexity"
+              files="JinjaSnippets.java"/>
 
     <suppress checks="ImportControl" files="RecordsSerdeTest.java"/>
 

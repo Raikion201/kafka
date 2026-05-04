@@ -65,30 +65,12 @@ import javax.lang.model.element.Modifier;
  */
 public class TaskGenerator {
 
-    /**
-     * Matches Airbyte config-interpolation templates like {@code {{ config['key'] }}},
-     * {@code {{ config["key"] }}}, and Jinja2 default-value forms like
-     * {@code {{ config["key"] or 1 }}}.
-     */
-    private static final Pattern CONFIG_TEMPLATE = Pattern.compile(
-        "\\{\\{\\s*config\\[['\"]([^'\"]+)['\"]\\](?:\\s+or\\s+[^}]+)?\\s*\\}\\}");
-
-    /** Matches {@code config['key']} anywhere inside a Jinja2 expression (e.g. format_datetime). */
-    private static final Pattern CONFIG_KEY_IN_EXPR = Pattern.compile("config\\[['\"]([^'\"]+)['\"]\\]");
-
-    /**
-     * Matches Jinja2 dot-notation {@code {{ config.key }}} (with optional default-value form).
-     * Some Airbyte manifests use this in addition to the bracket form.
-     */
-    private static final Pattern CONFIG_DOT_TEMPLATE = Pattern.compile(
-        "\\{\\{\\s*config\\.([a-zA-Z_]\\w*)(?:\\s+or\\s+[^}]+)?\\s*\\}\\}");
-
-    /** Matches {@code config.key} dot-notation anywhere inside a Jinja2 expression. */
-    private static final Pattern CONFIG_DOT_KEY_IN_EXPR = Pattern.compile("config\\.([a-zA-Z_]\\w*)");
-
-    /** Matches {@code {{ stream_partition.fieldName }}} in child stream paths. */
-    private static final Pattern STREAM_PARTITION_RE =
-        Pattern.compile("\\{\\{\\s*stream_partition\\.(\\w+)\\s*\\}\\}");
+    private static final Pattern CONFIG_TEMPLATE      = JinjaSnippets.CONFIG_TEMPLATE;
+    private static final Pattern CONFIG_KEY_IN_EXPR   = JinjaSnippets.CONFIG_KEY_IN_EXPR;
+    private static final Pattern CONFIG_DOT_TEMPLATE  = JinjaSnippets.CONFIG_DOT_TEMPLATE;
+    private static final Pattern CONFIG_DOT_KEY_IN_EXPR = JinjaSnippets.CONFIG_DOT_KEY_IN_EXPR;
+    private static final Pattern CONFIG_GET_CALL      = JinjaSnippets.CONFIG_GET_CALL;
+    private static final Pattern STREAM_PARTITION_RE  = JinjaSnippets.STREAM_PARTITION_RE;
 
     private static final ClassName SOURCE_TASK =
         ClassName.get("org.apache.kafka.connect.source", "SourceTask");
@@ -131,7 +113,16 @@ public class TaskGenerator {
             : java.util.Collections.emptySet();
         List<StreamSpec> streams = spec.resolvedStreams();
         if (streams.isEmpty()) {
-            throw new CodegenException("Manifest has no resolved streams; cannot generate task");
+            // No usable streams (all dropped during parser tolerance, or only unsupported
+            // dynamic-stream patterns). Emit a stub task so the connector still loads in
+            // Connect and fails fast on start() with a clear "unsupported" message.
+            String baseName = ManifestSpec.toClassName(spec.connectorClassName().replace("Source", ""));
+            String taskClassName = baseName + "SourceTask";
+            String configClassName = baseName + "ConnectorConfig";
+            ClassName configClass = ClassName.get(pkgName, configClassName);
+            TypeSpec stub = GenericDynamicStreamStub.build(taskClassName, configClass,
+                spec.connectorClassName());
+            return JavaFile.builder(pkgName, stub).skipJavaLangImports(true).build();
         }
         for (StreamSpec stream : streams) {
             if (stream.getRetriever() == null) {
@@ -140,6 +131,12 @@ public class TaskGenerator {
             if (stream.getRetriever().getRequester() == null) {
                 throw new CodegenException("Stream '" + stream.getName() + "' retriever has no requester");
             }
+        }
+
+        // Dynamic streams (Airbyte runtime stream discovery) take a dedicated codegen path
+        // because the per-stream URL/topic/range vary at runtime, not at codegen time.
+        if (streams.get(0).isDynamic()) {
+            return new DynamicStreamTaskGenerator().generate(spec, pkgName, streams.get(0));
         }
 
         String baseName = ManifestSpec.toClassName(
@@ -834,8 +831,8 @@ public class TaskGenerator {
         reqArgs.add(HTTP_REQUEST);
         reqArgs.add(URI_CLASS);
         if (auth != null && auth.isBearer()) {
-            reqFmt.append("\n        .header(\"Authorization\", \"Bearer \" + config.$L())");
-            reqArgs.add(resolveConfigGetter(auth.getApiToken()));
+            reqFmt.append("\n        .header(\"Authorization\", \"Bearer \" + $L)");
+            reqArgs.add(configCallExpr(resolveConfigGetter(auth.getApiToken())));
         } else if (auth != null && auth.isBasicHttp()) {
             reqFmt.append("\n        .header(\"Authorization\", \"Basic \" + cachedCredentials)");
         }
@@ -923,7 +920,13 @@ public class TaskGenerator {
         IncrementalSyncSpec.DatetimeSpec startDt = sync.getStartDatetime();
         if (startDt != null && startDt.getDatetime() != null) {
             String getter = resolveConfigGetterLoose(startDt.getDatetime());
-            b.addStatement("$L = config.$L()", cursorVar, getter);
+            if (UNRESOLVED_GETTER.equals(getter)) {
+                // Jinja template with no extractable config reference (e.g. now_utc().strftime(...))
+                // — fall back to empty string at runtime; cursor will advance from poll results.
+                b.addStatement("$L = $S", cursorVar, "");
+            } else {
+                b.addStatement("$L = config.$L()", cursorVar, getter);
+            }
         } else {
             b.addStatement("$L = $S", cursorVar, "0");
         }
@@ -1033,8 +1036,12 @@ public class TaskGenerator {
         for (Map.Entry<String, String> entry : requestParams.entrySet()) {
             Matcher m = CONFIG_TEMPLATE.matcher(entry.getValue());
             if (m.matches()) {
+                String key = m.group(1);
+                if (!currentSpecPropKeys.contains(key)) {
+                    continue;
+                }
                 paramKeys.add(entry.getKey());
-                String getter = "get" + ManifestSpec.toClassName(m.group(1));
+                String getter = "get" + ManifestSpec.toClassName(key);
                 boolean firstOfGroup = paramKeys.size() == 1;
                 String sep = (pathHasQuery || !firstOfGroup) ? "&" : "?";
                 b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf(config.$L()), $T.UTF_8))",
@@ -1052,7 +1059,7 @@ public class TaskGenerator {
             String sep = hasParams ? "&" : "?";
             String fieldName = auth.getInjectInto().getFieldName();
             String getter = resolveConfigGetter(auth.getApiToken());
-            b.addStatement("urlBuilder.append($S + config.$L())", sep + fieldName + "=", getter);
+            b.addStatement("urlBuilder.append($S + $L)", sep + fieldName + "=", configCallExpr(getter));
             hasParams = true;
         }
 
@@ -1119,10 +1126,19 @@ public class TaskGenerator {
                 fmtArgs.add(lit);
                 needsPlus = true;
             }
-            if (needsPlus) fmt.append(" + ");
-            fmt.append("config.$L()");
-            fmtArgs.add("get" + ManifestSpec.toClassName(m.group(1)));
-            needsPlus = true;
+            String key = m.group(1);
+            if (currentSpecPropKeys.contains(key)) {
+                if (needsPlus) fmt.append(" + ");
+                fmt.append("config.$L()");
+                fmtArgs.add("get" + ManifestSpec.toClassName(key));
+                needsPlus = true;
+            } else {
+                // Spec doesn't declare this key — emit empty string literal so URL stays valid.
+                if (needsPlus) fmt.append(" + ");
+                fmt.append("$S");
+                fmtArgs.add("");
+                needsPlus = true;
+            }
             pos = m.end();
         }
         String tail = segment.substring(pos);
@@ -1163,11 +1179,13 @@ public class TaskGenerator {
                 IncrementalSyncSpec.DatetimeSpec startDt = sync.getStartDatetime();
                 if (startDt != null && startDt.getDatetime() != null) {
                     String getter = resolveConfigGetterLoose(startDt.getDatetime());
-                    b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf(config.$L()), $T.UTF_8))",
-                        sep + startOpt.getFieldName() + "=",
-                        ClassName.get("java.net", "URLEncoder"),
-                        ClassName.get(String.class), getter,
-                        ClassName.get("java.nio.charset", "StandardCharsets"));
+                    if (!UNRESOLVED_GETTER.equals(getter)) {
+                        b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf(config.$L()), $T.UTF_8))",
+                            sep + startOpt.getFieldName() + "=",
+                            ClassName.get("java.net", "URLEncoder"),
+                            ClassName.get(String.class), getter,
+                            ClassName.get("java.nio.charset", "StandardCharsets"));
+                    }
                 }
             }
             hasParams = true;
@@ -1353,10 +1371,10 @@ public class TaskGenerator {
             body.addStatement(
                 "$T request = $T.newBuilder()\n"
                     + "        .uri($T.create($L))\n"
-                    + "        .header(\"Authorization\", \"Bearer \" + config.$L())\n"
+                    + "        .header(\"Authorization\", \"Bearer \" + $L)\n"
                     + "        .GET()\n"
                     + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), getterName
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), configCallExpr(getterName)
             );
         } else if (auth.isApiKey() && isApiKeyQueryParam(auth)) {
             // key already appended to URL as query param — no auth header needed
@@ -1499,17 +1517,17 @@ public class TaskGenerator {
                 }
             }
             body.addStatement("$T reqBody = \"grant_type=client_credentials\"\n"
-                    + "        + \"&client_id=\" + config.$L()\n"
-                    + "        + \"&client_secret=\" + config.$L()"
+                    + "        + \"&client_id=\" + $L\n"
+                    + "        + \"&client_secret=\" + $L"
                     + extraFields,
-                String.class, clientIdGetter, clientSecretGetter);
+                String.class, configCallExpr(clientIdGetter), configCallExpr(clientSecretGetter));
         } else {
             body.addStatement("$T reqBody = \"grant_type=refresh_token\"\n"
-                    + "        + \"&client_id=\" + config.$L()\n"
-                    + "        + \"&client_secret=\" + config.$L()\n"
-                    + "        + \"&refresh_token=\" + config.$L()",
+                    + "        + \"&client_id=\" + $L\n"
+                    + "        + \"&client_secret=\" + $L\n"
+                    + "        + \"&refresh_token=\" + $L",
                 String.class,
-                clientIdGetter, clientSecretGetter, refreshTokenGetter);
+                configCallExpr(clientIdGetter), configCallExpr(clientSecretGetter), configCallExpr(refreshTokenGetter));
         }
         body.beginControlFlow("try");
         body.addStatement(
@@ -1739,7 +1757,7 @@ public class TaskGenerator {
             body.addStatement("$T privateKeyPem = ($T) outerMap.get($S)", String.class, String.class, innerKey);
         } else {
             String getter = resolveConfigGetter(secretKey);
-            body.addStatement("$T privateKeyPem = config.$L()", String.class, getter);
+            body.addStatement("$T privateKeyPem = $L", String.class, configCallExpr(getter));
         }
 
         body.addStatement(
@@ -1872,106 +1890,28 @@ public class TaskGenerator {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /**
-     * Returns a Java expression for a credential value (username or password).
-     * If the config key referenced by {@code template} is not in the current spec's declared
-     * properties (e.g. Airbyte's sentinel {@code config['nothing']}), returns {@code "\"\""} so
-     * the generated code uses an empty string literal rather than a non-existent getter.
-     */
     private String resolveCredentialExpr(String template) {
-        if (template == null) return "\"\"";
-        String key = extractConfigKey(template);
-        if (key == null) {
-            // Plain literal string (e.g. Toggl uses password = "api_token" as a literal)
-            return "\"" + template.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
-        }
-        if (!currentSpecPropKeys.isEmpty() && !currentSpecPropKeys.contains(key)) {
-            return "\"\"";
-        }
-        return "config." + resolveConfigGetter(template) + "()";
+        return JinjaSnippets.resolveCredentialExpr(template, currentSpecPropKeys);
     }
 
-    /**
-     * Returns the first config key referenced in {@code template} via either bracket
-     * ({@code config['key']}) or dot ({@code config.key}) notation, or {@code null}
-     * if the template contains no config reference.
-     */
     private static String extractConfigKey(String template) {
-        if (template == null) return null;
-        Matcher m = CONFIG_TEMPLATE.matcher(template);
-        if (m.find()) return m.group(1);
-        Matcher d = CONFIG_DOT_TEMPLATE.matcher(template);
-        if (d.find()) return d.group(1);
-        return null;
+        return JinjaSnippets.extractConfigKey(template);
     }
 
-    /** Matches a single Jinja2 config interpolation in either bracket or dot form. */
-    private static final Pattern CONFIG_ANY_INTERPOLATION = Pattern.compile(
-        "\\{\\{\\s*config(?:\\[['\"]([^'\"]+)['\"]\\]|\\.([a-zA-Z_]\\w*))(?:\\s+or\\s+[^}]+)?\\s*\\}\\}");
+    private static final Pattern CONFIG_ANY_INTERPOLATION = JinjaSnippets.CONFIG_ANY_INTERPOLATION;
 
-    /**
-     * Converts a Jinja2 template containing zero or more {@code {{ config.x }}} or
-     * {@code {{ config['x'] }}} references into a Java string expression that
-     * concatenates the literal segments with the corresponding {@code config.getX()}
-     * calls. Returns {@code "\"\""} for null input.
-     *
-     * <p>Examples:
-     * <pre>
-     *   "Token token={{ config.api_key }}"       -&gt; "\"Token token=\" + config.getApiKey()"
-     *   "{{ config['api_key'] }}"                -&gt; "config.getApiKey()"
-     *   "Bearer {{ config['t'] }} suffix"        -&gt; "\"Bearer \" + config.getT() + \" suffix\""
-     *   "literal"                                -&gt; "\"literal\""
-     * </pre>
-     */
-    private static String interpolateTemplate(String template) {
-        if (template == null) return "\"\"";
-        StringBuilder out = new StringBuilder();
-        int last = 0;
-        Matcher m = CONFIG_ANY_INTERPOLATION.matcher(template);
-        while (m.find()) {
-            if (m.start() > last) {
-                if (out.length() > 0) out.append(" + ");
-                out.append('"').append(escapeJavaString(template.substring(last, m.start()))).append('"');
-            }
-            String key = m.group(1) != null ? m.group(1) : m.group(2);
-            if (out.length() > 0) out.append(" + ");
-            out.append("config.get").append(ManifestSpec.toClassName(key)).append("()");
-            last = m.end();
-        }
-        if (last < template.length()) {
-            if (out.length() > 0) out.append(" + ");
-            out.append('"').append(escapeJavaString(template.substring(last))).append('"');
-        }
-        if (out.length() == 0) return "\"\"";
-        return out.toString();
+    private String interpolateTemplate(String template) {
+        return JinjaSnippets.interpolateTemplate(template, currentSpecPropKeys);
     }
 
     private static String escapeJavaString(String s) {
-        return s.replace("\\", "\\\\").replace("\"", "\\\"")
-            .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+        return JinjaSnippets.escapeJavaString(s);
     }
 
+    private static final String UNRESOLVED_GETTER = JinjaSnippets.UNRESOLVED_GETTER;
+
     private String resolveConfigGetter(String template) {
-        if (template == null) {
-            return "get";
-        }
-        Matcher m = CONFIG_TEMPLATE.matcher(template.trim());
-        if (m.matches()) {
-            return "get" + ManifestSpec.toClassName(m.group(1));
-        }
-        Matcher md = CONFIG_DOT_TEMPLATE.matcher(template.trim());
-        if (md.matches()) {
-            return "get" + ManifestSpec.toClassName(md.group(1));
-        }
-        Matcher partial = CONFIG_TEMPLATE.matcher(template);
-        if (partial.find()) {
-            return "get" + ManifestSpec.toClassName(partial.group(1));
-        }
-        Matcher partialDot = CONFIG_DOT_TEMPLATE.matcher(template);
-        if (partialDot.find()) {
-            return "get" + ManifestSpec.toClassName(partialDot.group(1));
-        }
-        return "get";
+        return JinjaSnippets.resolveConfigGetter(template, currentSpecPropKeys);
     }
 
     /**
@@ -1980,18 +1920,17 @@ public class TaskGenerator {
      * {@code format_datetime(config['since'], ...)}.
      */
     private String resolveConfigGetterLoose(String expr) {
-        if (expr == null) return "get";
-        String getter = resolveConfigGetter(expr);
-        if (!"get".equals(getter)) return getter;
-        Matcher m = CONFIG_KEY_IN_EXPR.matcher(expr);
-        if (m.find()) {
-            return "get" + ManifestSpec.toClassName(m.group(1));
-        }
-        Matcher d = CONFIG_DOT_KEY_IN_EXPR.matcher(expr);
-        if (d.find()) {
-            return "get" + ManifestSpec.toClassName(d.group(1));
-        }
-        return "get";
+        return JinjaSnippets.resolveConfigGetterLoose(expr, currentSpecPropKeys);
+    }
+
+    /**
+     * Returns a Java expression for a config getter call, or an empty string literal
+     * when the getter is unresolved. Use this instead of inlining {@code config.$L()}
+     * with {@code $L} = getter, since the latter emits {@code config.__unresolved__()}
+     * for templates whose config key isn't in the generated config class.
+     */
+    private String configCallExpr(String getter) {
+        return UNRESOLVED_GETTER.equals(getter) ? "\"\"" : "config." + getter + "()";
     }
 
     /** Returns the header name for an ApiKeyAuthenticator (inject_into.field_name or legacy header field). */
