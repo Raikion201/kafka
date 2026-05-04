@@ -390,3 +390,115 @@ to ~**80%**.
 | `source_google_ads.yaml` | AsyncRetriever + GroupingPartitionRouter |
 | `source_asana.yaml` | Multi-level substream (4 levels) |
 | `source-pinterest.yaml` | ListPartitionRouter + multi-level substream |
+
+---
+
+## Why coverage is low and the road to 95%
+
+### Why coverage is only ~35% today
+
+Coverage is low because two gaps alone block the majority of the catalog, and both fail
+silently — the generated code compiles and runs but produces wrong data:
+
+**Gap 1 — Multi-level substreams (blocks ~44% of manifests)**
+
+The current codegen handles one parent→child relationship (e.g. `courses` → `lessons`).
+The moment a manifest chains two routers — or has a child stream whose parent is itself a
+child stream (e.g. `organizations` → `projects` → `tasks`) — the router list has `>1`
+element and `TaskGenerator` drops the entire stream with a comment: `// multi-level
+substream, out of scope, skip`. The connector still deploys and starts, but those streams
+silently emit nothing. This category is **the single largest gap** in the catalog.
+
+**Gap 2 — ListPartitionRouter (blocks ~22% of manifests)**
+
+Many connectors fan a stream out over a static list of values — for example, iterating over
+ad account types `["SPONSORED_PRODUCTS", "SPONSORED_BRANDS"]` or over region codes from
+config. This router type has no model field (`isSubstream()` returns false) and no
+`PartitionRouterSpec` support for it, so `getSubstreamRouter()` returns null and the stream
+runs once with no partition variable injected. Again the code compiles; it just returns
+incomplete data.
+
+**Why silent failure is worse than a crash:** both gaps pass `CodegenIntegrationTest`
+because the test only checks that the generated Java compiles. A test that actually runs
+the task and counts records would catch them immediately.
+
+---
+
+### What is genuinely hard
+
+Some gaps are large but mechanical to implement. Others are architecturally difficult:
+
+**Easy (1–3 days each)**
+
+| Gap | Why easy |
+|---|---|
+| `ListPartitionRouter` | Wrap the existing stream fetch loop in a `for (String partition : listValues)` loop. Model already parses the router; just add `isList()` check and a loop in `buildStreamPollMethod`. |
+| `AddFields` / `RemoveFields` transformations | Post-process the JSON node before emitting `SourceRecord`. Model change + one extra block per record. |
+| `GroupingPartitionRouter` | Emit a `groupBy` accumulator map after the fetch loop; flush each group as separate records. Purely additive. |
+| More Jinja snippets (`| default(x)`, `now_utc()`) | Add patterns to `JinjaSnippets` registry + corresponding Java expressions. Localized to one file. |
+
+**Medium (1–2 weeks each)**
+
+| Gap | Why medium |
+|---|---|
+| Multi-level `SubstreamPartitionRouter` (depth 2) | The current `buildStreamPollMethod` generates a flat method. Depth-2 requires the child method to call another `fetchXxxPartitionKeys` for the grandparent. Model already parses multi-router lists; the generator needs a recursive `buildSubstreamChain()` that nests loops. The tricky part is naming (each depth gets its own `partitionKey_N` variable) and ordering (root parent must be fetched before child). |
+| `HttpComponentsResolver` dynamic streams | Each unsupported connector needs its own `DynamicStreamTaskBody`-equivalent hardcoded to that connector's specific discovery endpoint and auth shape. Not general code; just more specific cases. LinkedIn Ads, Instagram, etc. each need a dedicated builder. |
+| Complex Jinja (`format_datetime`, `| regex_search`) | Requires mapping Python datetime format strings to Java `DateTimeFormatter` patterns (e.g. `%Y-%m-%dT%H:%M:%SZ` → `uuuu-MM-dd'T'HH:mm:ss'Z'`). Doable but finicky; 20+ format codes need coverage. |
+
+**Hard (2–4 weeks, architectural change)**
+
+| Gap | Why hard |
+|---|---|
+| `AsyncRetriever` (depth: entire new fetch path) | Today every stream uses a synchronous request→parse→emit loop. `AsyncRetriever` is a 3-phase state machine: (1) POST to submit a job, receive `job_id`; (2) loop-poll a status endpoint until `job_status == "succeeded"` or timeout; (3) fetch results pages. The generated task needs to persist `job_id` in the Connect offset store across `poll()` calls, check status on the next `poll()`, and only fetch records when complete. This is a fundamentally different control flow that requires a new `buildAsyncPollMethod()` pipeline with its own start/status/fetch URL resolution from the manifest's `creation_requester`, `polling_requester`, and `download_requester`. |
+| `CustomRequester` / `CustomPaginator` / `CustomPartitionRouter` | These are Python class references (`class_name: source_zoom.ZoomOAuth2Authenticator`). There is no general Java equivalent. The only realistic path is to hand-implement each one as a connector-specific class (same approach as `DynamicStreamTaskBody` for Sheets), meaning the gain is linear in effort — one connector at a time, not a general solution. |
+
+---
+
+### Roadmap to 95%
+
+Estimated cumulative coverage after each phase:
+
+```
+Today                                                             ~35%
+ │
+ ├─ Phase 1: ListPartitionRouter + multi-level substream (depth 2)   → ~65%
+ │   PartitionRouterSpec.isList() + values deserialization
+ │   TaskGenerator: for-loop over list values per stream
+ │   TaskGenerator: recursive buildSubstreamChain(depth ≤ 2)
+ │   Tests: source-pinterest.yaml, source-clickup-api.yaml
+ │
+ ├─ Phase 2: Transformations + Jinja coverage                        → ~72%
+ │   AddFields / RemoveFields post-processing in record loop
+ │   JinjaSnippets: format_datetime, now_utc(), | default(x)
+ │   Tests: source-jira.yaml, source-pretix.yaml
+ │
+ ├─ Phase 3: AsyncRetriever                                          → ~82%
+ │   New model: AsyncRetrieverSpec (creation/polling/download nodes)
+ │   New codegen path: buildAsyncPollMethod() state machine
+ │   Offset store: persist job_id across poll() calls
+ │   Tests: source-zoom.yaml, source-amazon-ads.yaml
+ │
+ ├─ Phase 4: More HttpComponentsResolver shapes                      → ~88%
+ │   One DynamicStreamTaskBody-style builder per connector family:
+ │   LinkedIn Ads, Instagram, Airtable (discovery URL + auth shape)
+ │   JinjaSnippets.allTemplatesRecognized() gates which get full body
+ │
+ └─ Phase 5: Custom* family + depth-3+ substreams + edge cases       → ~95%
+     Hand-implement Custom* connectors one by one
+     Extend substream recursion to depth 3 (source-asana.yaml)
+     GroupingPartitionRouter accumulator
+     Remaining Jinja filter coverage (| regex_search, | int, etc.)
+     Schema-aware record structuring (optional — may stay as raw JSON)
+```
+
+**Note on the ~5% ceiling**: the remaining 5% is connectors that depend on Python-native
+capabilities with no reasonable Java analogue — arbitrary `class_name` Python modules,
+`format_datetime` with locale-specific calendars, or connectors that call internal Airbyte
+APIs unavailable outside the Airbyte runtime. These are not tractable through codegen alone.
+
+### Recommended first PR
+
+Start with `ListPartitionRouter` (Phase 1a). It is self-contained, affects ~120 manifests,
+and the existing `PartitionRouterSpec` + `PartitionRouterListDeserializer` already parse the
+router list — the only missing piece is the model `isList()` helper and a `for`-loop wrapper
+in `buildStreamPollMethod`. A single day's work with the largest per-effort coverage gain.
