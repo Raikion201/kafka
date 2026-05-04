@@ -326,3 +326,67 @@ To support a new pagination strategy:
 1. Add a `isXxx()` helper to `PaginatorSpec`.
 2. Extend `buildPaginationInit()`, `buildUrlBlock()`, `buildPaginationStateUpdate()`, and
    `buildStop()` for the new strategy.
+
+---
+
+## Airbyte catalog coverage
+
+Tested against the full Airbyte connector catalog (544 source manifests, May 2026).
+
+### What works today
+
+| Feature | Status |
+|---|---|
+| All 8 auth types listed above | Fully generated |
+| All 5 pagination strategies | Fully generated |
+| Single-level `SubstreamPartitionRouter` (parent→child) | Fully generated |
+| `DatetimeBasedCursor` incremental sync | Fully generated |
+| Static streams (`streams:` entries with `SimpleRetriever`) | Fully generated |
+| `DynamicDeclarativeStream` — Google Sheets shape | Fully generated (OAuth + sheet discovery + batchGet) |
+| `DynamicDeclarativeStream` — other shapes | Stub task (throws `ConnectException` on start with clear message) |
+| `SelectiveAuthenticator` — OAuth branch selected | Fully generated |
+| `$ref` anchor resolution across definitions | Fully generated (up to 8-pass deep resolution) |
+| Config dot-notation `{{ config.key }}` | Fully generated |
+| Mixed URL templates `https://…/{{ config['id'] }}/path` | Fully generated via `JinjaSnippets.interpolateTemplate` |
+
+### What is not yet supported
+
+| Gap | Affected manifests (approx.) | Notes |
+|---|---|---|
+| Multi-level `SubstreamPartitionRouter` (depth > 1) | ~239 | Router list with >1 element is silently skipped; child stream falls back to top-level fetch |
+| `ListPartitionRouter` | ~120 | Static list-of-values fanout (e.g. iterate over regions) — not recognised |
+| `AsyncRetriever` | ~15 | Async job-submit + poll pattern; entirely different fetch loop — no path |
+| `HttpComponentsResolver` (generic dynamic streams) | ~20 | Non-Sheets DynamicDeclarativeStream shapes; stub task is emitted |
+| Record transformations (`transformations:` / `AddFields`, `RemoveFields`) | most | Fields silently ignored; downstream receives un-transformed records |
+| `CustomPartitionRouter` / `CustomPaginator` / `CustomRequester` | ~30 | Custom Python classes; no Java equivalent; silently skipped |
+| `GroupingPartitionRouter` | ~8 | Groups records by field — ignored |
+| Complex Jinja expressions (`| regex_search`, `format_datetime`, `| upper`, etc.) | scattered | `JinjaSnippets.allTemplatesRecognized()` returns false; expression emitted as empty string |
+| Response schema validation / `schema_loader` | all | Ignored; records are emitted as raw JSON strings |
+| `InlineSchemaLoader` / `JsonFileSchemaLoader` | all | Schemas not used for record structuring |
+
+### Coverage estimate
+
+| Tier | Count | Estimate |
+|---|---|---|
+| Fully runnable today (single-stream, known auth+pagination, no multi-router) | ~190 | ~35% |
+| Partially broken (multi-level substream skipped silently) | ~240 | ~44% |
+| Stub task only (AsyncRetriever / CustomRequester / unsupported dynamic) | ~114 | ~21% |
+
+Implementing `ListPartitionRouter` and capping multi-level substream detection would raise
+the fully-runnable tier to roughly **65%**. Adding `AsyncRetriever` support would push it
+to ~**80%**.
+
+### Hardest manifests (highest unsupported-feature score)
+
+| Manifest | Primary blockers |
+|---|---|
+| `source-zoom.yaml` | AsyncRetriever × many streams |
+| `source-clickup-api.yaml` | Multi-level SubstreamPartitionRouter + ListPartitionRouter |
+| `source-pretix.yaml` | Multi-level substream (3 levels) + complex Jinja |
+| `source-jira.yaml` | Multi-level substream + custom transformations |
+| `source-amazon-ads.yaml` | AsyncRetriever + multi-router |
+| `source-linkedin-ads.yaml` | DynamicDeclarativeStream (non-Sheets) + multi-router |
+| `source-bing-ads.yaml` | CustomRequester + CustomPaginator |
+| `source_google_ads.yaml` | AsyncRetriever + GroupingPartitionRouter |
+| `source_asana.yaml` | Multi-level substream (4 levels) |
+| `source-pinterest.yaml` | ListPartitionRouter + multi-level substream |
