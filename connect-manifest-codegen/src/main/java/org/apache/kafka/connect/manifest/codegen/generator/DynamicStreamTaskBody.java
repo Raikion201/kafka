@@ -118,12 +118,17 @@ final class DynamicStreamTaskBody {
         cls.addField(HTTP_CLIENT, "httpClient", Modifier.PRIVATE);
         cls.addField(MAP_STRING_OBJECT, "credentials", Modifier.PRIVATE);
         cls.addField(LIST_STRING, "sheetNames", Modifier.PRIVATE);
-        cls.addField(int.class, "currentSheetIdx", Modifier.PRIVATE);
-        cls.addField(boolean.class, "exhausted", Modifier.PRIVATE);
         cls.addField(FieldSpec.builder(String.class, "accessToken",
             Modifier.PRIVATE, Modifier.VOLATILE).build());
         cls.addField(FieldSpec.builder(long.class, "tokenExpiryMs",
             Modifier.PRIVATE, Modifier.VOLATILE).initializer("0L").build());
+        ParameterizedTypeName innerMap = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"),
+            ClassName.get(Integer.class), ClassName.get(String.class));
+        ParameterizedTypeName previousRowsType = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"), ClassName.get(String.class), innerMap);
+        cls.addField(FieldSpec.builder(previousRowsType, "previousRows", Modifier.PRIVATE)
+            .initializer("new $T<>()", ClassName.get(HashMap.class)).build());
     }
 
     private static MethodSpec version() {
@@ -157,8 +162,7 @@ final class DynamicStreamTaskBody {
                 + "} catch (Exception e) {\n"
                 + "    throw new $T(\"Failed to discover sheets\", e);\n"
                 + "}\n"
-                + "this.currentSheetIdx = 0;\n"
-                + "this.exhausted = this.sheetNames.isEmpty();\n",
+                + "",
                 CONNECT_EXCEPTION, Map.class, CONNECT_EXCEPTION, CONNECT_EXCEPTION)
             .build();
     }
@@ -170,20 +174,17 @@ final class DynamicStreamTaskBody {
             .returns(LIST_RECORD)
             .addException(InterruptedException.class)
             .addCode(""
-                + "if (exhausted || currentSheetIdx >= sheetNames.size()) {\n"
-                + "    Thread.sleep(60000L);\n"
-                + "    currentSheetIdx = 0;\n"
-                + "    exhausted = false;\n"
+                + "$T<$T> records = new $T<>();\n"
+                + "for (String sheet : sheetNames) {\n"
+                + "    try {\n"
+                + "        records.addAll(fetchSheetRows(sheet));\n"
+                + "    } catch (Exception e) {\n"
+                + "        throw new $T(\"Failed to fetch sheet: \" + sheet, e);\n"
+                + "    }\n"
                 + "}\n"
-                + "String sheet = sheetNames.get(currentSheetIdx);\n"
-                + "currentSheetIdx++;\n"
-                + "if (currentSheetIdx >= sheetNames.size()) exhausted = true;\n"
-                + "try {\n"
-                + "    return fetchSheetRows(sheet);\n"
-                + "} catch (Exception e) {\n"
-                + "    throw new $T(\"Failed to fetch sheet: \" + sheet, e);\n"
-                + "}\n",
-                CONNECT_EXCEPTION)
+                + "if (records.isEmpty()) Thread.sleep(5000L);\n"
+                + "return records;\n",
+                List.class, SOURCE_RECORD, ArrayList.class, CONNECT_EXCEPTION)
             .build();
     }
 
@@ -330,9 +331,8 @@ final class DynamicStreamTaskBody {
                 + "$T<$T> records = new $T<>();\n"
                 + "String topic = sanitizeTopic(\"google_sheets_\" + sheet);\n"
                 + "$T<String, Object> sourcePartition = $T.singletonMap(\"sheet\", sheet);\n"
-                + "$T<String, Object> storedOffset = context.offsetStorageReader().offset(sourcePartition);\n"
-                + "long committedRow = 0L;\n"
-                + "if (storedOffset != null && storedOffset.get(\"row\") instanceof Number n) committedRow = n.longValue();\n"
+                + "$T<Integer, String> prev = previousRows.getOrDefault(sheet, $T.emptyMap());\n"
+                + "$T<Integer, String> current = new $T<>();\n"
                 + "for ($T vr : root.path(\"valueRanges\")) {\n"
                 + "    $T rows = vr.path(\"values\");\n"
                 + "    if (!rows.isArray() || rows.size() < 2) continue;\n"
@@ -345,7 +345,6 @@ final class DynamicStreamTaskBody {
                 + "        headerKeys.add(cnt == 1 ? raw : raw + \"_\" + c);\n"
                 + "    }\n"
                 + "    for (int i = 1; i < rows.size(); i++) {\n"
-                + "        if (i <= committedRow) continue;\n"
                 + "        $T rowArr = rows.get(i);\n"
                 + "        $T rowObj = MAPPER.createObjectNode();\n"
                 + "        for (int c = 0; c < headerKeys.size(); c++) {\n"
@@ -353,18 +352,35 @@ final class DynamicStreamTaskBody {
                 + "            String val = c < rowArr.size() ? rowArr.get(c).asText(\"\") : \"\";\n"
                 + "            rowObj.put(key, val);\n"
                 + "        }\n"
-                + "        $T<String, Object> sourceOffset = $T.singletonMap(\"row\", (long) i);\n"
-                + "        records.add(new $T(sourcePartition, sourceOffset, topic,\n"
-                + "            null, $T.STRING_SCHEMA, MAPPER.writeValueAsString(rowObj)));\n"
+                + "        String json = MAPPER.writeValueAsString(rowObj);\n"
+                + "        current.put(i, json);\n"
+                + "        if (!json.equals(prev.get(i))) {\n"
+                + "            String rowKey = sheet + \":\" + i;\n"
+                + "            $T<String, Object> srcOffset = $T.singletonMap(\"row\", (long) i);\n"
+                + "            records.add(new $T(sourcePartition, srcOffset, topic,\n"
+                + "                $T.STRING_SCHEMA, rowKey, $T.STRING_SCHEMA, json));\n"
+                + "        }\n"
                 + "    }\n"
                 + "}\n"
+                + "for (Integer rowIdx : prev.keySet()) {\n"
+                + "    if (!current.containsKey(rowIdx)) {\n"
+                + "        String rowKey = sheet + \":\" + rowIdx;\n"
+                + "        $T<String, Object> delOffset = $T.singletonMap(\"row\", (long)(int) rowIdx);\n"
+                + "        records.add(new $T(sourcePartition, delOffset, topic,\n"
+                + "            $T.STRING_SCHEMA, rowKey, null, null));\n"
+                + "    }\n"
+                + "}\n"
+                + "previousRows.put(sheet, current);\n"
                 + "return records;\n",
                 URL_ENCODER, STANDARD_CHARSETS, URI_CLASS, URI_CLASS, baseUrlPrefix,
                 HTTP_REQUEST, HTTP_REQUEST, HTTP_RESPONSE, CONNECT_EXCEPTION,
                 JSON_NODE, List.class, SOURCE_RECORD, ArrayList.class,
-                Map.class, Collections.class, Map.class,
-                JSON_NODE, JSON_NODE, JSON_NODE, Map.class, HashMap.class,
-                List.class, ArrayList.class, JSON_NODE, OBJECT_NODE,
+                Map.class, Collections.class,
+                Map.class, Collections.class, Map.class, HashMap.class,
+                JSON_NODE, JSON_NODE, JSON_NODE,
+                Map.class, HashMap.class, List.class, ArrayList.class,
+                JSON_NODE, OBJECT_NODE,
+                Map.class, Collections.class, SOURCE_RECORD, SCHEMA, SCHEMA,
                 Map.class, Collections.class, SOURCE_RECORD, SCHEMA)
             .build();
     }
