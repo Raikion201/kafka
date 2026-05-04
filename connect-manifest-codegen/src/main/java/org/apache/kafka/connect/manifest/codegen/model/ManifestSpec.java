@@ -45,6 +45,10 @@ public class ManifestSpec {
     private String type;
     private String description;
     private List<StreamSpec> streams = Collections.emptyList();
+
+    @JsonProperty("dynamic_streams")
+    private List<DynamicStreamSpec> dynamicStreams = Collections.emptyList();
+
     private SpecDef spec;
     private DefinitionsDef definitions;
     private String manifestName;
@@ -115,9 +119,17 @@ public class ManifestSpec {
      *       inherited from {@code definitions.base_requester}.</li>
      * </ul>
      */
+    public List<DynamicStreamSpec> getDynamicStreams() {
+        return dynamicStreams == null ? Collections.emptyList() : dynamicStreams;
+    }
+
+    public void setDynamicStreams(List<DynamicStreamSpec> v) {
+        this.dynamicStreams = v == null ? Collections.emptyList() : v;
+    }
+
     public List<StreamSpec> resolvedStreams() {
         if (streams.isEmpty()) {
-            return Collections.emptyList();
+            return synthesiseDynamicStreams();
         }
         Map<String, StreamSpec> defined = definitions != null
             ? definitions.allStreamDefs()
@@ -153,6 +165,36 @@ public class ManifestSpec {
             }
         }
         return result;
+    }
+
+    /**
+     * Synthesises StreamSpecs from the top-level {@code dynamic_streams:} block, used when
+     * a manifest declares no explicit {@code streams:} (e.g. google_sheets). Each synthesised
+     * stream carries {@link StreamSpec#isDynamic()} so the codegen knows to emit runtime
+     * stream discovery rather than treating the placeholder name as authoritative.
+     */
+    private List<StreamSpec> synthesiseDynamicStreams() {
+        if (getDynamicStreams().isEmpty()) {
+            return Collections.emptyList();
+        }
+        RequesterSpec baseRequester = definitions != null ? definitions.getBaseRequester() : null;
+        List<StreamSpec> synth = new ArrayList<>();
+        int i = 0;
+        for (DynamicStreamSpec ds : getDynamicStreams()) {
+            StreamSpec template = ds.getStreamTemplate();
+            if (template == null || template.getRetriever() == null) {
+                continue;
+            }
+            template.setDynamic(true);
+            template.setDiscoveryRequester(ds.discoveryRequester());
+            if (template.getName() == null || template.getName().isBlank()) {
+                template.setName("dynamic_stream_" + i);
+            }
+            applyBaseRequester(template, baseRequester);
+            synth.add(template);
+            i++;
+        }
+        return synth;
     }
 
     private static void applyBaseRequester(StreamSpec stream, RequesterSpec baseRequester) {
@@ -258,9 +300,13 @@ public class ManifestSpec {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class PropertyDef {
 
+        @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using = StringOrArrayDeserializer.class)
         private String type;
         private String description;
         private String title;
+
+        @JsonProperty("default")
+        private Object defaultValue;
 
         public String getType() {
             return type;
@@ -286,12 +332,50 @@ public class ManifestSpec {
             this.title = title;
         }
 
+        public Object getDefaultValue() {
+            return defaultValue;
+        }
+
+        public void setDefaultValue(Object defaultValue) {
+            this.defaultValue = defaultValue;
+        }
+
+        public boolean hasDefault() {
+            return defaultValue != null;
+        }
+
         /** Returns the best available documentation string for this property. */
         public String effectiveDoc() {
             if (description != null && !description.isBlank()) {
                 return description;
             }
             return Objects.toString(title, "");
+        }
+
+        /**
+         * Tolerant deserializer for {@code PropertyDef.type}. JSON Schema allows
+         * {@code "type": ["string", "null"]} (an array of allowed types) — pick the first
+         * non-null entry as the effective type so the rest of the codegen sees a plain string.
+         */
+        static final class StringOrArrayDeserializer
+                extends com.fasterxml.jackson.databind.JsonDeserializer<String> {
+            @Override
+            public String deserialize(com.fasterxml.jackson.core.JsonParser p,
+                                      com.fasterxml.jackson.databind.DeserializationContext ctxt)
+                    throws java.io.IOException {
+                com.fasterxml.jackson.databind.JsonNode n = p.readValueAsTree();
+                if (n == null || n.isNull()) return null;
+                if (n.isTextual()) return n.asText();
+                if (n.isArray()) {
+                    for (com.fasterxml.jackson.databind.JsonNode child : n) {
+                        if (child.isTextual() && !"null".equalsIgnoreCase(child.asText())) {
+                            return child.asText();
+                        }
+                    }
+                    return null;
+                }
+                return n.toString();
+            }
         }
     }
 

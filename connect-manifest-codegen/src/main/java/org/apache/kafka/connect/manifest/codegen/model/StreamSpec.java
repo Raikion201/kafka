@@ -45,12 +45,39 @@ public class StreamSpec {
     }
 
     @JsonProperty("primary_key")
+    @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using = PrimaryKeyDeserializer.class)
     private List<String> primaryKey = Collections.emptyList();
 
     private RetrieverSpec retriever;
 
     @JsonProperty("incremental_sync")
     private IncrementalSyncSpec incrementalSync;
+
+    /**
+     * Marker set by ManifestSpec when this stream was synthesised from a top-level
+     * {@code dynamic_streams:} block. The codegen task will discover concrete stream
+     * names at connector startup rather than treating {@link #name} as authoritative.
+     */
+    private boolean dynamic;
+
+    public boolean isDynamic() {
+        return dynamic;
+    }
+
+    public void setDynamic(boolean dynamic) {
+        this.dynamic = dynamic;
+    }
+
+    /** When isDynamic, the components_resolver requester used for sheet/stream discovery. */
+    private RequesterSpec discoveryRequester;
+
+    public RequesterSpec getDiscoveryRequester() {
+        return discoveryRequester;
+    }
+
+    public void setDiscoveryRequester(RequesterSpec discoveryRequester) {
+        this.discoveryRequester = discoveryRequester;
+    }
 
     public String getType() {
         return type;
@@ -109,5 +136,31 @@ public class StreamSpec {
 
     public void setIncrementalSync(IncrementalSyncSpec incrementalSync) {
         this.incrementalSync = incrementalSync;
+    }
+
+    /**
+     * Accepts {@code primary_key} as a string ({@code "id"}), a list of strings
+     * ({@code ["id"]}), or a list of lists ({@code [["id"]]}) — Airbyte uses all three forms.
+     * Flattens to a single list of column names.
+     */
+    static final class PrimaryKeyDeserializer extends com.fasterxml.jackson.databind.JsonDeserializer<List<String>> {
+        @Override
+        public List<String> deserialize(com.fasterxml.jackson.core.JsonParser p,
+                                        com.fasterxml.jackson.databind.DeserializationContext ctxt)
+                throws java.io.IOException {
+            com.fasterxml.jackson.databind.JsonNode node = p.readValueAsTree();
+            List<String> out = new java.util.ArrayList<>();
+            collect(node, out);
+            return out;
+        }
+
+        private void collect(com.fasterxml.jackson.databind.JsonNode n, List<String> out) {
+            if (n == null || n.isNull()) return;
+            if (n.isTextual()) {
+                out.add(n.asText());
+            } else if (n.isArray()) {
+                for (com.fasterxml.jackson.databind.JsonNode child : n) collect(child, out);
+            }
+        }
     }
 }

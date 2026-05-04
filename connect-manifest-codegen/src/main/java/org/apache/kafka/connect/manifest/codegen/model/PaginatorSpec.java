@@ -168,6 +168,7 @@ public class PaginatorSpec {
         private String type;
 
         @JsonProperty("page_size")
+        @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using = IntOrTemplateDeserializer.class)
         private int pageSize;
 
         @JsonProperty("cursor_value")
@@ -231,6 +232,35 @@ public class PaginatorSpec {
 
         public void setStartFromPage(int startFromPage) {
             this.startFromPage = startFromPage;
+        }
+
+        /**
+         * Tolerant int deserializer used for {@code page_size}: accepts a plain int OR a
+         * Jinja-templated string ({@code "{{ config.get('page_size', 100) }}"}). When the
+         * value is a string, parses any embedded numeric literal — typically the second
+         * argument of {@code .get()} — as the runtime default; otherwise falls back to 100.
+         */
+        static final class IntOrTemplateDeserializer extends com.fasterxml.jackson.databind.JsonDeserializer<Integer> {
+            @Override
+            public Integer deserialize(com.fasterxml.jackson.core.JsonParser p,
+                                       com.fasterxml.jackson.databind.DeserializationContext ctxt)
+                    throws java.io.IOException {
+                com.fasterxml.jackson.databind.JsonNode n = p.readValueAsTree();
+                if (n == null || n.isNull()) return 0;
+                if (n.isInt() || n.isLong()) return n.asInt();
+                if (n.isTextual()) {
+                    String s = n.asText();
+                    Matcher m = Pattern.compile("\\b(\\d+)\\b").matcher(s);
+                    int last = 0;
+                    boolean found = false;
+                    while (m.find()) {
+                        last = Integer.parseInt(m.group(1));
+                        found = true;
+                    }
+                    return found ? last : 100;
+                }
+                return 0;
+            }
         }
     }
 }

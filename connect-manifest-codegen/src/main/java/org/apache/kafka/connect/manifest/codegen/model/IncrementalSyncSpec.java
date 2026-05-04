@@ -97,12 +97,32 @@ public class IncrementalSyncSpec {
 
     // ── inner classes ─────────────────────────────────────────────────────────
 
-    /** Models {@code start_datetime} / {@code end_datetime} (MinMaxDatetime). */
+    /**
+     * Models {@code start_datetime} / {@code end_datetime}. Airbyte allows two YAML forms:
+     * an object ({@code {type: MinMaxDatetime, datetime: "{{...}}", datetime_format: "..."}}),
+     * or a bare Jinja string shorthand ({@code "{{ config.get('end_date') }}"}). The custom
+     * deserializer accepts both and normalises onto this bean.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
+    @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using = DatetimeSpec.Deserializer.class)
     public static class DatetimeSpec {
+
+        @JsonProperty("type")
+        private String type;
 
         @JsonProperty("datetime")
         private String datetime;
+
+        @JsonProperty("datetime_format")
+        private String datetimeFormat;
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
 
         public String getDatetime() {
             return datetime;
@@ -110,6 +130,38 @@ public class IncrementalSyncSpec {
 
         public void setDatetime(String datetime) {
             this.datetime = datetime;
+        }
+
+        public String getDatetimeFormat() {
+            return datetimeFormat;
+        }
+
+        public void setDatetimeFormat(String datetimeFormat) {
+            this.datetimeFormat = datetimeFormat;
+        }
+
+        static final class Deserializer extends com.fasterxml.jackson.databind.JsonDeserializer<DatetimeSpec> {
+            @Override
+            public DatetimeSpec deserialize(com.fasterxml.jackson.core.JsonParser p,
+                                            com.fasterxml.jackson.databind.DeserializationContext ctxt)
+                    throws java.io.IOException {
+                com.fasterxml.jackson.databind.JsonNode node = p.readValueAsTree();
+                if (node == null || node.isNull()) {
+                    return null;
+                }
+                DatetimeSpec out = new DatetimeSpec();
+                if (node.isTextual()) {
+                    out.datetime = node.asText();
+                    return out;
+                }
+                if (node.isObject()) {
+                    if (node.hasNonNull("type")) out.type = node.get("type").asText();
+                    if (node.hasNonNull("datetime")) out.datetime = node.get("datetime").asText();
+                    if (node.hasNonNull("datetime_format")) out.datetimeFormat = node.get("datetime_format").asText();
+                    return out;
+                }
+                return null;
+            }
         }
     }
 

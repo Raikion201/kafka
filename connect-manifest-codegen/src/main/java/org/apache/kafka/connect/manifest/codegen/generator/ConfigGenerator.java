@@ -115,15 +115,39 @@ public class ConfigGenerator {
             .addStatement("$T def = new $T()", CONFIG_DEF, CONFIG_DEF);
 
         for (ConfigField f : fields) {
-            body.addStatement(
-                "def.define($L, $T.Type.$L, $T.Importance.$L, $S)",
-                f.constantName(),
-                CONFIG_DEF,
-                f.configDefType(),
-                CONFIG_DEF,
-                f.importance(),
-                f.doc()
-            );
+            if (f.hasDefault()) {
+                body.addStatement(
+                    "def.define($L, $T.Type.$L, $L, $T.Importance.$L, $S)",
+                    f.constantName(),
+                    CONFIG_DEF,
+                    f.configDefType(),
+                    f.defaultLiteral(),
+                    CONFIG_DEF,
+                    f.importance(),
+                    f.doc()
+                );
+            } else if (!f.isRequired()) {
+                body.addStatement(
+                    "def.define($L, $T.Type.$L, $L, $T.Importance.$L, $S)",
+                    f.constantName(),
+                    CONFIG_DEF,
+                    f.configDefType(),
+                    f.nullDefaultLiteral(),
+                    CONFIG_DEF,
+                    f.importance(),
+                    f.doc()
+                );
+            } else {
+                body.addStatement(
+                    "def.define($L, $T.Type.$L, $T.Importance.$L, $S)",
+                    f.constantName(),
+                    CONFIG_DEF,
+                    f.configDefType(),
+                    CONFIG_DEF,
+                    f.importance(),
+                    f.doc()
+                );
+            }
         }
 
         body.addStatement("return def");
@@ -163,7 +187,8 @@ public class ConfigGenerator {
             String doc = entry.getValue().effectiveDoc();
             String type = entry.getValue().getType();
             boolean isRequired = required.contains(key);
-            result.add(new ConfigField(key, doc, type, isRequired));
+            Object defaultValue = entry.getValue().getDefaultValue();
+            result.add(new ConfigField(key, doc, type, isRequired, defaultValue));
         }
         return result;
     }
@@ -175,12 +200,38 @@ public class ConfigGenerator {
         private final String doc;
         private final String type;
         private final boolean required;
+        private final Object defaultValue;
 
-        ConfigField(String key, String doc, String type, boolean required) {
+        ConfigField(String key, String doc, String type, boolean required, Object defaultValue) {
             this.key = key;
             this.doc = doc;
             this.type = type;
             this.required = required;
+            this.defaultValue = defaultValue;
+        }
+
+        boolean hasDefault() {
+            return defaultValue != null;
+        }
+
+        String defaultLiteral() {
+            if (isBoolean()) {
+                return Boolean.toString(Boolean.parseBoolean(String.valueOf(defaultValue)));
+            }
+            if (isLong()) {
+                return String.valueOf(defaultValue) + "L";
+            }
+            return "\"" + String.valueOf(defaultValue).replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+        }
+
+        String nullDefaultLiteral() {
+            if (isBoolean()) {
+                return "(Boolean) null";
+            }
+            if (isLong()) {
+                return "(Long) null";
+            }
+            return "(String) null";
         }
 
         String key() {

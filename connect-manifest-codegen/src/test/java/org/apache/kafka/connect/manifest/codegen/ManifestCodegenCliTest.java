@@ -70,19 +70,19 @@ public class ManifestCodegenCliTest {
     // ── parse error exit code ─────────────────────────────────────────────────
 
     @Test
-    void emptyManifest_returnsParseError(@TempDir Path tmpDir) throws Exception {
+    void emptyManifest_succeedsWithStubTask(@TempDir Path tmpDir) throws Exception {
         Path bad = tmpDir.resolve("bad.yaml");
         Files.writeString(bad, "version: 1.0\ntype: DeclarativeSource\n");
         int code = ManifestCodegenCli.run(new String[]{bad.toString(), tmpDir.toString()});
-        assertEquals(2, code);
+        assertEquals(0, code);
     }
 
     @Test
-    void manifestWithNoStreams_returnsParseError(@TempDir Path tmpDir) throws Exception {
+    void manifestWithNoStreams_succeedsWithStubTask(@TempDir Path tmpDir) throws Exception {
         Path bad = tmpDir.resolve("nostreams.yaml");
         Files.writeString(bad, "version: 1.0\ntype: DeclarativeSource\nstreams: []\n");
         int code = ManifestCodegenCli.run(new String[]{bad.toString(), tmpDir.toString()});
-        assertEquals(2, code);
+        assertEquals(0, code);
     }
 
     // ── success: three files generated ────────────────────────────────────────

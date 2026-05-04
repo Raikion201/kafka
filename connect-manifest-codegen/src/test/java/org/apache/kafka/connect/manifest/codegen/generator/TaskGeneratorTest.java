@@ -189,11 +189,14 @@ public class TaskGeneratorTest {
     // ── exception paths ───────────────────────────────────────────────────────
 
     @Test
-    void noStreams_throwsCodegenException() throws Exception {
-        // Build a ManifestSpec with no streams (bypassing parser validation)
+    void noStreams_emitsStubTask() throws Exception {
+        // Manifests with no usable streams now produce a stub task that throws
+        // ConnectException at start() — connector loads, task fails fast with clear message.
         ManifestSpec empty = new ManifestSpec();
         empty.setStreams(Collections.emptyList());
-        assertThrows(CodegenException.class, () -> generator.generate(empty, PKG));
+        com.squareup.javapoet.JavaFile out = generator.generate(empty, PKG);
+        assertTrue(out.toString().contains("ConnectException"),
+            "Stub task must throw ConnectException at start()");
     }
 
     @Test

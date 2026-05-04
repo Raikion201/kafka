@@ -168,50 +168,50 @@ public class ConfigGeneratorTest {
 
     @Test
     void configField_constantName_snakeCase() {
-        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("api_key", "doc", "string", true);
+        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("api_key", "doc", "string", true, null);
         assertEquals("API_KEY_CONFIG", f.constantName());
     }
 
     @Test
     void configField_constantName_kebabCase() {
-        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("comic-number", "doc", "string", false);
+        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("comic-number", "doc", "string", false, null);
         assertEquals("COMIC_NUMBER_CONFIG", f.constantName());
     }
 
     @Test
     void configField_importance_required() {
-        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", "string", true);
+        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", "string", true, null);
         assertEquals("HIGH", f.importance());
     }
 
     @Test
     void configField_importance_optional() {
-        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", "string", false);
+        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", "string", false, null);
         assertEquals("MEDIUM", f.importance());
     }
 
     @Test
     void configField_configDefType_string() {
-        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", "string", false);
+        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", "string", false, null);
         assertEquals("STRING", f.configDefType());
     }
 
     @Test
     void configField_configDefType_boolean() {
-        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", "boolean", false);
+        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", "boolean", false, null);
         assertEquals("BOOLEAN", f.configDefType());
         assertTrue(f.isBoolean());
     }
 
     @Test
     void configField_configDefType_integer() {
-        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", "integer", false);
+        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", "integer", false, null);
         assertEquals("LONG", f.configDefType());
     }
 
     @Test
     void configField_configDefType_nullDefaultsToString() {
-        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", null, false);
+        ConfigGenerator.ConfigField f = new ConfigGenerator.ConfigField("k", "d", null, false, null);
         assertEquals("STRING", f.configDefType());
     }
 

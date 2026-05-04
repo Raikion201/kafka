@@ -122,6 +122,16 @@ public class AuthenticatorSpec {
     @JsonProperty("additional_jwt_payload")
     private Map<String, String> additionalJwtPayload;
 
+    // ── SelectiveAuthenticator ────────────────────────────────────────────────
+
+    /** Path into the config object that selects which inner authenticator to use, e.g. ["credentials","auth_type"]. */
+    @JsonProperty("authenticator_selection_path")
+    private List<String> authenticatorSelectionPath;
+
+    /** Map of selection-value → inner AuthenticatorSpec (resolved from $ref by ManifestParser). */
+    @JsonProperty("authenticators")
+    private Map<String, AuthenticatorSpec> authenticators;
+
     // ── getters / setters ─────────────────────────────────────────────────────
 
     public String getType() {
@@ -360,6 +370,46 @@ public class AuthenticatorSpec {
 
     public boolean isJwt() {
         return "JwtAuthenticator".equalsIgnoreCase(type);
+    }
+
+    public boolean isSelective() {
+        return "SelectiveAuthenticator".equalsIgnoreCase(type);
+    }
+
+    public List<String> getAuthenticatorSelectionPath() {
+        return authenticatorSelectionPath == null ? java.util.Collections.emptyList() : authenticatorSelectionPath;
+    }
+
+    public void setAuthenticatorSelectionPath(List<String> v) {
+        this.authenticatorSelectionPath = v;
+    }
+
+    public Map<String, AuthenticatorSpec> getAuthenticators() {
+        return authenticators == null ? java.util.Collections.emptyMap() : authenticators;
+    }
+
+    public void setAuthenticators(Map<String, AuthenticatorSpec> v) {
+        this.authenticators = v;
+    }
+
+    /** First OAuth authenticator inside a SelectiveAuthenticator's branches, or null. */
+    public AuthenticatorSpec selectiveOAuth() {
+        for (Map.Entry<String, AuthenticatorSpec> e : getAuthenticators().entrySet()) {
+            if (e.getValue() != null && e.getValue().isOAuth()) {
+                return e.getValue();
+            }
+        }
+        return null;
+    }
+
+    /** Selection value (e.g. "Client") that maps to the OAuth branch, or null. */
+    public String selectiveOAuthKey() {
+        for (Map.Entry<String, AuthenticatorSpec> e : getAuthenticators().entrySet()) {
+            if (e.getValue() != null && e.getValue().isOAuth()) {
+                return e.getKey();
+            }
+        }
+        return null;
     }
 
     // ── inner classes ─────────────────────────────────────────────────────────

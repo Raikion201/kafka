@@ -171,23 +171,26 @@ public class ManifestParserTest {
     // ── validation ────────────────────────────────────────────────────────────
 
     @Test
-    void missingStreams_throws() {
+    void missingStreams_parsesEmptyAndDelegatesToCodegenStub() throws Exception {
         InputStream empty = new java.io.ByteArrayInputStream("version: 1.0\ntype: DeclarativeSource\n".getBytes());
-        assertThrows(ManifestParseException.class, () -> parser.parse(empty));
+        ManifestSpec spec = parser.parse(empty);
+        assertTrue(spec.resolvedStreams().isEmpty());
     }
 
     @Test
-    void missingRetriever_throws() {
+    void missingRetriever_filtersStream() throws Exception {
         String yaml = "version: 1.0\ntype: DeclarativeSource\nstreams:\n  - name: foo\n";
         InputStream in = new java.io.ByteArrayInputStream(yaml.getBytes());
-        assertThrows(ManifestParseException.class, () -> parser.parse(in));
+        ManifestSpec spec = parser.parse(in);
+        assertTrue(spec.resolvedStreams().isEmpty());
     }
 
     @Test
-    void missingUrl_throws() {
+    void missingUrl_keepsStreamForCodegenToHandle() throws Exception {
         String yaml = "version: 1.0\ntype: DeclarativeSource\nstreams:\n  - name: foo\n    retriever:\n      type: SimpleRetriever\n      requester:\n        type: HttpRequester\n";
         InputStream in = new java.io.ByteArrayInputStream(yaml.getBytes());
-        assertThrows(ManifestParseException.class, () -> parser.parse(in));
+        // No throw; codegen handles blank url.
+        parser.parse(in);
     }
 
     // ── class name helper ─────────────────────────────────────────────────────

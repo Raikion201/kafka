@@ -50,9 +50,11 @@ public class RequesterSpec {
     private AuthenticatorSpec authenticator;
 
     @JsonProperty("request_parameters")
+    @JsonDeserialize(using = StringMapTolerantDeserializer.class)
     private Map<String, String> requestParameters = Collections.emptyMap();
 
     @JsonProperty("request_headers")
+    @JsonDeserialize(using = StringMapTolerantDeserializer.class)
     private Map<String, String> requestHeaders = Collections.emptyMap();
 
     @JsonProperty("error_handler")
@@ -150,8 +152,8 @@ public class RequesterSpec {
 
     /**
      * For a list-cycle path, extracts the literal path prefix that appears between
-     * the closing {@code %\}} of the {@code {% if %}} tag and the {@code \{\{} of the
-     * config-field interpolation, e.g. {@code /v8/finance/chart/}.
+     * the closing brace of the {@code if}-tag and the opening of the config-field
+     * interpolation, e.g. {@code /v8/finance/chart/}.
      */
     public String listCyclePathPrefix() {
         if (path == null) return "";
@@ -163,6 +165,50 @@ public class RequesterSpec {
     /** HTTP status codes that the error_handler treats as SUCCESS (e.g. 403 for Yahoo Finance). */
     public Set<Integer> successHttpCodes() {
         return errorHandler != null ? errorHandler.getSuccessHttpCodes() : Collections.emptySet();
+    }
+
+    /**
+     * Tolerant deserializer for {@code request_parameters} / {@code request_headers}.
+     * Airbyte allows non-string values (objects with type/value, arrays of values, ints,
+     * booleans). This collapses everything into the {@code Map<String,String>} the codegen
+     * expects: scalars become their text form; objects use a {@code value} child if present,
+     * else the whole node serialised; arrays are joined with commas; nulls are skipped.
+     */
+    static final class StringMapTolerantDeserializer
+            extends com.fasterxml.jackson.databind.JsonDeserializer<Map<String, String>> {
+        @Override
+        public Map<String, String> deserialize(com.fasterxml.jackson.core.JsonParser p,
+                                               com.fasterxml.jackson.databind.DeserializationContext ctxt)
+                throws java.io.IOException {
+            com.fasterxml.jackson.databind.JsonNode root = p.readValueAsTree();
+            if (root == null || root.isNull() || !root.isObject()) {
+                return Collections.emptyMap();
+            }
+            Map<String, String> out = new java.util.LinkedHashMap<>();
+            for (Map.Entry<String, com.fasterxml.jackson.databind.JsonNode> e : root.properties()) {
+                com.fasterxml.jackson.databind.JsonNode v = e.getValue();
+                if (v == null || v.isNull()) continue;
+                if (v.isTextual()) {
+                    out.put(e.getKey(), v.asText());
+                } else if (v.isNumber() || v.isBoolean()) {
+                    out.put(e.getKey(), v.asText());
+                } else if (v.isArray()) {
+                    StringBuilder sb = new StringBuilder();
+                    for (com.fasterxml.jackson.databind.JsonNode child : v) {
+                        if (sb.length() > 0) sb.append(',');
+                        sb.append(child.isTextual() ? child.asText() : child.toString());
+                    }
+                    out.put(e.getKey(), sb.toString());
+                } else if (v.isObject()) {
+                    if (v.hasNonNull("value")) {
+                        out.put(e.getKey(), v.get("value").asText());
+                    } else {
+                        out.put(e.getKey(), v.toString());
+                    }
+                }
+            }
+            return out;
+        }
     }
 
     /** Returns the effective base URL, preferring {@code url} over {@code url_base}. */
