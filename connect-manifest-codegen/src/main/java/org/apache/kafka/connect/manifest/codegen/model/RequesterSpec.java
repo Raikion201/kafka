@@ -36,6 +36,10 @@ public class RequesterSpec {
 
     private String type;
 
+    /** Airbyte CDK Custom* node identifier. Non-null only when type starts with "Custom". */
+    @JsonProperty("class_name")
+    private String className;
+
     /** Full URL — used when there is no separate url_base + path. */
     private String url;
 
@@ -66,6 +70,14 @@ public class RequesterSpec {
 
     public void setType(String type) {
         this.type = type;
+    }
+
+    public String getClassName() {
+        return className;
+    }
+
+    public void setClassName(String className) {
+        this.className = className;
     }
 
     public String getUrl() {
@@ -225,6 +237,9 @@ public class RequesterSpec {
 
         private String type;
 
+        @JsonProperty("class_name")
+        private String className;
+
         @JsonProperty("error_handlers")
         private List<ErrorHandlerSpec> errorHandlers = Collections.emptyList();
 
@@ -238,6 +253,14 @@ public class RequesterSpec {
 
         public void setType(String type) {
             this.type = type;
+        }
+
+        public String getClassName() {
+            return className;
+        }
+
+        public void setClassName(String className) {
+            this.className = className;
         }
 
         public List<ErrorHandlerSpec> getErrorHandlers() {

@@ -53,6 +53,9 @@ public class RecordSelectorSpec {
 
         private String type;
 
+        @JsonProperty("class_name")
+        private String className;
+
         @JsonProperty("field_path")
         private List<String> fieldPath = Collections.emptyList();
 
@@ -62,6 +65,14 @@ public class RecordSelectorSpec {
 
         public void setType(String type) {
             this.type = type;
+        }
+
+        public String getClassName() {
+            return className;
+        }
+
+        public void setClassName(String className) {
+            this.className = className;
         }
 
         public List<String> getFieldPath() {

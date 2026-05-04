@@ -32,6 +32,10 @@ public class AuthenticatorSpec {
 
     private String type;
 
+    /** Airbyte CDK Custom* node identifier. Non-null only when type starts with "Custom". */
+    @JsonProperty("class_name")
+    private String className;
+
     /** Header name for ApiKeyAuthenticator (legacy field). */
     @JsonProperty("header")
     private String header;
@@ -140,6 +144,14 @@ public class AuthenticatorSpec {
 
     public void setType(String type) {
         this.type = type;
+    }
+
+    public String getClassName() {
+        return className;
+    }
+
+    public void setClassName(String className) {
+        this.className = className;
     }
 
     public String getHeader() {

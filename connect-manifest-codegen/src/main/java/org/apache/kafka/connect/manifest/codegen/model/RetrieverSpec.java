@@ -30,6 +30,11 @@ import java.util.List;
 public class RetrieverSpec {
 
     private String type;
+
+    /** Airbyte CDK Custom* node identifier. Non-null only when type starts with "Custom". */
+    @JsonProperty("class_name")
+    private String className;
+
     private RequesterSpec requester;
 
     @JsonProperty("record_selector")
@@ -47,6 +52,14 @@ public class RetrieverSpec {
 
     public void setType(String type) {
         this.type = type;
+    }
+
+    public String getClassName() {
+        return className;
+    }
+
+    public void setClassName(String className) {
+        this.className = className;
     }
 
     public RequesterSpec getRequester() {

@@ -31,6 +31,10 @@ public class PartitionRouterSpec {
 
     private String type;
 
+    /** Airbyte CDK Custom* node identifier. Non-null only when type starts with "Custom". */
+    @JsonProperty("class_name")
+    private String className;
+
     @JsonProperty("parent_stream_configs")
     private List<ParentStreamConfig> parentStreamConfigs = Collections.emptyList();
 
@@ -40,6 +44,14 @@ public class PartitionRouterSpec {
 
     public void setType(String type) {
         this.type = type;
+    }
+
+    public String getClassName() {
+        return className;
+    }
+
+    public void setClassName(String className) {
+        this.className = className;
     }
 
     public List<ParentStreamConfig> getParentStreamConfigs() {
