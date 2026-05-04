@@ -52,7 +52,9 @@ dependencies {
 
     // kafka-clients provides Exit, AbstractConfig, ConfigDef used in main + generated code compilation tests
     implementation project(':clients')
-    // connect:api provides SourceConnector, SourceTask, Task, Schema for generated code compilation tests
+    // connect:api provides SourceConnector, SourceTask, Task, Schema, ConnectException — used by
+    // the runtime/customs/* package (called from generated tasks at runtime) and by generated code itself
+    implementation project(':connect:api')
     testImplementation project(':connect:api')
 
     testImplementation libs.junitJupiter
