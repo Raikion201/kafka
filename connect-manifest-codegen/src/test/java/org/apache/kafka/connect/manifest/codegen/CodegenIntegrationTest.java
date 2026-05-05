@@ -543,6 +543,42 @@ public class CodegenIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // LIST PARTITION ROUTER
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void listRouter_generatedTask_containsForLoop() throws Exception {
+        String taskSrc = generate("list_partition_router_test.yaml").task.toString();
+        assertTrue(taskSrc.contains("for (String _lp_category"),
+            "ListPartitionRouter task must iterate with for (_lp_category : ...) loop");
+    }
+
+    @Test
+    void listRouter_generatedTask_containsLiteralValues() throws Exception {
+        String taskSrc = generate("list_partition_router_test.yaml").task.toString();
+        assertTrue(taskSrc.contains("\"electronics\""),
+            "ListPartitionRouter task must embed literal 'electronics' partition value");
+        assertTrue(taskSrc.contains("\"clothing\""),
+            "ListPartitionRouter task must embed literal 'clothing' partition value");
+        assertTrue(taskSrc.contains("\"books\""),
+            "ListPartitionRouter task must embed literal 'books' partition value");
+    }
+
+    @Test
+    void listRouter_generatedTask_compiles(@TempDir Path tmpDir) throws Exception {
+        compileTriple(generate("list_partition_router_test.yaml"), tmpDir);
+    }
+
+    @Test
+    void listRouter_generatedTask_noRawJinja() throws Exception {
+        String taskSrc = generate("list_partition_router_test.yaml").task.toString();
+        assertFalse(taskSrc.contains("stream_partition"),
+            "ListPartitionRouter task must not emit raw 'stream_partition' Jinja template");
+        assertFalse(taskSrc.contains("{{"),
+            "ListPartitionRouter task must not emit raw Jinja2 delimiters");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // BAD PATHS
     // ══════════════════════════════════════════════════════════════════════════
 

@@ -210,4 +210,41 @@ public class ManifestParserTest {
         ManifestSpec spec = parser.parse(resource("xkcd.yaml"));
         assertEquals("XkcdSource", spec.connectorClassName());
     }
+
+    // ── ListPartitionRouter ───────────────────────────────────────────────────
+
+    @Test
+    void listPartitionRouter_parsesValues() throws Exception {
+        ManifestSpec spec = parser.parse(resource("list_partition_router_test.yaml"));
+        var routers = spec.resolvedStreams().get(0).getRetriever().getListRouters();
+        assertEquals(1, routers.size());
+        var lr = routers.get(0);
+        assertTrue(lr.isList(), "PartitionRouterSpec.isList() must return true for ListPartitionRouter");
+        assertEquals(java.util.List.of("electronics", "clothing", "books"), lr.getValues());
+    }
+
+    @Test
+    void listPartitionRouter_parsesCursorField() throws Exception {
+        ManifestSpec spec = parser.parse(resource("list_partition_router_test.yaml"));
+        var lr = spec.resolvedStreams().get(0).getRetriever().getListRouters().get(0);
+        assertEquals("category", lr.getCursorField());
+    }
+
+    @Test
+    void listPartitionRouter_parsesRequestOption() throws Exception {
+        ManifestSpec spec = parser.parse(resource("list_partition_router_test.yaml"));
+        var lr = spec.resolvedStreams().get(0).getRetriever().getListRouters().get(0);
+        assertNotNull(lr.getRequestOption());
+        assertEquals("category", lr.getRequestOption().getFieldName());
+        assertTrue(lr.getRequestOption().isRequestParameter());
+    }
+
+    @Test
+    void listPartitionRouter_retrieverExposesListRouters() throws Exception {
+        ManifestSpec spec = parser.parse(resource("list_partition_router_test.yaml"));
+        var retriever = spec.resolvedStreams().get(0).getRetriever();
+        assertEquals(1, retriever.getListRouters().size());
+        assertEquals(0, retriever.getSubstreamRouter() == null ? 0 : 1);
+        assertTrue(!retriever.hasSubstreamPartition());
+    }
 }
