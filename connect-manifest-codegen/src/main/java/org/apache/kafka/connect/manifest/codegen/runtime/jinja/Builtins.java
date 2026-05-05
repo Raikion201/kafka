@@ -29,7 +29,7 @@ import java.util.regex.Pattern;
 /**
  * Wires the standard Jinja and Airbyte built-in filters / functions onto a set
  * of registries. The datetime helpers ({@code now_utc}, {@code today_utc},
- * {@code duration}, {@code format_datetime}) live in {@link DatetimeBuiltins}.
+ * {@code duration}, {@code format_datetime}) live in {@link Datetimes}.
  */
 public final class Builtins {
 

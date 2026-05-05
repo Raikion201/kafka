@@ -28,6 +28,7 @@ public sealed interface Expr permits
         Expr.Ident,
         Expr.Attr,
         Expr.Index,
+        Expr.Slice,
         Expr.Call,
         Expr.Filter,
         Expr.Test,
@@ -50,14 +51,17 @@ public sealed interface Expr permits
     /** Subscript {@code target[key]}. */
     record Index(Expr target, Expr key) implements Expr { }
 
+    /** Slice {@code target[start:stop:step]}; any of the three may be null for omitted. */
+    record Slice(Expr target, Expr start, Expr stop, Expr step) implements Expr { }
+
     /**
      * Function or method call {@code callee(args, kw=val)}. Kwargs preserve insertion order
      * so for-loops can iterate them deterministically.
      */
     record Call(Expr callee, List<Expr> args, Map<String, Expr> kwargs) implements Expr { }
 
-    /** Filter application {@code target | name(args)}. Args are positional. */
-    record Filter(Expr target, String name, List<Expr> args) implements Expr { }
+    /** Filter application {@code target | name(args, kw=val)}. */
+    record Filter(Expr target, String name, List<Expr> args, Map<String, Expr> kwargs) implements Expr { }
 
     /** Test {@code target is name} or {@code target is not name}. */
     record Test(Expr target, String name, boolean negated) implements Expr { }

@@ -206,6 +206,9 @@ public final class Evaluator {
         if (e instanceof Expr.Index idx) {
             return indexInto(evalExpr(idx.target(), scope), evalExpr(idx.key(), scope));
         }
+        if (e instanceof Expr.Slice sl) {
+            return evalSlice(sl, scope);
+        }
         if (e instanceof Expr.ListLit ll) {
             return evalList(ll.items(), scope);
         }
@@ -536,6 +539,88 @@ public final class Evaluator {
             return getAttribute(target, cs.toString());
         }
         throw new JinjaException("cannot index " + describe(target) + " with " + describe(key));
+    }
+
+    private Object evalSlice(Expr.Slice sl, Map<String, Object> scope) {
+        Object target = evalExpr(sl.target(), scope);
+        Object start = sl.start() == null ? null : evalExpr(sl.start(), scope);
+        Object stop = sl.stop() == null ? null : evalExpr(sl.stop(), scope);
+        Object step = sl.step() == null ? null : evalExpr(sl.step(), scope);
+        return sliceInto(target, start, stop, step);
+    }
+
+    private static Object sliceInto(Object target, Object start, Object stop, Object step) {
+        if (target == null) {
+            return null;
+        }
+        int s = step == null ? 1 : toInt(step);
+        if (s == 0) {
+            throw new JinjaException("slice step cannot be zero");
+        }
+        if (target instanceof CharSequence cs) {
+            return sliceString(cs.toString(), start, stop, s);
+        }
+        if (target instanceof List<?> l) {
+            return sliceList(l, start, stop, s);
+        }
+        if (target.getClass().isArray()) {
+            int len = java.lang.reflect.Array.getLength(target);
+            List<Object> copy = new ArrayList<>(len);
+            for (int i = 0; i < len; i++) {
+                copy.add(java.lang.reflect.Array.get(target, i));
+            }
+            return sliceList(copy, start, stop, s);
+        }
+        throw new JinjaException("cannot slice " + describe(target));
+    }
+
+    private static String sliceString(String src, Object start, Object stop, int step) {
+        int len = src.length();
+        int[] bounds = sliceBounds(len, start, stop, step);
+        StringBuilder out = new StringBuilder();
+        for (int i = bounds[0]; step > 0 ? i < bounds[1] : i > bounds[1]; i += step) {
+            out.append(src.charAt(i));
+        }
+        return out.toString();
+    }
+
+    private static List<Object> sliceList(List<?> src, Object start, Object stop, int step) {
+        int len = src.size();
+        int[] bounds = sliceBounds(len, start, stop, step);
+        List<Object> out = new ArrayList<>();
+        for (int i = bounds[0]; step > 0 ? i < bounds[1] : i > bounds[1]; i += step) {
+            out.add(src.get(i));
+        }
+        return out;
+    }
+
+    /** Python-style slice bound resolution. Returns {@code [start, stop]}. */
+    private static int[] sliceBounds(int len, Object start, Object stop, int step) {
+        int defStart = step > 0 ? 0 : len - 1;
+        int defStop = step > 0 ? len : -1;
+        int s = start == null ? defStart : clampSlice(toInt(start), len, step > 0);
+        int e = stop == null ? defStop : clampSlice(toInt(stop), len, step > 0);
+        return new int[]{s, e};
+    }
+
+    private static int clampSlice(int raw, int len, boolean forward) {
+        int idx = raw < 0 ? len + raw : raw;
+        if (forward) {
+            if (idx < 0) {
+                return 0;
+            }
+            if (idx > len) {
+                return len;
+            }
+            return idx;
+        }
+        if (idx < -1) {
+            return -1;
+        }
+        if (idx > len - 1) {
+            return len - 1;
+        }
+        return idx;
     }
 
     private static <T> Object seqIndex(T source, int length, int rawIdx,

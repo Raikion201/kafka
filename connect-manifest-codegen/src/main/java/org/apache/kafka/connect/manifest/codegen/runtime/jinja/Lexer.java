@@ -107,6 +107,7 @@ public final class Lexer {
 
     private final String src;
     private int i;
+    private int braceDepth;
     private final List<Token> out = new ArrayList<>();
 
     public Lexer(String src) {
@@ -306,6 +307,15 @@ public final class Lexer {
             return true;
         }
         if (c == closer && i + 1 < src.length() && src.charAt(i + 1) == '}') {
+            // When inside an inner dict literal, the first `}` of `}}` belongs
+            // to the dict, not to the Jinja closer. Emit RBRACE for it and let
+            // a subsequent iteration close the block.
+            if (closer == '}' && braceDepth > 0) {
+                out.add(new Token(Token.Type.RBRACE, "}", i));
+                braceDepth--;
+                i++;
+                return false;
+            }
             emitClose(closerType, closerText, 2);
             return true;
         }
@@ -350,7 +360,13 @@ public final class Lexer {
         }
         Token.Type t1 = ONE_CHAR_OPS.get(src.charAt(i));
         if (t1 != null) {
-            out.add(new Token(t1, String.valueOf(src.charAt(i)), p));
+            char ch = src.charAt(i);
+            if (ch == '{') {
+                braceDepth++;
+            } else if (ch == '}' && braceDepth > 0) {
+                braceDepth--;
+            }
+            out.add(new Token(t1, String.valueOf(ch), p));
             i++;
             return true;
         }

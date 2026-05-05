@@ -60,7 +60,13 @@ public final class Parser {
 
     /** Parse a single expression from a Jinja expression source string. */
     public static Expr parseExpression(String source) {
-        List<Token> all = Lexer.tokenize(source);
+        // The lexer starts in TEXT mode and only enters expression mode after {{ or {%.
+        // For convenience the public surface accepts bare expressions like
+        // `config["foo"]`; wrap them so the lexer hands back expression tokens.
+        String t = source.stripLeading();
+        String wrapped = t.startsWith("{{") || t.startsWith("{%")
+            ? source : "{{ " + source + " }}";
+        List<Token> all = Lexer.tokenize(wrapped);
         // If the source is a bare expression (no {{ }} wrapper), all tokens are at top-level.
         // Strip a leading LSTACHE / trailing RSTACHE if present so we can also parse
         // wrapped expressions like "{{ x }}".
@@ -102,8 +108,14 @@ public final class Parser {
         if (peek().type == Token.Type.IF) {
             advance();
             Expr cond = parseOr();
-            expect(Token.Type.ELSE);
-            Expr alt = parseTernary();
+            // Jinja allows {{ value if cond }} (implicit None else).
+            Expr alt;
+            if (peek().type == Token.Type.ELSE) {
+                advance();
+                alt = parseTernary();
+            } else {
+                alt = new Expr.Literal(null);
+            }
             return new Expr.Ternary(cond, value, alt);
         }
         return value;
@@ -176,7 +188,7 @@ public final class Parser {
     }
 
     private Expr parseComparison() {
-        Expr left = parseFilter();
+        Expr left = parseConcat();
         while (true) {
             Token t = peek();
             String op = comparisonOp(t.type);
@@ -184,7 +196,7 @@ public final class Parser {
                 return left;
             }
             advance();
-            Expr right = parseFilter();
+            Expr right = parseConcat();
             left = new Expr.Binary(op, left, right);
         }
     }
@@ -202,17 +214,18 @@ public final class Parser {
     }
 
     private Expr parseFilter() {
-        Expr left = parseConcat();
+        Expr left = parsePostfix();
         while (peek().type == Token.Type.PIPE) {
             advance();
             Token name = expect(Token.Type.IDENT);
             List<Expr> args = new ArrayList<>();
+            Map<String, Expr> kwargs = new LinkedHashMap<>();
             if (peek().type == Token.Type.LPAREN) {
                 advance();
-                parseCallArgs(args, null);
+                parseCallArgs(args, kwargs);
                 expect(Token.Type.RPAREN);
             }
-            left = new Expr.Filter(left, name.text, args);
+            left = new Expr.Filter(left, name.text, args, kwargs);
         }
         return left;
     }
@@ -265,7 +278,7 @@ public final class Parser {
             advance();
             return new Expr.Unary("+", parseUnary());
         }
-        return parsePostfix();
+        return parseFilter();
     }
 
     private Expr parsePostfix() {
@@ -278,9 +291,7 @@ public final class Parser {
                 base = new Expr.Attr(base, name.text);
             } else if (t == Token.Type.LBRACK) {
                 advance();
-                Expr key = parseExpr();
-                expect(Token.Type.RBRACK);
-                base = new Expr.Index(base, key);
+                base = parseSubscript(base);
             } else if (t == Token.Type.LPAREN) {
                 advance();
                 List<Expr> args = new ArrayList<>();
@@ -292,6 +303,36 @@ public final class Parser {
                 return base;
             }
         }
+    }
+
+    /**
+     * Parse the inside of {@code base[ ... ]}, after the opening {@code [}.
+     * Supports {@code [k]} indices and {@code [a:b]}, {@code [:b]}, {@code [a:]},
+     * {@code [:]}, {@code [a:b:c]} slices. Negative bounds work via the unary minus.
+     */
+    private Expr parseSubscript(Expr base) {
+        Expr first = null;
+        if (peek().type != Token.Type.COLON) {
+            first = parseExpr();
+        }
+        if (peek().type == Token.Type.COLON) {
+            advance();
+            Expr stop = null;
+            if (peek().type != Token.Type.COLON && peek().type != Token.Type.RBRACK) {
+                stop = parseExpr();
+            }
+            Expr step = null;
+            if (peek().type == Token.Type.COLON) {
+                advance();
+                if (peek().type != Token.Type.RBRACK) {
+                    step = parseExpr();
+                }
+            }
+            expect(Token.Type.RBRACK);
+            return new Expr.Slice(base, first, stop, step);
+        }
+        expect(Token.Type.RBRACK);
+        return new Expr.Index(base, first);
     }
 
     private static final Set<Token.Type> IDENT_LIKE = EnumSet.of(

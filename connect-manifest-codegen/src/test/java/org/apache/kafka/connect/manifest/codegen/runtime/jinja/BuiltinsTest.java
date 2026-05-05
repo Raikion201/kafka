@@ -164,8 +164,12 @@ class BuiltinsTest {
 
     @Test
     void tojsonFilter() {
-        assertEquals("{\"a\":1,\"b\":\"x\"}",
-            eval("{{ d | tojson }}", Map.of("d", new LinkedHashMap<>(Map.of("a", 1L, "b", "x")))));
+        // LinkedHashMap iterates in insertion order; Map.of(...) randomises it,
+        // so build the dict explicitly to lock the JSON key order under test.
+        LinkedHashMap<String, Object> d = new LinkedHashMap<>();
+        d.put("a", 1L);
+        d.put("b", "x");
+        assertEquals("{\"a\":1,\"b\":\"x\"}", eval("{{ d | tojson }}", Map.of("d", d)));
         assertEquals("[1,2,3]", eval("{{ [1, 2, 3] | tojson }}"));
         assertEquals("\"hi\"", eval("{{ 'hi' | tojson }}"));
         assertEquals("null", eval("{{ x | tojson }}", Map.of()));
