@@ -88,6 +88,15 @@ public final class Parser {
         return parseTernary();
     }
 
+    /**
+     * Parse an expression without consuming a trailing inline ternary. Used by
+     * {@link TemplateParser} for {@code for x in iterable [if filter]} where the
+     * {@code if} is a loop filter, not a ternary.
+     */
+    public Expr parseExprNoTernary() {
+        return parseOr();
+    }
+
     private Expr parseTernary() {
         Expr value = parseOr();
         if (peek().type == Token.Type.IF) {
@@ -442,6 +451,21 @@ public final class Parser {
     }
 
     // ─── token cursor helpers ─────────────────────────────────────────────────
+
+    /** Public view of the next token without advancing. */
+    public Token peekToken() {
+        return peek();
+    }
+
+    /** Advance the cursor by one and return the consumed token. */
+    public Token consume() {
+        return advance();
+    }
+
+    /** Advance past a token of the given type, throwing if it does not match. */
+    public Token expectType(Token.Type type) {
+        return expect(type);
+    }
 
     Token peek() {
         return tokens.get(p);
