@@ -379,6 +379,12 @@ public final class Evaluator {
     private static final Object SENTINEL = new Object();
 
     private static Object tryArith(String op, Object l, Object r) {
+        if (op.equals("-")) {
+            Object dt = tryTemporalArith(l, r, "-");
+            if (dt != SENTINEL) {
+                return dt;
+            }
+        }
         switch (op) {
             case "+": return add(l, r);
             case "-": return arith(l, r, "-");
@@ -609,6 +615,10 @@ public final class Evaluator {
     }
 
     private static Object add(Object l, Object r) {
+        Object dt = tryTemporalArith(l, r, "+");
+        if (dt != SENTINEL) {
+            return dt;
+        }
         if (l instanceof CharSequence || r instanceof CharSequence) {
             return stringify(l) + stringify(r);
         }
@@ -619,6 +629,17 @@ public final class Evaluator {
             return out;
         }
         return arith(l, r, "+");
+    }
+
+    private static Object tryTemporalArith(Object l, Object r, String op) {
+        if (l instanceof java.time.temporal.Temporal t && r instanceof Datetimes.IsoDuration d) {
+            return op.equals("+") ? d.addTo(t) : d.subtractFrom(t);
+        }
+        if (l instanceof Datetimes.IsoDuration d && r instanceof java.time.temporal.Temporal t
+            && op.equals("+")) {
+            return d.addTo(t);
+        }
+        return SENTINEL;
     }
 
     private static Object arith(Object l, Object r, String op) {

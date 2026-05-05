@@ -35,12 +35,13 @@ public final class Builtins {
 
     private Builtins() { }
 
-    /** Install all non-datetime built-ins. Datetime helpers are added separately. */
+    /** Install all built-ins (functions, filters, tests methods, datetime macros). */
     public static void install(Functions fns, Filters filters, Tests tests, Methods methods) {
         installFunctions(fns);
         installCoercionFilters(filters);
         installCollectionFilters(filters);
         installStringFilters(filters);
+        Datetimes.install(fns, methods);
     }
 
     private static void installFunctions(Functions fns) {
