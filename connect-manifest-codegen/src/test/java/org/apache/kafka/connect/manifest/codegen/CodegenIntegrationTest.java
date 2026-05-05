@@ -586,8 +586,15 @@ public class CodegenIntegrationTest {
         String taskSrc = generate("list_partition_router_test.yaml").task.toString();
         assertFalse(taskSrc.contains("stream_partition"),
             "ListPartitionRouter task must not emit raw 'stream_partition' Jinja template");
-        assertFalse(taskSrc.contains("{{"),
-            "ListPartitionRouter task must not emit raw Jinja2 delimiters");
+        // Note: {{ ... }} delimiters can still appear inside string literals passed to
+        // JinjaRenderer.render(...), which is the runtime swap (T4). They must not appear
+        // outside of render(...) string-literal arguments.
+        for (String line : taskSrc.split("\n")) {
+            if (line.contains("{{")) {
+                assertTrue(line.contains("render("),
+                    "Raw Jinja delimiters outside render() call: " + line);
+            }
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════════

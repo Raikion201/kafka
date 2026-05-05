@@ -200,56 +200,28 @@ public final class JinjaSnippets {
 
     /**
      * Returns a Java expression for a credential value (username or password template).
-     * If the config key is not in {@code specKeys} (e.g. Airbyte sentinel {@code config['nothing']}),
-     * returns {@code "\"\""} so the generated code uses an empty string literal.
+     * Emits a plain string literal for non-Jinja templates and a runtime
+     * {@code render(...)} call for anything containing Jinja syntax. The
+     * generated SourceTask supplies {@code render} as a static import and
+     * {@code jinjaCtx()} as a no-arg method building the context map.
      */
     public static String resolveCredentialExpr(String template, Set<String> specKeys) {
-        if (template == null) return "\"\"";
-        String key = extractConfigKey(template);
-        if (key == null) {
-            return "\"" + template.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
-        }
-        if (!specKeys.contains(key)) return "\"\"";
-        return "config." + resolveConfigGetter(template, specKeys) + "()";
+        return interpolateTemplate(template, specKeys);
     }
 
     /**
-     * Converts a Jinja2 template containing zero or more {@code {{ config.x }}} or
-     * {@code {{ config['x'] }}} references into a Java string expression that concatenates
-     * the literal segments with the corresponding {@code config.getX()} calls.
-     * Returns {@code "\"\""} for null or template-free input.
-     *
-     * <p>Examples:
-     * <pre>
-     *   "Token {{ config.api_key }}"  →  "\"Token \" + config.getApiKey()"
-     *   "{{ config['api_key'] }}"     →  "config.getApiKey()"
-     *   "literal"                     →  "\"literal\""
-     * </pre>
+     * Returns a Java expression that yields the rendered value of {@code template}
+     * at runtime. Plain literals (no {@code "{{"} or {@code "{%"}) collapse to a
+     * Java string literal; everything else becomes
+     * {@code render("template", jinjaCtx())}, deferring Jinja semantics to
+     * {@code JinjaRenderer} so manifests get exact Airbyte CDK behaviour
+     * (filters, functions, conditionals) rather than the legacy regex subset.
      */
     public static String interpolateTemplate(String template, Set<String> specKeys) {
-        if (template == null) return "\"\"";
-        StringBuilder out = new StringBuilder();
-        int last = 0;
-        Matcher m = CONFIG_ANY_INTERPOLATION.matcher(template);
-        while (m.find()) {
-            if (m.start() > last) {
-                if (out.length() > 0) out.append(" + ");
-                out.append('"').append(escapeJavaString(template.substring(last, m.start()))).append('"');
-            }
-            String key = m.group(1) != null ? m.group(1) : m.group(2);
-            if (out.length() > 0) out.append(" + ");
-            if (!specKeys.contains(key)) {
-                out.append("\"\"");
-            } else {
-                out.append("config.get").append(ManifestSpec.toClassName(key)).append("()");
-            }
-            last = m.end();
+        if (template == null || template.isEmpty()) return "\"\"";
+        if (!template.contains("{{") && !template.contains("{%")) {
+            return "\"" + escapeJavaString(template) + "\"";
         }
-        if (last < template.length()) {
-            if (out.length() > 0) out.append(" + ");
-            out.append('"').append(escapeJavaString(template.substring(last))).append('"');
-        }
-        if (out.length() == 0) return "\"\"";
-        return out.toString();
+        return "render(\"" + escapeJavaString(template) + "\", jinjaCtx())";
     }
 }

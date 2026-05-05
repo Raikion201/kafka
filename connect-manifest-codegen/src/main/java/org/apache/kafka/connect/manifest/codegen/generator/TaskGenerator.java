@@ -101,6 +101,8 @@ public class TaskGenerator {
             "CustomRequester");
     private static final ClassName JSON_NODE =
         ClassName.get("com.fasterxml.jackson.databind", "JsonNode");
+    private static final ClassName JINJA_RENDERER =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.jinja", "JinjaRenderer");
 
     private static final String APP_VERSION = "1.0.0";
 
@@ -240,9 +242,11 @@ public class TaskGenerator {
             typeBuilder.addMethod(buildSendWithRetry());
         }
         typeBuilder.addMethod(buildStop());
+        typeBuilder.addMethod(buildJinjaCtx());
 
         return JavaFile.builder(pkgName, typeBuilder.build())
             .skipJavaLangImports(true)
+            .addStaticImport(JINJA_RENDERER, "render")
             .build();
     }
 
@@ -2003,6 +2007,22 @@ public class TaskGenerator {
             .addParameter(HTTP_REQUEST, "request")
             .addException(Exception.class)
             .addCode(body.build())
+            .build();
+    }
+
+    private MethodSpec buildJinjaCtx() {
+        ClassName mapClass = ClassName.get("java.util", "Map");
+        ClassName linkedHashMap = ClassName.get("java.util", "LinkedHashMap");
+        ParameterizedTypeName mapStringObject = ParameterizedTypeName.get(
+            mapClass, ClassName.get(String.class), ClassName.get(Object.class));
+        return MethodSpec.methodBuilder("jinjaCtx")
+            .addModifiers(Modifier.PRIVATE)
+            .returns(mapStringObject)
+            .addStatement("$T ctx = new $T<>()", mapStringObject, linkedHashMap)
+            .beginControlFlow("if (config != null)")
+            .addStatement("ctx.put($S, config.originalsStrings())", "config")
+            .endControlFlow()
+            .addStatement("return ctx")
             .build();
     }
 
