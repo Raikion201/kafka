@@ -868,17 +868,16 @@ public class TaskGenerator {
                     ClassName.get("java.net", "URLEncoder"),
                     ClassName.get("java.nio.charset", "StandardCharsets"));
             } else {
-                Matcher cm = CONFIG_TEMPLATE.matcher(entry.getValue());
-                if (cm.find()) {
-                    String getter = "get" + ManifestSpec.toClassName(cm.group(1));
+                String tmpl = entry.getValue();
+                if (tmpl != null && (tmpl.contains("{{") || tmpl.contains("{%"))) {
                     body.addStatement(
-                        "urlBuilder.append($S + $T.encode($T.valueOf(config.$L()), $T.UTF_8))",
+                        "urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
                         sep + entry.getKey() + "=",
                         ClassName.get("java.net", "URLEncoder"),
-                        ClassName.get(String.class), getter,
+                        ClassName.get(String.class), interpolateTemplate(tmpl),
                         ClassName.get("java.nio.charset", "StandardCharsets"));
                 }
-                // skip params with unresolvable Jinja2 (e.g. finish sentinel)
+                // skip params with empty / unresolvable values
             }
             firstParam = false;
         }
@@ -893,7 +892,7 @@ public class TaskGenerator {
         reqArgs.add(URI_CLASS);
         if (auth != null && auth.isBearer()) {
             reqFmt.append("\n        .header(\"Authorization\", \"Bearer \" + $L)");
-            reqArgs.add(configCallExpr(resolveConfigGetter(auth.getApiToken())));
+            reqArgs.add(interpolateTemplate(auth.getApiToken()));
         } else if (auth != null && auth.isBasicHttp()) {
             reqFmt.append("\n        .header(\"Authorization\", \"Basic \" + cachedCredentials)");
         }
@@ -980,14 +979,7 @@ public class TaskGenerator {
         b.nextControlFlow("else");
         IncrementalSyncSpec.DatetimeSpec startDt = sync.getStartDatetime();
         if (startDt != null && startDt.getDatetime() != null) {
-            String getter = resolveConfigGetterLoose(startDt.getDatetime());
-            if (UNRESOLVED_GETTER.equals(getter)) {
-                // Jinja template with no extractable config reference (e.g. now_utc().strftime(...))
-                // — fall back to empty string at runtime; cursor will advance from poll results.
-                b.addStatement("$L = $S", cursorVar, "");
-            } else {
-                b.addStatement("$L = config.$L()", cursorVar, getter);
-            }
+            b.addStatement("$L = $L", cursorVar, interpolateTemplate(startDt.getDatetime()));
         } else {
             b.addStatement("$L = $S", cursorVar, "0");
         }
@@ -1095,20 +1087,16 @@ public class TaskGenerator {
 
         List<String> paramKeys = new ArrayList<>();
         for (Map.Entry<String, String> entry : requestParams.entrySet()) {
-            Matcher m = CONFIG_TEMPLATE.matcher(entry.getValue());
-            if (m.matches()) {
-                String key = m.group(1);
-                if (!currentSpecPropKeys.contains(key)) {
-                    continue;
-                }
+            String tmpl = entry.getValue();
+            if (tmpl == null) continue;
+            if (tmpl.contains("{{") || tmpl.contains("{%")) {
                 paramKeys.add(entry.getKey());
-                String getter = "get" + ManifestSpec.toClassName(key);
                 boolean firstOfGroup = paramKeys.size() == 1;
                 String sep = (pathHasQuery || !firstOfGroup) ? "&" : "?";
-                b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf(config.$L()), $T.UTF_8))",
+                b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
                     sep + entry.getKey() + "=",
                     ClassName.get("java.net", "URLEncoder"),
-                    ClassName.get(String.class), getter,
+                    ClassName.get(String.class), interpolateTemplate(tmpl),
                     ClassName.get("java.nio.charset", "StandardCharsets"));
             }
         }
@@ -1119,8 +1107,8 @@ public class TaskGenerator {
         if (isApiKeyQueryParam(auth)) {
             String sep = hasParams ? "&" : "?";
             String fieldName = auth.getInjectInto().getFieldName();
-            String getter = resolveConfigGetter(auth.getApiToken());
-            b.addStatement("urlBuilder.append($S + $L)", sep + fieldName + "=", configCallExpr(getter));
+            b.addStatement("urlBuilder.append($S + $L)", sep + fieldName + "=",
+                interpolateTemplate(auth.getApiToken()));
             hasParams = true;
         }
 
@@ -1239,14 +1227,11 @@ public class TaskGenerator {
             } else {
                 IncrementalSyncSpec.DatetimeSpec startDt = sync.getStartDatetime();
                 if (startDt != null && startDt.getDatetime() != null) {
-                    String getter = resolveConfigGetterLoose(startDt.getDatetime());
-                    if (!UNRESOLVED_GETTER.equals(getter)) {
-                        b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf(config.$L()), $T.UTF_8))",
-                            sep + startOpt.getFieldName() + "=",
-                            ClassName.get("java.net", "URLEncoder"),
-                            ClassName.get(String.class), getter,
-                            ClassName.get("java.nio.charset", "StandardCharsets"));
-                    }
+                    b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
+                        sep + startOpt.getFieldName() + "=",
+                        ClassName.get("java.net", "URLEncoder"),
+                        ClassName.get(String.class), interpolateTemplate(startDt.getDatetime()),
+                        ClassName.get("java.nio.charset", "StandardCharsets"));
                 }
             }
             hasParams = true;
@@ -1428,14 +1413,14 @@ public class TaskGenerator {
                 HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
             );
         } else if (auth.isBearer()) {
-            String getterName = resolveConfigGetter(auth.getApiToken());
             body.addStatement(
                 "$T request = $T.newBuilder()\n"
                     + "        .uri($T.create($L))\n"
                     + "        .header(\"Authorization\", \"Bearer \" + $L)\n"
                     + "        .GET()\n"
                     + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), configCallExpr(getterName)
+                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator),
+                interpolateTemplate(auth.getApiToken())
             );
         } else if (auth.isApiKey() && isApiKeyQueryParam(auth)) {
             // key already appended to URL as query param — no auth header needed
@@ -1552,9 +1537,9 @@ public class TaskGenerator {
      * Caches the token using {@code tokenExpiryMs}; refreshes only when expired.
      */
     private MethodSpec buildRefreshAccessToken(ClassName configClass, AuthenticatorSpec auth) {
-        String clientIdGetter  = resolveConfigGetter(auth.getClientId());
-        String clientSecretGetter = resolveConfigGetter(auth.getClientSecret());
-        String refreshTokenGetter = resolveConfigGetter(auth.getRefreshToken());
+        String clientIdExpr     = interpolateTemplate(auth.getClientId());
+        String clientSecretExpr = interpolateTemplate(auth.getClientSecret());
+        String refreshTokenExpr = interpolateTemplate(auth.getRefreshToken());
         String endpoint = auth.getTokenRefreshEndpoint() != null ? auth.getTokenRefreshEndpoint() : "";
 
         CodeBlock.Builder body = CodeBlock.builder();
@@ -1568,9 +1553,8 @@ public class TaskGenerator {
                 for (Map.Entry<String, String> e : auth.getRefreshRequestBody().entrySet()) {
                     Matcher cfgMatch = CONFIG_TEMPLATE.matcher(e.getValue());
                     if (cfgMatch.find()) {
-                        String getter = "get" + ManifestSpec.toClassName(cfgMatch.group(1));
                         extraFields.append("\n        + \"&").append(e.getKey())
-                            .append("=\" + config.").append(getter).append("()");
+                            .append("=\" + ").append(interpolateTemplate(e.getValue()));
                     } else {
                         extraFields.append("\n        + \"&").append(e.getKey())
                             .append("=").append(e.getValue()).append("\"");
@@ -1581,14 +1565,13 @@ public class TaskGenerator {
                     + "        + \"&client_id=\" + $L\n"
                     + "        + \"&client_secret=\" + $L"
                     + extraFields,
-                String.class, configCallExpr(clientIdGetter), configCallExpr(clientSecretGetter));
+                String.class, clientIdExpr, clientSecretExpr);
         } else {
             body.addStatement("$T reqBody = \"grant_type=refresh_token\"\n"
                     + "        + \"&client_id=\" + $L\n"
                     + "        + \"&client_secret=\" + $L\n"
                     + "        + \"&refresh_token=\" + $L",
-                String.class,
-                configCallExpr(clientIdGetter), configCallExpr(clientSecretGetter), configCallExpr(refreshTokenGetter));
+                String.class, clientIdExpr, clientSecretExpr, refreshTokenExpr);
         }
         body.beginControlFlow("try");
         body.addStatement(
@@ -1817,8 +1800,7 @@ public class TaskGenerator {
                 ClassName.get("java.util", "Map"), Map.class, Object.class);
             body.addStatement("$T privateKeyPem = ($T) outerMap.get($S)", String.class, String.class, innerKey);
         } else {
-            String getter = resolveConfigGetter(secretKey);
-            body.addStatement("$T privateKeyPem = $L", String.class, configCallExpr(getter));
+            body.addStatement("$T privateKeyPem = $L", String.class, interpolateTemplate(secretKey));
         }
 
         body.addStatement(

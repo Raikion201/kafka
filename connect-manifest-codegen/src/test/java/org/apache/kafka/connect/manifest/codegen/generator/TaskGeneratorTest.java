@@ -172,7 +172,8 @@ public class TaskGeneratorTest {
         JavaFile file = generator.generate(load("zapier.yaml"), PKG);
         String src = file.toString();
         // zapier has request_parameters: secret: "{{ config['secret'] }}"
-        assertTrue(src.contains("getSecret()"), "Must call config.getSecret() for request param");
+        assertTrue(src.contains("render(\"{{ config['secret'] }}\""),
+            "Must render the {{ config['secret'] }} template at runtime");
         assertTrue(src.contains("secret="), "Must include 'secret=' in query string");
     }
 

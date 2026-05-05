@@ -182,8 +182,8 @@ public class CodegenIntegrationTest {
     void zapier_taskInjectsSecretFromConfig() throws Exception {
         GeneratedTriple g = generate("zapier.yaml");
         String taskSrc = g.task.toString();
-        assertTrue(taskSrc.contains("getSecret()"),
-            "Task must call config.getSecret() for request_parameters");
+        assertTrue(taskSrc.contains("render(\"{{ config['secret'] }}\""),
+            "Task must render the {{ config['secret'] }} template at runtime");
         assertTrue(taskSrc.contains("secret="),
             "Task must include 'secret=' query parameter in URL");
     }
