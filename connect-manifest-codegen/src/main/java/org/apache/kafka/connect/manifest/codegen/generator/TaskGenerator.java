@@ -90,6 +90,17 @@ public class TaskGenerator {
         ClassName.get("java.net.http", "HttpResponse");
     private static final ClassName URI_CLASS =
         ClassName.get("java.net", "URI");
+    private static final ClassName CUSTOM_REGISTRY =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.customs",
+            "CustomComponentRegistry");
+    private static final ClassName CUSTOM_RETRIEVER =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.customs",
+            "CustomRetriever");
+    private static final ClassName CUSTOM_REQUESTER =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.customs",
+            "CustomRequester");
+    private static final ClassName JSON_NODE =
+        ClassName.get("com.fasterxml.jackson.databind", "JsonNode");
 
     private static final String APP_VERSION = "1.0.0";
 
@@ -128,7 +139,10 @@ public class TaskGenerator {
             if (stream.getRetriever() == null) {
                 throw new CodegenException("Stream '" + stream.getName() + "' has no retriever");
             }
-            if (stream.getRetriever().getRequester() == null) {
+            // Retrievers with a custom class_name are dispatched to CustomComponentRegistry
+            // and do not require a manifest-defined requester.
+            if (stream.getRetriever().getClassName() == null
+                && stream.getRetriever().getRequester() == null) {
                 throw new CodegenException("Stream '" + stream.getName() + "' retriever has no requester");
             }
         }
@@ -145,7 +159,15 @@ public class TaskGenerator {
         String configClassName = baseName + "ConnectorConfig";
         ClassName configClass = ClassName.get(pkgName, configClassName);
 
-        AuthenticatorSpec auth = streams.get(0).getRetriever().getRequester().getAuthenticator();
+        // Auth is sourced from the first stream that exposes a manifest-defined requester.
+        // Streams whose retriever or requester is dispatched to CustomComponentRegistry
+        // bring their own auth (the registered Java impl owns it), so they are skipped here.
+        StreamSpec authSource = streams.stream()
+            .filter(s -> !isCustomDispatch(s) && s.getRetriever().getRequester() != null)
+            .findFirst()
+            .orElse(null);
+        AuthenticatorSpec auth = authSource == null
+            ? null : authSource.getRetriever().getRequester().getAuthenticator();
 
         ParameterizedTypeName mapStringString = ParameterizedTypeName.get(
             ClassName.get("java.util", "Map"),
@@ -169,6 +191,7 @@ public class TaskGenerator {
         // - >1 SubstreamPartitionRouter → multi-level substream, out of scope, skip.
         List<StreamSpec> runnableStreams = streams.stream()
             .filter(s -> {
+                if (isCustomDispatch(s)) return true;
                 long substreamCount = s.getRetriever().getPartitionRouter().stream()
                     .filter(PartitionRouterSpec::isSubstream).count();
                 long listCount = s.getRetriever().getListRouters().size();
@@ -181,7 +204,8 @@ public class TaskGenerator {
             .collect(java.util.stream.Collectors.toList());
 
         boolean hasListCycle = runnableStreams.stream().anyMatch(
-            s -> s.getRetriever().getRequester().listCycleConfigField() != null);
+            s -> !isCustomDispatch(s)
+                && s.getRetriever().getRequester().listCycleConfigField() != null);
         addClassFields(typeBuilder, configClass, auth, hasListCycle, runnableStreams);
 
         typeBuilder.addMethod(
@@ -199,15 +223,22 @@ public class TaskGenerator {
 
         for (StreamSpec stream : runnableStreams) {
             typeBuilder.addMethod(buildStreamPollMethod(stream, configClass, auth, listOfSourceRecord));
+            if (isCustomDispatch(stream)) continue;
             PartitionRouterSpec router = stream.getRetriever().getSubstreamRouter();
             if (router != null) {
                 typeBuilder.addMethod(buildFetchPartitionKeys(stream, router, auth, spec));
             }
         }
 
-        String baseUrl = streams.get(0).getRetriever().getRequester().effectiveBaseUrl();
-        addAuthHelperMethods(typeBuilder, configClass, auth, baseUrl);
-        typeBuilder.addMethod(buildSendWithRetry());
+        boolean hasHttpStream = runnableStreams.stream().anyMatch(s -> !isCustomDispatch(s));
+        if (hasHttpStream) {
+            String baseUrl = runnableStreams.stream()
+                .filter(s -> !isCustomDispatch(s))
+                .findFirst().get()
+                .getRetriever().getRequester().effectiveBaseUrl();
+            addAuthHelperMethods(typeBuilder, configClass, auth, baseUrl);
+            typeBuilder.addMethod(buildSendWithRetry());
+        }
         typeBuilder.addMethod(buildStop());
 
         return JavaFile.builder(pkgName, typeBuilder.build())
@@ -280,6 +311,7 @@ public class TaskGenerator {
         ParameterizedTypeName listString = ParameterizedTypeName.get(
             ClassName.get("java.util", "List"), ClassName.get(String.class));
         for (StreamSpec s : streams) {
+            if (isCustomDispatch(s)) continue;
             PartitionRouterSpec router = s.getRetriever().getSubstreamRouter();
             if (router != null) {
                 typeBuilder.addField(
@@ -338,6 +370,7 @@ public class TaskGenerator {
 
         // Pre-fetch parent partition keys for each substream.
         for (StreamSpec s : streams) {
+            if (isCustomDispatch(s)) continue;
             PartitionRouterSpec router = s.getRetriever().getSubstreamRouter();
             if (router != null) {
                 String keysField = partitionKeysFieldName(s.getName());
@@ -370,12 +403,27 @@ public class TaskGenerator {
             .build();
     }
 
+    /**
+     * True when the stream's retriever or requester has a {@code class_name} that must be
+     * dispatched to {@link org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomComponentRegistry}
+     * at runtime instead of being emitted as direct HTTP code.
+     */
+    private static boolean isCustomDispatch(StreamSpec s) {
+        if (s.getRetriever() == null) return false;
+        if (s.getRetriever().getClassName() != null) return true;
+        RequesterSpec r = s.getRetriever().getRequester();
+        return r != null && r.getClassName() != null;
+    }
+
     private MethodSpec buildStreamPollMethod(
         StreamSpec stream,
         ClassName configClass,
         AuthenticatorSpec auth,
         ParameterizedTypeName listOfSourceRecord
     ) throws CodegenException {
+        if (isCustomDispatch(stream)) {
+            return buildCustomComponentPollMethod(stream, listOfSourceRecord);
+        }
         RequesterSpec requester = stream.getRetriever().getRequester();
 
         // List-cycle pattern: path/params use config['field'].split(',')[page] as array index.
@@ -1852,6 +1900,81 @@ public class TaskGenerator {
             .addModifiers(Modifier.PRIVATE)
             .returns(String.class)
             .addCode(body.build())
+            .build();
+    }
+
+    /**
+     * Emit a poll method that delegates to {@code CustomComponentRegistry} for streams
+     * whose retriever or requester carries a {@code class_name}. The registered Java impl
+     * owns the network call, decoding, transformations, and state. We just drain its
+     * iterator and wrap each record as a {@code SourceRecord}.
+     *
+     * <p>If no factory is registered for the class_name, registry lookup raises
+     * {@code ConnectException} at first poll — connector loads, task fails fast.</p>
+     */
+    private MethodSpec buildCustomComponentPollMethod(
+        StreamSpec stream,
+        ParameterizedTypeName listOfSourceRecord
+    ) {
+        String streamName = stream.getName();
+        String methodName = "poll" + ManifestSpec.toClassName(streamName);
+        boolean retrieverDispatch = stream.getRetriever().getClassName() != null;
+        String customClassName = retrieverDispatch
+            ? stream.getRetriever().getClassName()
+            : stream.getRetriever().getRequester().getClassName();
+        ClassName customInterface = retrieverDispatch ? CUSTOM_RETRIEVER : CUSTOM_REQUESTER;
+
+        ParameterizedTypeName mapStrObj = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"),
+            ClassName.get(String.class), ClassName.get(Object.class));
+        ParameterizedTypeName iterMapStrObj = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Iterator"), mapStrObj);
+        ParameterizedTypeName iterJsonNode = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Iterator"), JSON_NODE);
+
+        CodeBlock.Builder body = CodeBlock.builder();
+        body.addStatement("final $T streamName = $S", String.class, streamName);
+        body.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
+        body.addStatement("$T<$T, $T> _emptyParams = $T.emptyMap()",
+            Map.class, String.class, Object.class, Collections.class);
+        body.addStatement("$T _component = $T.create($S, $T.class, this.config.originalsStrings(), _emptyParams)",
+            customInterface, CUSTOM_REGISTRY, customClassName, customInterface);
+        body.beginControlFlow("try");
+        if (retrieverDispatch) {
+            body.addStatement("$T _records = _component.read(_emptyParams, _emptyParams)", iterMapStrObj);
+            body.beginControlFlow("while (_records.hasNext())");
+            body.addStatement("$T _record = _records.next()", mapStrObj);
+            body.addStatement("$T _value = MAPPER.writeValueAsString(_record)", String.class);
+            body.add(emitCustomSourceRecordAdd());
+            body.endControlFlow();
+        } else {
+            body.addStatement("$T _nodes = _component.send(_emptyParams, _emptyParams)", iterJsonNode);
+            body.beginControlFlow("while (_nodes.hasNext())");
+            body.addStatement("$T _value = MAPPER.writeValueAsString(_nodes.next())", String.class);
+            body.add(emitCustomSourceRecordAdd());
+            body.endControlFlow();
+        }
+        body.nextControlFlow("catch ($T e)", Exception.class);
+        body.addStatement(
+            "throw new $T(\"Failed to poll \" + streamName + \" via custom component '\" + $S + \"'\", e)",
+            CONNECT_EXCEPTION, customClassName);
+        body.endControlFlow();
+        body.addStatement("return result");
+
+        return MethodSpec.methodBuilder(methodName)
+            .addModifiers(Modifier.PRIVATE)
+            .returns(listOfSourceRecord)
+            .addException(InterruptedException.class)
+            .addCode(body.build())
+            .build();
+    }
+
+    private CodeBlock emitCustomSourceRecordAdd() {
+        return CodeBlock.builder()
+            .addStatement(
+                "result.add(new $T($T.of($S, streamName), $T.of($S, $S), streamName, "
+                    + "$T.STRING_SCHEMA, _value))",
+                SOURCE_RECORD, Map.class, "stream", Map.class, "ts", "0", SCHEMA)
             .build();
     }
 

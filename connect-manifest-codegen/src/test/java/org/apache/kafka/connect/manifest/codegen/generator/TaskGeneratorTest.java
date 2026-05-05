@@ -234,6 +234,34 @@ public class TaskGeneratorTest {
         assertGeneratedCodeCompiles(load("defillama.yaml"), tmpDir);
     }
 
+    // ── custom-component dispatch ─────────────────────────────────────────────
+
+    @Test
+    void googleAds_customRetriever_emitsRegistryDispatch() throws Exception {
+        JavaFile file = generator.generate(load("source_google_ads.yaml"), PKG);
+        String src = file.toString();
+        assertTrue(src.contains("CustomComponentRegistry.create("),
+            "Custom-retriever streams must dispatch through CustomComponentRegistry; got:\n" + src);
+        assertTrue(src.contains("source_google_ads.components.GoogleAdsRetriever"),
+            "Must reference the retriever class_name from the manifest");
+        assertTrue(src.contains("CustomRetriever"),
+            "Must import/reference CustomRetriever interface");
+    }
+
+    @Test
+    void googleAds_customStreams_skipsHttpAuthHelpers() throws Exception {
+        JavaFile file = generator.generate(load("source_google_ads.yaml"), PKG);
+        String src = file.toString();
+        // No HTTP code path exists for an all-custom manifest, so sendWithRetry must not be emitted.
+        assertTrue(!src.contains("private HttpResponse<String> sendWithRetry"),
+            "All-custom manifest must not emit sendWithRetry()");
+    }
+
+    @Test
+    void googleAds_generatedSourceCompiles(@TempDir Path tmpDir) throws Exception {
+        assertGeneratedCodeCompiles(load("source_google_ads.yaml"), tmpDir);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /**
