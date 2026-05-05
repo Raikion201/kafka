@@ -163,6 +163,7 @@ public class TaskGenerator {
 
         // Filter streams:
         // - Exactly 1 SubstreamPartitionRouter → supported child stream, include it.
+        // - ≥1 ListPartitionRouter (no substream) → fan-out over static values, include it.
         // - 0 routers AND path has no stream_partition template → normal stream, include.
         // - 0 routers AND path contains stream_partition → broken ref (no router), skip.
         // - >1 SubstreamPartitionRouter → multi-level substream, out of scope, skip.
@@ -170,8 +171,10 @@ public class TaskGenerator {
             .filter(s -> {
                 long substreamCount = s.getRetriever().getPartitionRouter().stream()
                     .filter(PartitionRouterSpec::isSubstream).count();
-                if (substreamCount == 1) return true;
+                long listCount = s.getRetriever().getListRouters().size();
+                if (substreamCount == 1 && listCount == 0) return true;
                 if (substreamCount > 1) return false;
+                if (substreamCount == 0 && listCount > 0) return true;
                 String p = s.getRetriever().getRequester().getPath();
                 return p == null || (!p.contains("stream_partition") && !p.contains("stream_slice"));
             })
@@ -385,6 +388,12 @@ public class TaskGenerator {
         PartitionRouterSpec router = stream.getRetriever().getSubstreamRouter();
         if (router != null) {
             return buildSubstreamPollMethod(stream, configClass, auth, listOfSourceRecord, router);
+        }
+
+        // ListPartitionRouter: fan out over a static list of values.
+        List<PartitionRouterSpec> listRouters = stream.getRetriever().getListRouters();
+        if (!listRouters.isEmpty()) {
+            return buildListRouterPollMethod(stream, configClass, auth, listOfSourceRecord, listRouters);
         }
 
         // Normal stream (with optional DatetimeBasedCursor).
@@ -1978,5 +1987,182 @@ public class TaskGenerator {
 
     private static String partitionIdxFieldName(String streamName) {
         return toJavaName(streamName) + "_partitionIdx";
+    }
+
+    /**
+     * Generates a Java variable name for a ListPartitionRouter loop variable.
+     * e.g. cursorField="breakdown" → "_lp_breakdown"; null → "_lp_partition".
+     */
+    private static String listLoopVar(String cursorField) {
+        return "_lp_" + (cursorField != null ? cursorField : "partition").replaceAll("[^a-zA-Z0-9]", "_");
+    }
+
+    /**
+     * Generates a poll method that wraps the normal fetch in nested for-loops, one per
+     * ListPartitionRouter, emitting one set of records per Cartesian combination of values.
+     * Python CDK: list_partition_router.py + SimpleRetriever.stream_slices (itertools.product).
+     */
+    private MethodSpec buildListRouterPollMethod(
+        StreamSpec stream,
+        ClassName configClass,
+        AuthenticatorSpec auth,
+        ParameterizedTypeName listOfSourceRecord,
+        List<PartitionRouterSpec> listRouters
+    ) throws CodegenException {
+        RequesterSpec requester = stream.getRetriever().getRequester();
+        String baseUrl = requester.effectiveBaseUrl();
+        String rawPath = requester.getPath();
+        if (!baseUrl.isEmpty() && !baseUrl.endsWith("/") && !rawPath.isEmpty() && !rawPath.startsWith("/")) {
+            baseUrl = baseUrl + "/";
+        }
+        String streamName = stream.getName();
+        String methodName = "poll" + ManifestSpec.toClassName(streamName);
+        PaginatorSpec paginator = stream.getRetriever().getPaginator();
+        boolean hasPagination = paginator != null && !paginator.hasNoPagination();
+        List<String> fieldPath = extractFieldPath(stream);
+
+        CodeBlock.Builder body = CodeBlock.builder();
+        body.addStatement("final $T streamName = $S", String.class, streamName);
+        body.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
+
+        // Open one for-loop per ListPartitionRouter (Cartesian product via nesting).
+        for (PartitionRouterSpec lr : listRouters) {
+            String lv = listLoopVar(lr.getCursorField());
+            List<String> values = lr.getValues();
+            if (values.size() == 1 && values.get(0).startsWith("{{")) {
+                // Jinja config-ref: resolve to a config getter call at codegen time.
+                String expr = interpolateTemplate(values.get(0));
+                // The resolved expr is a comma-separated string; split at runtime.
+                body.beginControlFlow(
+                    "for ($T $L : $L.split($S))", String.class, lv, expr, ",");
+                body.addStatement("$L = $L.strip()", lv, lv);
+            } else {
+                // Literal list: emit List.of("a","b",...).
+                StringBuilder fmt = new StringBuilder("for ($T $L : $T.of(");
+                List<Object> args = new ArrayList<>();
+                args.add(String.class);
+                args.add(lv);
+                args.add(List.class);
+                for (int i = 0; i < values.size(); i++) {
+                    if (i > 0) fmt.append(", ");
+                    fmt.append("$S");
+                    args.add(values.get(i));
+                }
+                fmt.append("))");
+                body.beginControlFlow(fmt.toString(), args.toArray());
+            }
+        }
+
+        body.add(buildListRouterUrlBlock(baseUrl, rawPath, listRouters, paginator, hasPagination));
+
+        body.beginControlFlow("try");
+        buildRequestStatement(body, auth, paginator);
+        body.add(buildFetchBlock(paginator));
+        if (hasPagination && paginator.isCursor()) {
+            body.add(buildCursorStateUpdate(paginator));
+        }
+        body.add(buildFieldPathNav(fieldPath, hasPagination));
+        body.add(buildNormalizeAndCollect(hasPagination, paginator, null, null));
+        body.nextControlFlow("catch ($T e)", InterruptedException.class);
+        body.addStatement("$T.currentThread().interrupt()", Thread.class);
+        body.addStatement("throw new $T(\"Interrupted while polling \" + streamName, e)", CONNECT_EXCEPTION);
+        body.nextControlFlow("catch ($T e)", Exception.class);
+        body.addStatement("throw new $T(\"Failed to poll \" + streamName, e)", CONNECT_EXCEPTION);
+        body.endControlFlow();
+
+        if (hasPagination) {
+            body.add(buildPaginationLoopClose(paginator));
+        }
+
+        // Close for-loops in reverse (innermost first).
+        for (int i = 0; i < listRouters.size(); i++) {
+            body.endControlFlow();
+        }
+
+        body.addStatement("return result");
+
+        return MethodSpec.methodBuilder(methodName)
+            .addModifiers(Modifier.PRIVATE)
+            .returns(listOfSourceRecord)
+            .addException(InterruptedException.class)
+            .addCode(body.build())
+            .build();
+    }
+
+    /**
+     * Builds the URL construction block for a stream with one or more ListPartitionRouters.
+     * Substitutes stream_partition.X in the path with the matching loop variable,
+     * and appends query params from request_option.inject_into=request_parameter.
+     */
+    private CodeBlock buildListRouterUrlBlock(
+        String baseUrl, String rawPath,
+        List<PartitionRouterSpec> listRouters,
+        PaginatorSpec paginator, boolean hasPagination
+    ) {
+        CodeBlock.Builder b = CodeBlock.builder();
+
+        // Check if the path contains any stream_partition.X Jinja references.
+        boolean hasPartitionTemplate = false;
+        for (PartitionRouterSpec lr : listRouters) {
+            if (lr.getCursorField() != null) {
+                Matcher m = Pattern.compile(
+                    "\\{\\{\\s*stream_partition\\." + Pattern.quote(lr.getCursorField()) + "\\s*\\}\\}"
+                ).matcher(rawPath);
+                if (m.find()) {
+                    hasPartitionTemplate = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasPartitionTemplate) {
+            b.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class, baseUrl + rawPath);
+        } else {
+            // Build list of (regex-pattern, loop-var) substitutions.
+            List<String[]> subs = new ArrayList<>();
+            for (PartitionRouterSpec lr : listRouters) {
+                if (lr.getCursorField() != null) {
+                    String placeholder = "\\{\\{\\s*stream_partition\\." + Pattern.quote(lr.getCursorField()) + "\\s*\\}\\}";
+                    subs.add(new String[]{placeholder, listLoopVar(lr.getCursorField())});
+                }
+            }
+
+            // Split on the first pattern to get PREFIX and SUFFIX around the loop variable.
+            String[] halves = rawPath.split(subs.get(0)[0], 2);
+            String before = halves[0];
+            String after = halves.length > 1 ? halves[1] : "";
+            String firstLoopVar = subs.get(0)[1];
+
+            // Substitute any remaining patterns in the suffix as literal string concat.
+            for (int i = 1; i < subs.size(); i++) {
+                after = after.replaceAll(subs.get(i)[0], "\" + " + subs.get(i)[1] + " + \"");
+            }
+
+            b.addStatement(
+                "$T urlBuilder = new $T($S + $T.encode($L, $T.UTF_8) + $S)",
+                StringBuilder.class, StringBuilder.class,
+                baseUrl + before,
+                ClassName.get("java.net", "URLEncoder"),
+                firstLoopVar,
+                ClassName.get("java.nio.charset", "StandardCharsets"),
+                after);
+        }
+
+        // Append request_option query params for each router.
+        boolean firstParam = !rawPath.contains("?") && !hasPartitionTemplate;
+        for (PartitionRouterSpec lr : listRouters) {
+            PartitionRouterSpec.RequestOptionSpec opt = lr.getRequestOption();
+            if (opt != null && opt.isRequestParameter() && opt.getFieldName() != null) {
+                String lv = listLoopVar(lr.getCursorField());
+                b.addStatement("urlBuilder.append($S).append($L)",
+                    (firstParam ? "?" : "&") + opt.getFieldName() + "=", lv);
+                firstParam = false;
+            }
+        }
+
+        if (hasPagination && paginator != null) {
+            appendPaginationParams(b, paginator, !rawPath.contains("?"));
+        }
+        return b.build();
     }
 }
