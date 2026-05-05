@@ -57,6 +57,12 @@ dependencies {
     implementation project(':connect:api')
     testImplementation project(':connect:api')
 
+    // Google Ads Java SDK — pinned to a specific GA release (no version ranges).
+    // Used by runtime/customs/googleads/* (BaseGoogleAdsHttpRequester wires
+    // GoogleAdsServiceClient.searchStream; GoogleAdsStreamingDecoder consumes
+    // SearchGoogleAdsStreamResponse rows). Brings gRPC + protobuf transitively.
+    implementation 'com.google.api-ads:google-ads:43.0.0'
+
     testImplementation libs.junitJupiter
     testImplementation libs.mockitoCore
     testRuntimeOnly runtimeTestLibs
@@ -67,6 +73,9 @@ dependencies {
     generatedImplementation project(':connect:api')
     generatedImplementation libs.slf4jApi
     generatedImplementation libs.jacksonDatabind
+    // Generated connector code may instantiate Google Ads custom-component impls
+    // from runtime/customs/googleads/*; expose the SDK on the generated classpath.
+    generatedImplementation 'com.google.api-ads:google-ads:43.0.0'
 }
 
 // ── generateConnectors task ───────────────────────────────────────────────────
