@@ -66,10 +66,6 @@ import javax.lang.model.element.Modifier;
 public class TaskGenerator {
 
     private static final Pattern CONFIG_TEMPLATE      = JinjaSnippets.CONFIG_TEMPLATE;
-    private static final Pattern CONFIG_KEY_IN_EXPR   = JinjaSnippets.CONFIG_KEY_IN_EXPR;
-    private static final Pattern CONFIG_DOT_TEMPLATE  = JinjaSnippets.CONFIG_DOT_TEMPLATE;
-    private static final Pattern CONFIG_DOT_KEY_IN_EXPR = JinjaSnippets.CONFIG_DOT_KEY_IN_EXPR;
-    private static final Pattern CONFIG_GET_CALL      = JinjaSnippets.CONFIG_GET_CALL;
     private static final Pattern STREAM_PARTITION_RE  = JinjaSnippets.STREAM_PARTITION_RE;
 
     private static final ClassName SOURCE_TASK =
@@ -347,8 +343,8 @@ public class TaskGenerator {
             .addStatement("this.httpClient = $T.newHttpClient()", HTTP_CLIENT);
 
         if (auth != null && auth.isBasicHttp()) {
-            String userExpr = resolveCredentialExpr(auth.getUsername());
-            String passExpr = resolveCredentialExpr(auth.getPassword());
+            String userExpr = interpolateTemplate(auth.getUsername());
+            String passExpr = interpolateTemplate(auth.getPassword());
             m.addStatement(
                 "this.cachedCredentials = $T.getEncoder().encodeToString(\n"
                     + "        ($L + \":\" + $L).getBytes($T.UTF_8))",
@@ -1676,8 +1672,8 @@ public class TaskGenerator {
         // Add Basic auth header if the inner authenticator is BasicHttp
         AuthenticatorSpec innerAuth = login.getAuthenticator();
         if (innerAuth != null && innerAuth.isBasicHttp()) {
-            String userExpr = resolveCredentialExpr(innerAuth.getUsername());
-            String passExpr = resolveCredentialExpr(innerAuth.getPassword());
+            String userExpr = interpolateTemplate(innerAuth.getUsername());
+            String passExpr = interpolateTemplate(innerAuth.getPassword());
             reqBuilder.append("        .header(\"Authorization\", \"Basic \" + $T.getEncoder().encodeToString(\n"
                 + "                ($L + \":\" + $L).getBytes($T.UTF_8)))\n");
             reqArgs.add(ClassName.get("java.util", "Base64"));
@@ -1735,8 +1731,8 @@ public class TaskGenerator {
             loginUrlExpr = "\"" + baseUrl + auth.getLoginUrl() + "\"";
         }
 
-        String userExpr = resolveCredentialExpr(auth.getUsername());
-        String passExpr = resolveCredentialExpr(auth.getPassword());
+        String userExpr = interpolateTemplate(auth.getUsername());
+        String passExpr = interpolateTemplate(auth.getPassword());
         ClassName bodyPublishers = ClassName.get("java.net.http", "HttpRequest.BodyPublishers");
 
         CodeBlock.Builder body = CodeBlock.builder();
@@ -2024,47 +2020,14 @@ public class TaskGenerator {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private String resolveCredentialExpr(String template) {
-        return JinjaSnippets.resolveCredentialExpr(template, currentSpecPropKeys);
-    }
-
-    private static String extractConfigKey(String template) {
-        return JinjaSnippets.extractConfigKey(template);
-    }
-
-    private static final Pattern CONFIG_ANY_INTERPOLATION = JinjaSnippets.CONFIG_ANY_INTERPOLATION;
-
+    /**
+     * Emits a Java expression that yields the rendered value of {@code template} at runtime.
+     * Plain literals (no {@code {{ } or {% %} ) collapse to a Java string literal; everything
+     * else becomes {@code render("template", jinjaCtx())}, deferring Jinja semantics to
+     * {@link org.apache.kafka.connect.manifest.codegen.runtime.jinja.JinjaRenderer}.
+     */
     private String interpolateTemplate(String template) {
         return JinjaSnippets.interpolateTemplate(template, currentSpecPropKeys);
-    }
-
-    private static String escapeJavaString(String s) {
-        return JinjaSnippets.escapeJavaString(s);
-    }
-
-    private static final String UNRESOLVED_GETTER = JinjaSnippets.UNRESOLVED_GETTER;
-
-    private String resolveConfigGetter(String template) {
-        return JinjaSnippets.resolveConfigGetter(template, currentSpecPropKeys);
-    }
-
-    /**
-     * Like {@link #resolveConfigGetter} but also matches {@code config['key']} or
-     * {@code config.key} inside complex Jinja2 expressions such as
-     * {@code format_datetime(config['since'], ...)}.
-     */
-    private String resolveConfigGetterLoose(String expr) {
-        return JinjaSnippets.resolveConfigGetterLoose(expr, currentSpecPropKeys);
-    }
-
-    /**
-     * Returns a Java expression for a config getter call, or an empty string literal
-     * when the getter is unresolved. Use this instead of inlining {@code config.$L()}
-     * with {@code $L} = getter, since the latter emits {@code config.__unresolved__()}
-     * for templates whose config key isn't in the generated config class.
-     */
-    private String configCallExpr(String getter) {
-        return UNRESOLVED_GETTER.equals(getter) ? "\"\"" : "config." + getter + "()";
     }
 
     /** Returns the header name for an ApiKeyAuthenticator (inject_into.field_name or legacy header field). */
