@@ -34,13 +34,25 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import com.sun.net.httpserver.HttpServer;
+
+import org.apache.kafka.connect.source.SourceTaskContext;
+import org.apache.kafka.connect.storage.OffsetStorageReader;
+
+import org.mockito.Mockito;
+
 import java.io.File;
 import java.io.InputStream;
+import java.lang.reflect.Method;
+import java.net.InetSocketAddress;
 import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import javax.tools.DiagnosticCollector;
@@ -579,6 +591,68 @@ public class CodegenIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // LIST PARTITION ROUTER — MOCK HTTP RUNTIME TEST
+    // Mirrors Airbyte's acceptance-test approach: start a local HTTP server that
+    // returns fixture JSON regardless of auth headers, then run poll() and verify
+    // SourceRecords are produced. No real credentials required.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void listRouter_mockHttp_pollProducesRecordsForEachPartitionValue(@TempDir Path tmpDir) throws Exception {
+        // Step 1 — generate + compile the triple from the mock-server manifest.
+        GeneratedTriple g = generate("list_router_mock_server_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+
+        // Step 2 — start a JDK HttpServer on a random port.
+        // Any request → 200 + fixture JSON; auth headers are accepted but not validated
+        // (mirrors Airbyte's mock-server pattern for unit testing without real credentials).
+        byte[] body = "{\"results\":[{\"id\":1,\"name\":\"widget\"}]}".getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+
+        try {
+            // Step 3 — load the compiled task class from tmpDir.
+            URLClassLoader loader = new URLClassLoader(
+                new URL[]{tmpDir.toUri().toURL()}, getClass().getClassLoader());
+            Class<?> taskClass = loader.loadClass(PKG + "." + g.task.typeSpec.name);
+
+            // Step 4 — wire a Mockito-mocked SourceTaskContext (no stored offsets).
+            SourceTaskContext ctx = Mockito.mock(SourceTaskContext.class);
+            OffsetStorageReader reader = Mockito.mock(OffsetStorageReader.class);
+            Mockito.when(ctx.offsetStorageReader()).thenReturn(reader);
+            Mockito.when(reader.offset(Mockito.any())).thenReturn(null);
+
+            Object task = taskClass.getDeclaredConstructor().newInstance();
+            Method initialize = taskClass.getMethod("initialize", SourceTaskContext.class);
+            initialize.invoke(task, ctx);
+
+            // Step 5 — start the task with config pointing to the mock server.
+            Map<String, String> props = Map.of(
+                "server_url", "http://localhost:" + port,
+                "api_key",    "test-api-key-mock"
+            );
+            taskClass.getMethod("start", Map.class).invoke(task, props);
+
+            // Step 6 — poll() must return records for each partition value (electronics, clothing).
+            List<?> records = (List<?>) taskClass.getMethod("poll").invoke(task);
+            assertFalse(records.isEmpty(),
+                "poll() must return SourceRecords; got empty list — check HTTP fetch or field_path navigation");
+
+            // Two partition values × one record per response = 2 records total.
+            assertEquals(2, records.size(),
+                "Expected 2 records (one per partition value: electronics, clothing)");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // BAD PATHS
     // ══════════════════════════════════════════════════════════════════════════
 
@@ -659,6 +733,12 @@ public class CodegenIntegrationTest {
     }
 
     private void compileTriple(GeneratedTriple g, Path tmpDir) throws Exception {
+        compileTripleWithOutputDir(g, tmpDir);
+    }
+
+    // Compiles the triple and writes .class files into tmpDir (same location as sources).
+    // Used by compile-only tests and the mock-HTTP runtime test (which loads via URLClassLoader).
+    private void compileTripleWithOutputDir(GeneratedTriple g, Path tmpDir) throws Exception {
         g.config.writeTo(tmpDir);
         g.connector.writeTo(tmpDir);
         g.task.writeTo(tmpDir);
@@ -678,8 +758,11 @@ public class CodegenIntegrationTest {
 
         try (var fm = compiler.getStandardFileManager(diags, null, null)) {
             var units = fm.getJavaFileObjectsFromFiles(sources);
+            // -d tmpDir ensures .class files land in tmpDir so URLClassLoader can find them.
             boolean ok = compiler.getTask(
-                null, fm, diags, Arrays.asList("-classpath", classpath), null, units
+                null, fm, diags,
+                Arrays.asList("-classpath", classpath, "-d", tmpDir.toString()),
+                null, units
             ).call();
             if (!ok) {
                 StringBuilder sb = new StringBuilder("Compilation of generated triple failed:\n");

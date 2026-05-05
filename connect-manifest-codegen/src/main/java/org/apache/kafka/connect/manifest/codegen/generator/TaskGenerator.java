@@ -2272,7 +2272,9 @@ public class TaskGenerator {
         }
 
         if (!hasPartitionTemplate) {
-            b.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class, baseUrl + rawPath);
+            // Use addInitialUrlStatement so config-template base URLs like
+            // url_base: "{{ config['server_url'] }}" resolve to config.getXxx() calls.
+            addInitialUrlStatement(b, baseUrl, rawPath);
         } else {
             // Build list of (regex-pattern, loop-var) substitutions.
             List<String[]> subs = new ArrayList<>();
@@ -2294,14 +2296,24 @@ public class TaskGenerator {
                 after = after.replaceAll(subs.get(i)[0], "\" + " + subs.get(i)[1] + " + \"");
             }
 
-            b.addStatement(
-                "$T urlBuilder = new $T($S + $T.encode($L, $T.UTF_8) + $S)",
-                StringBuilder.class, StringBuilder.class,
-                baseUrl + before,
-                ClassName.get("java.net", "URLEncoder"),
-                firstLoopVar,
-                ClassName.get("java.nio.charset", "StandardCharsets"),
-                after);
+            // Build the constructor expression, resolving any config-template in baseUrl.
+            // e.g. url_base="{{ config['server_url'] }}" → config.getServerUrl() + prefix + encode(loopVar) + suffix
+            StringBuilder fmt = new StringBuilder("$T urlBuilder = new $T(");
+            List<Object> fmtArgs = new ArrayList<>();
+            fmtArgs.add(StringBuilder.class);
+            fmtArgs.add(StringBuilder.class);
+            boolean needsPlus = appendUrlSegment(fmt, fmtArgs, baseUrl + before, false);
+            if (needsPlus) fmt.append(" + ");
+            fmt.append("$T.encode($L, $T.UTF_8)");
+            fmtArgs.add(ClassName.get("java.net", "URLEncoder"));
+            fmtArgs.add(firstLoopVar);
+            fmtArgs.add(ClassName.get("java.nio.charset", "StandardCharsets"));
+            if (!after.isEmpty()) {
+                fmt.append(" + $S");
+                fmtArgs.add(after);
+            }
+            fmt.append(")");
+            b.addStatement(fmt.toString(), fmtArgs.toArray());
         }
 
         // Append request_option query params for each router.

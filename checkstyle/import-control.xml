@@ -537,6 +537,7 @@
       <allow pkg="org.mockito" />
       <allow pkg="javax.lang.model" />
       <allow pkg="javax.tools" />
+      <allow pkg="com.sun.net.httpserver" />
     </subpackage>
 
     <subpackage name="source">
