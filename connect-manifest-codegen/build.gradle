@@ -73,6 +73,9 @@ dependencies {
     generatedImplementation project(':connect:api')
     generatedImplementation libs.slf4jApi
     generatedImplementation libs.jacksonDatabind
+    // Runtime helpers (JinjaRenderer, CustomComponentRegistry, custom-component impls) live in
+    // the main source set and are referenced by the generated SourceTask classes.
+    generatedImplementation sourceSets.main.output
 }
 
 // ── generateConnectors task ───────────────────────────────────────────────────
