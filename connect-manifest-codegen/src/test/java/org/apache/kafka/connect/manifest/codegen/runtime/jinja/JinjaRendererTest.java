@@ -1,0 +1,307 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.kafka.connect.manifest.codegen.runtime.jinja;
+
+import org.apache.kafka.connect.errors.ConnectException;
+
+import org.junit.jupiter.api.Test;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class JinjaRendererTest {
+
+    private static Map<String, Object> ctx() {
+        return new LinkedHashMap<>();
+    }
+
+    // ── plain literal short-circuit ───────────────────────────────────────────
+
+    @Test
+    void rendersPlainLiteralVerbatim() {
+        assertEquals("https://api.example.com/v1", JinjaRenderer.render("https://api.example.com/v1", ctx()));
+    }
+
+    @Test
+    void nullTemplateReturnsEmpty() {
+        assertEquals("", JinjaRenderer.render(null, ctx()));
+        assertEquals("", JinjaRenderer.renderLenient(null, ctx()));
+    }
+
+    @Test
+    void hasJinjaSyntaxRecognisesBraces() {
+        assertTrue(JinjaRenderer.hasJinjaSyntax("hello {{ name }}"));
+        assertTrue(JinjaRenderer.hasJinjaSyntax("{% if x %}y{% endif %}"));
+        assertTrue(!JinjaRenderer.hasJinjaSyntax("plain text"));
+        assertTrue(!JinjaRenderer.hasJinjaSyntax(""));
+        assertTrue(!JinjaRenderer.hasJinjaSyntax(null));
+    }
+
+    // ── variable interpolation ────────────────────────────────────────────────
+
+    @Test
+    void interpolatesContextVariable() {
+        Map<String, Object> c = ctx();
+        Map<String, Object> config = new HashMap<>();
+        config.put("api_key", "secret123");
+        c.put("config", config);
+        assertEquals("Bearer secret123", JinjaRenderer.render("Bearer {{ config.api_key }}", c));
+    }
+
+    @Test
+    void unknownVariableRendersEmptyByDefault() {
+        // jinjava with failOnUnknownTokens(false) treats unknowns as empty.
+        assertEquals("x=", JinjaRenderer.render("x={{ missing }}", ctx()));
+    }
+
+    // ── strict vs lenient ─────────────────────────────────────────────────────
+
+    @Test
+    void strictRenderThrowsOnSyntaxError() {
+        assertThrows(ConnectException.class,
+            () -> JinjaRenderer.render("{{ unclosed", ctx()));
+    }
+
+    @Test
+    void lenientRenderSwallowsErrors() {
+        // Should not throw even if jinjava records an error.
+        String out = JinjaRenderer.renderLenient("{{ unclosed", ctx());
+        assertNotNull(out);
+    }
+
+    // ── Airbyte functions ─────────────────────────────────────────────────────
+
+    @Test
+    void nowUtcIsIso8601() {
+        String out = JinjaRenderer.render("{{ now_utc() }}", ctx());
+        assertNotNull(OffsetDateTime.parse(out));
+    }
+
+    @Test
+    void todayUtcIsoDate() {
+        String out = JinjaRenderer.render("{{ today_utc() }}", ctx());
+        assertNotNull(LocalDate.parse(out));
+    }
+
+    @Test
+    void todayWithTimezoneRendersDate() {
+        String out = JinjaRenderer.render("{{ today_with_timezone('America/Los_Angeles') }}", ctx());
+        assertNotNull(LocalDate.parse(out));
+    }
+
+    @Test
+    void timestampOfFixedDate() {
+        // 2024-01-01T00:00:00Z = 1704067200
+        String out = JinjaRenderer.render("{{ timestamp('2024-01-01T00:00:00Z') }}", ctx());
+        assertEquals("1704067200", out);
+    }
+
+    @Test
+    void timestampOfNumberPassesThrough() {
+        String out = JinjaRenderer.render("{{ timestamp(42) }}", ctx());
+        assertEquals("42", out);
+    }
+
+    @Test
+    void strToDatetimeRoundTrip() {
+        String out = JinjaRenderer.render(
+            "{{ format_datetime(str_to_datetime('2024-06-15T12:34:56Z'), '%Y-%m-%d') }}", ctx());
+        assertEquals("2024-06-15", out);
+    }
+
+    @Test
+    void formatDatetimeWithInputFormat() {
+        // Airbyte: format_datetime(dt, output_fmt, input_fmt) — input_fmt parses dt.
+        String out = JinjaRenderer.render(
+            "{{ format_datetime('15-06-2024', '%Y/%m/%d', '%d-%m-%Y') }}", ctx());
+        assertEquals("2024/06/15", out);
+    }
+
+    @Test
+    void dayDeltaPositive() {
+        // Default Airbyte format is %Y-%m-%dT%H:%M:%S.%f%z (note %z = +0000, no colon).
+        LocalDate expected = LocalDate.now(ZoneOffset.UTC).plusDays(7);
+        String out = JinjaRenderer.render("{{ day_delta(7) }}", ctx());
+        assertTrue(out.startsWith(expected.toString()), "expected prefix " + expected + " in " + out);
+        assertTrue(out.endsWith("+0000"), "expected +0000 suffix in " + out);
+    }
+
+    @Test
+    void dayDeltaCustomFormat() {
+        String out = JinjaRenderer.render("{{ day_delta(0, '%Y-%m-%d') }}", ctx());
+        assertEquals(LocalDate.now(ZoneOffset.UTC).toString(), out);
+    }
+
+    @Test
+    void durationParsesIsoString() {
+        // Airbyte's duration() returns a TemporalAmount usable in Java composition.
+        // EL doesn't natively add ZonedDateTime + TemporalAmount, so verify the
+        // function itself rather than composition.
+        java.time.temporal.TemporalAmount d = AirbyteJinjaFunctions.duration("P1D");
+        assertNotNull(d);
+        assertEquals(java.time.Period.ofDays(1), d);
+    }
+
+    @Test
+    void maxOfPicksLarger() {
+        assertEquals("9", JinjaRenderer.render("{{ max(3, 9) }}", ctx()));
+        assertEquals("b", JinjaRenderer.render("{{ max('a', 'b') }}", ctx()));
+    }
+
+    @Test
+    void minOfPicksSmaller() {
+        assertEquals("3", JinjaRenderer.render("{{ min(3, 9) }}", ctx()));
+    }
+
+    @Test
+    void sanitizeUrlPercentEncodes() {
+        String out = JinjaRenderer.render("{{ sanitize_url('hello world & friends') }}", ctx());
+        assertEquals("hello+world+%26+friends", out);
+    }
+
+    @Test
+    void camelToSnakeCase() {
+        assertEquals("camel_case_string",
+            JinjaRenderer.render("{{ camel_case_to_snake_case('CamelCaseString') }}", ctx()));
+    }
+
+    @Test
+    void generateUuidProducesValidUuid() {
+        String out = JinjaRenderer.render("{{ generate_uuid() }}", ctx());
+        java.util.UUID.fromString(out);
+    }
+
+    // ── Airbyte filters ───────────────────────────────────────────────────────
+
+    @Test
+    void hashFilterMd5Default() {
+        // md5("hello") = 5d41402abc4b2a76b9719d911017c592
+        String out = JinjaRenderer.render("{{ 'hello' | hash }}", ctx());
+        assertEquals("5d41402abc4b2a76b9719d911017c592", out);
+    }
+
+    @Test
+    void hashFilterSha256() {
+        // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+        String out = JinjaRenderer.render("{{ 'hello' | hash('sha256') }}", ctx());
+        assertEquals("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", out);
+    }
+
+    @Test
+    void hashFilterWithSalt() {
+        String unsalted = JinjaRenderer.render("{{ 'hello' | hash('md5') }}", ctx());
+        String salted = JinjaRenderer.render("{{ 'hello' | hash('md5', 'pepper') }}", ctx());
+        assertTrue(!unsalted.equals(salted));
+    }
+
+    @Test
+    void hmacFilterSha256() {
+        // hmac-sha256("hello", "key") via Python: hmac.new(b"key", b"hello", sha256).hexdigest()
+        String out = JinjaRenderer.render("{{ 'hello' | hmac('key') }}", ctx());
+        assertEquals("9307b3b915efb5171ff14d8cb55fbcc798c6c0ef1456d66ded1a6aa723a58b7b", out);
+    }
+
+    @Test
+    void regexSearchReturnsFirstGroup() {
+        String out = JinjaRenderer.render(
+            "{{ 'order-12345-shipped' | regex_search('order-(\\\\d+)') }}", ctx());
+        assertEquals("12345", out);
+    }
+
+    @Test
+    void regexSearchNoMatchReturnsEmpty() {
+        String out = JinjaRenderer.render(
+            "{{ 'no numbers' | regex_search('(\\\\d+)') }}", ctx());
+        assertEquals("", out);
+    }
+
+    @Test
+    void regexSearchNoCaptureReturnsMatch() {
+        String out = JinjaRenderer.render(
+            "{{ 'foo123bar' | regex_search('\\\\d+') }}", ctx());
+        assertEquals("123", out);
+    }
+
+    @Test
+    void base64EncodeDecodeRoundTrip() {
+        String enc = JinjaRenderer.render("{{ 'hello world' | base64encode }}", ctx());
+        assertEquals("aGVsbG8gd29ybGQ=", enc);
+        Map<String, Object> c = ctx();
+        c.put("v", enc);
+        assertEquals("hello world", JinjaRenderer.render("{{ v | base64decode }}", c));
+    }
+
+    @Test
+    void base64BinasciiDecodePreservesBytes() {
+        // Encode bytes 0xff 0x00 0x7f as base64, then binascii_decode should round-trip via Latin-1.
+        byte[] raw = new byte[] {(byte) 0xff, 0x00, 0x7f};
+        String b64 = java.util.Base64.getEncoder().encodeToString(raw);
+        Map<String, Object> c = ctx();
+        c.put("v", b64);
+        String out = JinjaRenderer.render("{{ v | base64binascii_decode }}", c);
+        assertEquals(3, out.length());
+        assertEquals(0xff, out.charAt(0) & 0xff);
+        assertEquals(0x00, out.charAt(1) & 0xff);
+        assertEquals(0x7f, out.charAt(2) & 0xff);
+    }
+
+    @Test
+    void stringFilterCoercesToString() {
+        assertEquals("42", JinjaRenderer.render("{{ 42 | string }}", ctx()));
+    }
+
+    @Test
+    void regexReplaceUsesJinjavaBuiltin() {
+        // jinjava ships regex_replace; just ensure it works through our renderer.
+        String out = JinjaRenderer.render(
+            "{{ 'foo123bar' | regex_replace('\\\\d+', 'X') }}", ctx());
+        assertEquals("fooXbar", out);
+    }
+
+    // ── compound use ──────────────────────────────────────────────────────────
+
+    @Test
+    void chainedFiltersAndFunctions() {
+        Map<String, Object> c = ctx();
+        c.put("now", "2024-06-15T00:00:00Z");
+        String out = JinjaRenderer.render(
+            "{{ format_datetime(str_to_datetime(now), '%Y/%m/%d') }}", c);
+        assertEquals("2024/06/15", out);
+    }
+
+    @Test
+    void formatDatetimeOnIsoStringWithoutInputFormat() {
+        ZonedDateTime ref = ZonedDateTime.of(LocalDateTime.of(2024, 1, 2, 3, 4, 5), ZoneOffset.UTC);
+        String iso = ref.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+        Map<String, Object> c = ctx();
+        c.put("ts", iso);
+        String out = JinjaRenderer.render("{{ format_datetime(ts, '%Y-%m-%dT%H:%M:%S') }}", c);
+        assertEquals("2024-01-02T03:04:05", out);
+    }
+}

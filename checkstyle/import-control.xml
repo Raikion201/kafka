@@ -536,6 +536,7 @@
       <allow pkg="org.slf4j" />
       <allow pkg="org.junit" />
       <allow pkg="org.mockito" />
+      <allow pkg="javax.crypto" />
       <allow pkg="javax.lang.model" />
       <allow pkg="javax.tools" />
       <allow pkg="com.sun.net.httpserver" />
