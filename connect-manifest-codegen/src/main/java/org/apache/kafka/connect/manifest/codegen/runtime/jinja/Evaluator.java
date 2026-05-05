@@ -49,6 +49,7 @@ public final class Evaluator {
 
     public Evaluator() {
         this(new Functions(), new Filters(), new Tests(), new Methods());
+        Builtins.install(this.functions, this.filters, this.tests, this.methods);
     }
 
     public Evaluator(Functions functions, Filters filters, Tests tests, Methods methods) {
