@@ -2176,6 +2176,23 @@ public class TaskGenerator {
             }
         }
 
+        // Declare pagination state variables fresh per partition-value combination.
+        // Mirrors buildSubstreamPollMethod lines 571-588: per-slice, not per-poll.
+        if (hasPagination && paginator != null) {
+            if (paginator.isCursor()) {
+                body.addStatement("$T nextCursor = null", String.class);
+            } else if (paginator.isPageIncrement()) {
+                int start = paginator.getPaginationStrategy() != null
+                    ? paginator.getPaginationStrategy().getStartFromPage() : 1;
+                body.addStatement("final int startPage = $L", start);
+                body.addStatement("int page = startPage");
+                body.addStatement("final int pageLimit = $L", paginator.pageSize());
+            } else if (paginator.isOffsetIncrement()) {
+                body.addStatement("int offset = 0");
+                body.addStatement("final int pageLimit = $L", paginator.pageSize());
+            }
+        }
+
         body.add(buildListRouterUrlBlock(baseUrl, rawPath, listRouters, paginator, hasPagination));
 
         body.beginControlFlow("try");
