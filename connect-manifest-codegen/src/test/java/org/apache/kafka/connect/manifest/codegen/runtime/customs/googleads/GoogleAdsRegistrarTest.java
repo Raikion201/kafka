@@ -18,9 +18,11 @@ package org.apache.kafka.connect.manifest.codegen.runtime.customs.googleads;
 
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomComponent;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomComponentRegistry;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomDecoder;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomRecordExtractor;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomRecordFilter;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomRequester;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomRetriever;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomSchemaLoader;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomSchemaNormalization;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomStateMigration;
@@ -75,6 +77,18 @@ class GoogleAdsRegistrarTest {
             CustomRequester.class, Collections.emptyMap());
         assertResolves(P + "ClickViewHttpRequester",
             CustomRequester.class, Collections.emptyMap());
+
+        // Phase 1.5 stubs
+        assertResolves(P + "GoogleAdsHttpRequester",
+            CustomRequester.class, Collections.emptyMap());
+        assertResolves(P + "CustomGAQueryHttpRequester",
+            CustomRequester.class, Collections.emptyMap());
+        assertResolves(P + "GoogleAdsStreamingDecoder",
+            CustomDecoder.class, Collections.emptyMap());
+        assertResolves(P + "GoogleAdsRetriever",
+            CustomRetriever.class, Collections.emptyMap());
+        assertResolves(P + "CriterionRetriever",
+            CustomRetriever.class, Collections.emptyMap());
     }
 
     @Test

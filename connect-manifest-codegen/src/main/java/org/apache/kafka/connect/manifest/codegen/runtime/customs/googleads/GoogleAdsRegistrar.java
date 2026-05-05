@@ -30,10 +30,12 @@ import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomComponent
  * (once per stream that needs schema normalisation). It is registered exactly once here
  * — the registry is keyed by class_name, so all references resolve to the same factory.</p>
  *
- * <p>Phase 1 only registers the 14 trivial classes. The remaining four —
- * {@code GoogleAdsHttpRequester}, {@code GoogleAdsStreamingDecoder},
- * {@code GoogleAdsRetriever}, {@code CriterionRetriever}, {@code CustomGAQueryHttpRequester} —
- * are wired in later phases (1.5 + 2).</p>
+ * <p>Phase 1.5 also registers the five non-trivial classes
+ * ({@code GoogleAdsHttpRequester}, {@code CustomGAQueryHttpRequester},
+ * {@code GoogleAdsStreamingDecoder}, {@code GoogleAdsRetriever},
+ * {@code CriterionRetriever}) as stubs whose {@code send/decode/read} methods throw
+ * {@link org.apache.kafka.connect.errors.ConnectException} until Phase 2 wires the
+ * google-ads-java SDK.</p>
  */
 public final class GoogleAdsRegistrar {
 
@@ -101,5 +103,23 @@ public final class GoogleAdsRegistrar {
         CustomComponentRegistry.register(
             PREFIX + "ClickViewHttpRequester",
             ClickViewHttpRequester::new);
+
+        // Phase 1.5 stubs — registered so manifest lookup resolves; methods throw
+        // until Phase 2 wires google-ads-java.
+        CustomComponentRegistry.register(
+            PREFIX + "GoogleAdsHttpRequester",
+            GoogleAdsHttpRequester::new);
+        CustomComponentRegistry.register(
+            PREFIX + "CustomGAQueryHttpRequester",
+            CustomGAQueryHttpRequester::new);
+        CustomComponentRegistry.register(
+            PREFIX + "GoogleAdsStreamingDecoder",
+            GoogleAdsStreamingDecoder::new);
+        CustomComponentRegistry.register(
+            PREFIX + "GoogleAdsRetriever",
+            GoogleAdsRetriever::new);
+        CustomComponentRegistry.register(
+            PREFIX + "CriterionRetriever",
+            CriterionRetriever::new);
     }
 }
