@@ -2181,6 +2181,10 @@ public class TaskGenerator {
         if (hasPagination && paginator != null) {
             if (paginator.isCursor()) {
                 body.addStatement("$T nextCursor = null", String.class);
+                // RequestPath paginators use the cursor as the full next URL; declare url too.
+                if (isRequestPath(paginator)) {
+                    body.addStatement("$T url = null", String.class);
+                }
             } else if (paginator.isPageIncrement()) {
                 int start = paginator.getPaginationStrategy() != null
                     ? paginator.getPaginationStrategy().getStartFromPage() : 1;
@@ -2315,6 +2319,13 @@ public class TaskGenerator {
         if (hasPagination && paginator != null) {
             appendPaginationParams(b, paginator, !rawPath.contains("?"));
         }
+
+        // For RequestPath cursor paginators, the cursor IS the next URL. On page 1, use the
+        // constructed URL; on page 2+, nextCursor replaces the entire URL.
+        if (isRequestPath(paginator)) {
+            b.addStatement("url = (nextCursor != null) ? nextCursor : urlBuilder.toString()");
+        }
+
         return b.build();
     }
 }
