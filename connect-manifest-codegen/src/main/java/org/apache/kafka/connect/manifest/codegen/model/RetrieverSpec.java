@@ -105,4 +105,11 @@ public class RetrieverSpec {
             .toList();
         return subs.size() == 1 ? subs.get(0) : null;
     }
+
+    /** Returns all ListPartitionRouters on this retriever, in declaration order. */
+    public List<PartitionRouterSpec> getListRouters() {
+        return getPartitionRouter().stream()
+            .filter(PartitionRouterSpec::isList)
+            .toList();
+    }
 }

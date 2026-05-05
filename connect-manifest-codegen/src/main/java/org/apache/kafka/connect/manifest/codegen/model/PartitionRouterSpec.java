@@ -18,7 +18,14 @@ package org.apache.kafka.connect.manifest.codegen.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
 
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -37,6 +44,32 @@ public class PartitionRouterSpec {
 
     @JsonProperty("parent_stream_configs")
     private List<ParentStreamConfig> parentStreamConfigs = Collections.emptyList();
+
+    // ── ListPartitionRouter fields ────────────────────────────────────────────
+
+    /**
+     * The list of partition values to iterate over.
+     * Per Python CDK list_partition_router.py lines 19-56: values may be a literal
+     * YAML list OR a single Jinja string that evaluates to a list at runtime.
+     * We store whichever form was present; a plain string means config-ref (not yet evaluated).
+     */
+    @JsonDeserialize(using = StringOrListDeserializer.class)
+    private List<String> values = Collections.emptyList();
+
+    /**
+     * The key name placed in the partition dict for each slice, e.g. {@code "breakdown"}.
+     * Child streams reference it via {@code {{ stream_partition.breakdown }}}.
+     * Python CDK: cursor_field (list_partition_router.py line 23).
+     */
+    @JsonProperty("cursor_field")
+    private String cursorField;
+
+    /**
+     * Optional injection of the partition value into the HTTP request.
+     * Python CDK: request_option (list_partition_router.py line 24).
+     */
+    @JsonProperty("request_option")
+    private RequestOptionSpec requestOption;
 
     public String getType() {
         return type;
@@ -64,6 +97,34 @@ public class PartitionRouterSpec {
 
     public boolean isSubstream() {
         return "SubstreamPartitionRouter".equalsIgnoreCase(type);
+    }
+
+    public boolean isList() {
+        return "ListPartitionRouter".equalsIgnoreCase(type);
+    }
+
+    public List<String> getValues() {
+        return values == null ? Collections.emptyList() : values;
+    }
+
+    public void setValues(List<String> values) {
+        this.values = values;
+    }
+
+    public String getCursorField() {
+        return cursorField;
+    }
+
+    public void setCursorField(String cursorField) {
+        this.cursorField = cursorField;
+    }
+
+    public RequestOptionSpec getRequestOption() {
+        return requestOption;
+    }
+
+    public void setRequestOption(RequestOptionSpec requestOption) {
+        this.requestOption = requestOption;
     }
 
     /** The Jinja2 variable name injected into the child path, e.g. {@code course}. */
@@ -120,6 +181,72 @@ public class PartitionRouterSpec {
 
         public String getParentStreamName() {
             return stream != null ? stream.refStreamName() : null;
+        }
+    }
+
+    /**
+     * Models {@code request_option} on a ListPartitionRouter — how the current partition
+     * value is injected into the HTTP request.
+     * Python CDK: RequestOption dataclass (request_option.py).
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class RequestOptionSpec {
+
+        @JsonProperty("field_name")
+        private String fieldName;
+
+        @JsonProperty("inject_into")
+        private String injectInto;
+
+        public String getFieldName() {
+            return fieldName;
+        }
+
+        public void setFieldName(String fieldName) {
+            this.fieldName = fieldName;
+        }
+
+        public String getInjectInto() {
+            return injectInto;
+        }
+
+        public void setInjectInto(String injectInto) {
+            this.injectInto = injectInto;
+        }
+
+        public boolean isRequestParameter() {
+            return "request_parameter".equalsIgnoreCase(injectInto);
+        }
+
+        public boolean isHeader() {
+            return "header".equalsIgnoreCase(injectInto);
+        }
+    }
+
+    /**
+     * Deserializes the {@code values} field which may be either a YAML list of strings
+     * or a single Jinja template string (evaluated at runtime by the Python CDK).
+     * Python CDK: list_partition_router.py lines 48-56.
+     */
+    public static class StringOrListDeserializer extends StdDeserializer<List<String>> {
+
+        public StringOrListDeserializer() {
+            super(List.class);
+        }
+
+        @Override
+        public List<String> deserialize(JsonParser p, DeserializationContext ctx) throws IOException {
+            JsonNode node = p.getCodec().readTree(p);
+            if (node.isArray()) {
+                List<String> result = new ArrayList<>(node.size());
+                for (JsonNode elem : node) {
+                    result.add(elem.asText());
+                }
+                return result;
+            }
+            // Scalar string — Jinja template like "{{ config['regions'] }}"; store as single-element
+            // list so callers can detect it (starts with "{{") and handle at codegen time.
+            return Collections.singletonList(node.asText());
         }
     }
 
