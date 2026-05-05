@@ -140,7 +140,8 @@ versions += [
   junitPlatform: "1.13.1",
   hdrHistogram: "2.2.2",
   hash4j: "0.22.0",
-  javapoet: "1.13.0"
+  javapoet: "1.13.0",
+  jinjava: "2.8.3"
 ]
 
 libs += [
@@ -165,6 +166,7 @@ libs += [
   jacksonDataformatCsv: "com.fasterxml.jackson.dataformat:jackson-dataformat-csv:$versions.jackson",
   jacksonDataformatYaml: "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:$versions.jackson",
   javapoet: "com.squareup:javapoet:$versions.javapoet",
+  jinjava: "com.hubspot.jinjava:jinjava:$versions.jinjava",
   jacksonJDK8Datatypes: "com.fasterxml.jackson.datatype:jackson-datatype-jdk8:$versions.jackson",
   jacksonBlackbird: "com.fasterxml.jackson.module:jackson-module-blackbird:$versions.jackson",
   jacksonJakartarsJsonProvider: "com.fasterxml.jackson.jakarta.rs:jackson-jakarta-rs-json-provider:$versions.jackson",

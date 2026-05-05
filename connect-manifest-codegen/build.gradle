@@ -47,6 +47,12 @@ dependencies {
     // Java source code generation
     implementation libs.javapoet
 
+    // Jinja2-compatible template engine. Used at codegen time (URL/header/query
+    // interpolation) and at task runtime (per-record template rendering inside
+    // generated source tasks). Replaces a hand-rolled Jinja runtime.
+    implementation libs.jinjava
+    generatedImplementation libs.jinjava
+
     // Logging
     implementation libs.slf4jApi
 
