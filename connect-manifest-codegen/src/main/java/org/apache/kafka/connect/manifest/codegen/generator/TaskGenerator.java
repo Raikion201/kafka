@@ -1062,15 +1062,11 @@ public class TaskGenerator {
 
         if (isRequestPath(paginator)) {
             String initialUrl = baseUrl + path;
-            if (!CONFIG_TEMPLATE.matcher(initialUrl).find()) {
+            if (!initialUrl.contains("{{") && !initialUrl.contains("{%")) {
                 b.addStatement("url = (nextCursor != null) ? nextCursor : $S", initialUrl);
             } else {
-                StringBuilder fmt = new StringBuilder("url = (nextCursor != null) ? nextCursor : (");
-                List<Object> fmtArgs = new ArrayList<>();
-                boolean needsPlus = appendUrlSegment(fmt, fmtArgs, baseUrl, false);
-                appendUrlSegment(fmt, fmtArgs, path, needsPlus);
-                fmt.append(")");
-                b.addStatement(fmt.toString(), fmtArgs.toArray());
+                b.addStatement("url = (nextCursor != null) ? nextCursor : $L",
+                    interpolateTemplate(initialUrl));
             }
             return b.build();
         }
@@ -1120,33 +1116,27 @@ public class TaskGenerator {
 
     /**
      * Initializes {@code urlBuilder} for the stream poll method.
-     * When the base URL or path contains a config template (e.g. {@code {{ config['host'] }}}),
-     * the initializer uses runtime string concatenation so the actual config value is substituted.
+     * When the base URL or path contains a Jinja template, the initializer is built via
+     * {@link JinjaSnippets#interpolateTemplate} so the value is rendered through
+     * {@code JinjaRenderer.render(...)} at runtime — same path used for auth headers and cursors.
      */
     private void addInitialUrlStatement(CodeBlock.Builder b, String baseUrl, String path) {
-        boolean baseHasTemplate = CONFIG_TEMPLATE.matcher(baseUrl).find();
-        boolean pathHasTemplate = CONFIG_TEMPLATE.matcher(path).find();
-
-        if (!baseHasTemplate && !pathHasTemplate) {
+        String combined = baseUrl + path;
+        if (!combined.contains("{{") && !combined.contains("{%")) {
             b.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class,
-                baseUrl + path);
+                combined);
             return;
         }
-
-        StringBuilder fmt = new StringBuilder("$T urlBuilder = new $T(");
-        List<Object> fmtArgs = new ArrayList<>();
-        fmtArgs.add(StringBuilder.class);
-        fmtArgs.add(StringBuilder.class);
-        boolean needsPlus = appendUrlSegment(fmt, fmtArgs, baseUrl, false);
-        appendUrlSegment(fmt, fmtArgs, path, needsPlus);
-        fmt.append(")");
-        b.addStatement(fmt.toString(), fmtArgs.toArray());
+        b.addStatement("$T urlBuilder = new $T($L)",
+            StringBuilder.class, StringBuilder.class, interpolateTemplate(combined));
     }
 
     /**
-     * Appends one URL segment (base or path) to the format/args buffers used by
-     * {@link #addInitialUrlStatement}. Config-template sub-expressions are expanded
-     * to {@code config.getXxx()} calls; literal parts are emitted as string literals.
+     * Appends one URL segment (base or path) to the format/args buffers used by callers
+     * that interleave URL segments with non-template Java expressions (e.g. URL-encoded
+     * loop variables in substream paths). Templated segments are emitted via
+     * {@link JinjaSnippets#interpolateTemplate} so they go through {@code render(...)}
+     * at runtime; literal segments collapse to a string literal.
      *
      * @return the new value of {@code needsPlus} after appending this segment
      */
@@ -1154,46 +1144,15 @@ public class TaskGenerator {
         StringBuilder fmt, List<Object> fmtArgs, String segment, boolean needsPlus
     ) {
         if (segment.isEmpty()) return needsPlus;
-        Matcher m = CONFIG_TEMPLATE.matcher(segment);
-        if (!m.find()) {
-            if (needsPlus) fmt.append(" + ");
+        if (needsPlus) fmt.append(" + ");
+        if (!segment.contains("{{") && !segment.contains("{%")) {
             fmt.append("$S");
             fmtArgs.add(segment);
-            return true;
+        } else {
+            fmt.append("$L");
+            fmtArgs.add(interpolateTemplate(segment));
         }
-        m.reset();
-        int pos = 0;
-        while (m.find()) {
-            String lit = segment.substring(pos, m.start());
-            if (!lit.isEmpty()) {
-                if (needsPlus) fmt.append(" + ");
-                fmt.append("$S");
-                fmtArgs.add(lit);
-                needsPlus = true;
-            }
-            String key = m.group(1);
-            if (currentSpecPropKeys.contains(key)) {
-                if (needsPlus) fmt.append(" + ");
-                fmt.append("config.$L()");
-                fmtArgs.add("get" + ManifestSpec.toClassName(key));
-                needsPlus = true;
-            } else {
-                // Spec doesn't declare this key — emit empty string literal so URL stays valid.
-                if (needsPlus) fmt.append(" + ");
-                fmt.append("$S");
-                fmtArgs.add("");
-                needsPlus = true;
-            }
-            pos = m.end();
-        }
-        String tail = segment.substring(pos);
-        if (!tail.isEmpty()) {
-            if (needsPlus) fmt.append(" + ");
-            fmt.append("$S");
-            fmtArgs.add(tail);
-            needsPlus = true;
-        }
-        return needsPlus;
+        return true;
     }
 
     private boolean isApiKeyQueryParam(AuthenticatorSpec auth) {
