@@ -2213,6 +2213,18 @@ public class TaskGenerator {
     }
 
     /**
+     * Returns a Pattern that matches both dot-notation (stream_partition.field)
+     * and bracket-notation (stream_partition['field'] / stream_partition["field"]) Jinja2 refs.
+     * Python CDK: declarative_component_schema.yaml — partition_field is accessed via either syntax.
+     */
+    private static Pattern streamPartitionPattern(String cursorField) {
+        String q = Pattern.quote(cursorField);
+        return Pattern.compile(
+            "\\{\\{\\s*stream_partition(?:\\." + q
+            + "|\\[\\s*['\"]" + q + "['\"]\\s*\\])\\s*\\}\\}");
+    }
+
+    /**
      * Builds the URL construction block for a stream with one or more ListPartitionRouters.
      * Substitutes stream_partition.X in the path with the matching loop variable,
      * and appends query params from request_option.inject_into=request_parameter.
@@ -2224,13 +2236,13 @@ public class TaskGenerator {
     ) {
         CodeBlock.Builder b = CodeBlock.builder();
 
-        // Check if the path contains any stream_partition.X Jinja references.
+        // Check if the path contains any stream_partition.X or stream_partition['X'] references.
+        // Python CDK supports both dot notation (stream_partition.field) and
+        // bracket notation (stream_partition['field'], stream_partition["field"]).
         boolean hasPartitionTemplate = false;
         for (PartitionRouterSpec lr : listRouters) {
             if (lr.getCursorField() != null) {
-                Matcher m = Pattern.compile(
-                    "\\{\\{\\s*stream_partition\\." + Pattern.quote(lr.getCursorField()) + "\\s*\\}\\}"
-                ).matcher(rawPath);
+                Matcher m = streamPartitionPattern(lr.getCursorField()).matcher(rawPath);
                 if (m.find()) {
                     hasPartitionTemplate = true;
                     break;
@@ -2245,7 +2257,7 @@ public class TaskGenerator {
             List<String[]> subs = new ArrayList<>();
             for (PartitionRouterSpec lr : listRouters) {
                 if (lr.getCursorField() != null) {
-                    String placeholder = "\\{\\{\\s*stream_partition\\." + Pattern.quote(lr.getCursorField()) + "\\s*\\}\\}";
+                    String placeholder = streamPartitionPattern(lr.getCursorField()).pattern();
                     subs.add(new String[]{placeholder, listLoopVar(lr.getCursorField())});
                 }
             }
