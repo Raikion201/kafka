@@ -17,6 +17,7 @@
 package org.apache.kafka.connect.manifest.codegen.generator;
 
 import org.apache.kafka.connect.manifest.codegen.model.AuthenticatorSpec;
+import org.apache.kafka.connect.manifest.codegen.model.ConfigTransformationSpec;
 import org.apache.kafka.connect.manifest.codegen.model.IncrementalSyncSpec;
 import org.apache.kafka.connect.manifest.codegen.model.ManifestSpec;
 import org.apache.kafka.connect.manifest.codegen.model.PaginatorSpec;
@@ -24,6 +25,8 @@ import org.apache.kafka.connect.manifest.codegen.model.PartitionRouterSpec;
 import org.apache.kafka.connect.manifest.codegen.model.RecordSelectorSpec;
 import org.apache.kafka.connect.manifest.codegen.model.RequesterSpec;
 import org.apache.kafka.connect.manifest.codegen.model.StreamSpec;
+import org.apache.kafka.connect.manifest.codegen.runtime.transform.TransformationPipelineFactory;
+import org.apache.kafka.connect.manifest.codegen.runtime.transform.config.ConfigTransformerFactory;
 
 import com.squareup.javapoet.ClassName;
 import com.squareup.javapoet.CodeBlock;
@@ -127,6 +130,19 @@ public class TaskGenerator {
     private static final ClassName WAIT_UNTIL_TIME_FROM_HEADER =
         ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry.backoff",
             "WaitUntilTimeFromHeaderBackoffStrategy");
+
+    private static final ClassName TRANSFORMATION_PIPELINE =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.transform",
+            "TransformationPipeline");
+    private static final ClassName TRANSFORMATION_PIPELINE_FACTORY =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.transform",
+            "TransformationPipelineFactory");
+    private static final ClassName CONFIG_TRANSFORMER =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.transform.config",
+            "ConfigTransformer");
+    private static final ClassName CONFIG_TRANSFORMER_FACTORY =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.transform.config",
+            "ConfigTransformerFactory");
 
     private static final String APP_VERSION = "1.0.0";
 
@@ -244,7 +260,7 @@ public class TaskGenerator {
                 .build()
         );
 
-        typeBuilder.addMethod(buildStart(mapStringString, configClass, auth, runnableStreams));
+        typeBuilder.addMethod(buildStart(mapStringString, configClass, auth, runnableStreams, spec));
 
         typeBuilder.addMethod(buildPollAll(runnableStreams, listOfSourceRecord));
 
@@ -273,6 +289,7 @@ public class TaskGenerator {
         }
         typeBuilder.addMethod(buildStop());
         typeBuilder.addMethod(buildJinjaCtx());
+        typeBuilder.addMethod(buildJinjaCtxWithRecord());
 
         return JavaFile.builder(pkgName, typeBuilder.build())
             .skipJavaLangImports(true)
@@ -335,6 +352,15 @@ public class TaskGenerator {
             );
         }
 
+        // Config-time transformer (applied once in start() before any config reads).
+        typeBuilder.addField(CONFIG_TRANSFORMER, "configTransformer", Modifier.PRIVATE);
+
+        // Per-stream transformation pipelines (applied to each record before emission).
+        for (StreamSpec s : streams) {
+            typeBuilder.addField(TRANSFORMATION_PIPELINE,
+                pipelineFieldName(s.getName()), Modifier.PRIVATE);
+        }
+
         // DatetimeBasedCursor: one volatile String cursor field per incremental stream.
         for (StreamSpec s : streams) {
             IncrementalSyncSpec inc = s.getIncrementalSync();
@@ -384,7 +410,8 @@ public class TaskGenerator {
         ParameterizedTypeName mapStringString,
         ClassName configClass,
         AuthenticatorSpec auth,
-        List<StreamSpec> streams
+        List<StreamSpec> streams,
+        ManifestSpec spec
     ) {
         MethodSpec.Builder m = MethodSpec.methodBuilder("start")
             .addAnnotation(Override.class)
@@ -392,6 +419,33 @@ public class TaskGenerator {
             .addParameter(mapStringString, "props")
             .addStatement("this.config = new $T(props)", configClass)
             .addStatement("this.httpClient = $T.newHttpClient()", HTTP_CLIENT);
+
+        // Config-time transforms — applied once before any other initialization reads config.
+        m.addStatement("this.configTransformer = $T.fromJson($S)",
+            CONFIG_TRANSFORMER_FACTORY, configTransformsJson(spec));
+        m.beginControlFlow("if (!this.configTransformer.isNoop())")
+            .addStatement("@$T($S) $T<$T, $T> _cfgMap = ($T<$T, $T>) ($T<?, ?>) this.config.values()",
+                SuppressWarnings.class, "unchecked",
+                Map.class, String.class, Object.class,
+                Map.class, String.class, Object.class,
+                Map.class)
+            .addStatement("this.configTransformer.apply(_cfgMap)")
+            .endControlFlow();
+
+        // Per-stream transformation pipelines.
+        for (StreamSpec s : streams) {
+            String transformsJson = TransformationPipelineFactory.toJson(s.getTransformations());
+            String filterCondition = filterConditionFor(s);
+            if (filterCondition != null) {
+                m.addStatement("this.$L = $T.fromJson($S, $S)",
+                    pipelineFieldName(s.getName()), TRANSFORMATION_PIPELINE_FACTORY,
+                    transformsJson, filterCondition);
+            } else {
+                m.addStatement("this.$L = $T.fromJson($S, null)",
+                    pipelineFieldName(s.getName()), TRANSFORMATION_PIPELINE_FACTORY,
+                    transformsJson);
+            }
+        }
 
         StreamSpec primaryHttpStream = streams.stream()
             .filter(s -> !isCustomDispatch(s))
@@ -555,7 +609,8 @@ public class TaskGenerator {
         }
         body.add(buildFieldPathNav(fieldPath, hasPagination));
         body.add(buildNormalizeAndCollect(hasPagination, paginator, cursorVar,
-            isIncremental ? incrementalSync.getCursorField() : null));
+            isIncremental ? incrementalSync.getCursorField() : null,
+            pipelineFieldName(streamName)));
         body.nextControlFlow("catch ($T e)", InterruptedException.class);
         body.addStatement("$T.currentThread().interrupt()", Thread.class);
         body.addStatement(
@@ -668,7 +723,8 @@ public class TaskGenerator {
             body.add(buildCursorStateUpdate(paginator));
         }
         body.add(buildFieldPathNav(fieldPath, hasPagination));
-        body.add(buildNormalizeAndCollect(hasPagination, paginator, null, null));
+        body.add(buildNormalizeAndCollect(hasPagination, paginator, null, null,
+            pipelineFieldName(streamName)));
 
         // Advance partition index only after last pagination page is consumed.
         if (hasPagination && paginator.isCursor()) {
@@ -1002,10 +1058,8 @@ public class TaskGenerator {
         body.endControlFlow();
 
         body.beginControlFlow("for ($T record : records)", Object.class);
-        body.addStatement("$T value = MAPPER.writeValueAsString(record)", String.class);
-        body.addStatement(
-            "result.add(new $T($T.of($S, streamName), $T.of($S, _nextIndex), streamName, $T.STRING_SCHEMA, value))",
-            SOURCE_RECORD, Map.class, "stream", Map.class, "ticker_index", SCHEMA);
+        body.add(buildPipelineEmitBlock(pipelineFieldName(streamName),
+            CodeBlock.of("$T.of($S, _nextIndex)", Map.class, "ticker_index")));
         body.endControlFlow();
         body.addStatement("tickerIndex = _nextIndex");
         body.addStatement("return result");
@@ -1324,7 +1378,8 @@ public class TaskGenerator {
     }
 
     private CodeBlock buildNormalizeAndCollect(
-        boolean hasPagination, PaginatorSpec paginator, String cursorVarName, String jsonCursorField
+        boolean hasPagination, PaginatorSpec paginator, String cursorVarName, String jsonCursorField,
+        String pipelineField
     ) {
         CodeBlock.Builder b = CodeBlock.builder();
         b.addStatement("$T<$T> records", List.class, Object.class);
@@ -1352,11 +1407,37 @@ public class TaskGenerator {
 
         CodeBlock positionMap = buildPositionMapCode(paginator, cursorVarName);
         b.beginControlFlow("for ($T record : records)", Object.class);
-        b.addStatement("$T value = MAPPER.writeValueAsString(record)", String.class);
+        b.add(buildPipelineEmitBlock(pipelineField, positionMap));
+        b.endControlFlow();
+        return b.build();
+    }
+
+    private CodeBlock buildPipelineEmitBlock(String pipelineField, CodeBlock positionMap) {
+        CodeBlock.Builder b = CodeBlock.builder();
+        ParameterizedTypeName mapStrObj = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"),
+            ClassName.get(String.class), ClassName.get(Object.class));
+        ParameterizedTypeName optMapStrObj = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Optional"), mapStrObj);
+
+        // Declare value before if/else so it is in scope for result.add() after the block.
+        // Use tp-prefixed names to avoid shadowing any outer _ctx/_rec already in scope.
+        b.addStatement("$T value", String.class);
+        b.beginControlFlow("if (record instanceof $T)", Map.class);
+        b.addStatement("@$T($S) $T _tpRec = ($T) record", SuppressWarnings.class, "unchecked",
+            mapStrObj, mapStrObj);
+        b.addStatement("$T _tpCtx = jinjaCtx(_tpRec)", mapStrObj);
+        b.addStatement("$T _tpKept = $L.process(_tpRec, _tpCtx)", optMapStrObj, pipelineField);
+        b.beginControlFlow("if (_tpKept.isEmpty())");
+        b.addStatement("continue");
+        b.endControlFlow();
+        b.addStatement("value = MAPPER.writeValueAsString(_tpKept.get())");
+        b.nextControlFlow("else");
+        b.addStatement("value = MAPPER.writeValueAsString(record)");
+        b.endControlFlow();
         b.addStatement(
             "result.add(new $T($T.of(\"stream\", streamName), $L, streamName, $T.STRING_SCHEMA, value))",
             SOURCE_RECORD, Map.class, positionMap, SCHEMA);
-        b.endControlFlow();
         return b.build();
     }
 
@@ -1923,7 +2004,13 @@ public class TaskGenerator {
             body.addStatement("$T _records = _component.read(_emptyParams, _emptyParams)", iterMapStrObj);
             body.beginControlFlow("while (_records.hasNext())");
             body.addStatement("$T _record = _records.next()", mapStrObj);
-            body.addStatement("$T _value = MAPPER.writeValueAsString(_record)", String.class);
+            body.addStatement("$T _ctx = jinjaCtx(_record)", mapStrObj);
+            body.addStatement("$T<$T> _kept = $L.process(_record, _ctx)",
+                ClassName.get("java.util", "Optional"), mapStrObj, pipelineFieldName(streamName));
+            body.beginControlFlow("if (_kept.isEmpty())");
+            body.addStatement("continue");
+            body.endControlFlow();
+            body.addStatement("$T _value = MAPPER.writeValueAsString(_kept.get())", String.class);
             body.add(emitCustomSourceRecordAdd());
             body.endControlFlow();
         } else {
@@ -2174,6 +2261,22 @@ public class TaskGenerator {
             .build();
     }
 
+    private MethodSpec buildJinjaCtxWithRecord() {
+        ClassName mapClass = ClassName.get("java.util", "Map");
+        ParameterizedTypeName mapStringObject = ParameterizedTypeName.get(
+            mapClass, ClassName.get(String.class), ClassName.get(Object.class));
+        return MethodSpec.methodBuilder("jinjaCtx")
+            .addModifiers(Modifier.PRIVATE)
+            .returns(mapStringObject)
+            .addParameter(mapStringObject, "record")
+            .addStatement("$T ctx = jinjaCtx()", mapStringObject)
+            .beginControlFlow("if (record != null)")
+            .addStatement("ctx.put($S, record)", "record")
+            .endControlFlow()
+            .addStatement("return ctx")
+            .build();
+    }
+
     private MethodSpec buildStop() {
         return MethodSpec.methodBuilder("stop")
             .addAnnotation(Override.class)
@@ -2245,6 +2348,24 @@ public class TaskGenerator {
 
     private static String partitionIdxFieldName(String streamName) {
         return toJavaName(streamName) + "_partitionIdx";
+    }
+
+    private static String pipelineFieldName(String streamName) {
+        return "pipeline_" + toJavaName(streamName);
+    }
+
+    private static String configTransformsJson(ManifestSpec spec) {
+        List<ConfigTransformationSpec> specs = spec.getConfigTransformations();
+        return ConfigTransformerFactory.toJson(specs);
+    }
+
+    private static String filterConditionFor(StreamSpec stream) {
+        RecordSelectorSpec selector = stream.getRetriever() != null
+            ? stream.getRetriever().getRecordSelector() : null;
+        if (selector == null || selector.getRecordFilter() == null) {
+            return null;
+        }
+        return selector.getRecordFilter().getCondition();
     }
 
     /**
@@ -2341,7 +2462,8 @@ public class TaskGenerator {
             body.add(buildCursorStateUpdate(paginator));
         }
         body.add(buildFieldPathNav(fieldPath, hasPagination));
-        body.add(buildNormalizeAndCollect(hasPagination, paginator, null, null));
+        body.add(buildNormalizeAndCollect(hasPagination, paginator, null, null,
+            pipelineFieldName(streamName)));
         body.nextControlFlow("catch ($T e)", InterruptedException.class);
         body.addStatement("$T.currentThread().interrupt()", Thread.class);
         body.addStatement("throw new $T(\"Interrupted while polling \" + streamName, e)", CONNECT_EXCEPTION);
@@ -2845,11 +2967,9 @@ public class TaskGenerator {
         body.addStatement("records = $T.emptyList()", Collections.class);
         body.endControlFlow();
 
+        CodeBlock nestedPositionMap = CodeBlock.of("$T.of($S, _nextIdx)", Map.class, "partition_idx");
         body.beginControlFlow("for ($T record : records)", Object.class);
-        body.addStatement("$T value = MAPPER.writeValueAsString(record)", String.class);
-        body.addStatement(
-            "result.add(new $T($T.of($S, streamName), $T.of($S, _nextIdx), streamName, $T.STRING_SCHEMA, value))",
-            SOURCE_RECORD, Map.class, "stream", Map.class, "partition_idx", SCHEMA);
+        body.add(buildPipelineEmitBlock(pipelineFieldName(streamName), nestedPositionMap));
         body.endControlFlow();
 
         body.addStatement("$L = _nextIdx", idxField);

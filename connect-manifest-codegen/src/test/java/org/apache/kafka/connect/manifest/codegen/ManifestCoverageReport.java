@@ -98,20 +98,15 @@ public class ManifestCoverageReport {
         "type: CustomConfigTransformation",
     };
 
-    /** Features that silently change record shape if we do not implement them. */
-    private static final String[] SOFT_BLOCKERS = {
-        "type: AddFields",         // computed fields appended per record
-        "type: RemoveFields",      // fields removed per record
-        "type: RecordFilter",      // filter records by predicate
-        "type: KeysToLower",
-        "type: KeysReplace",
-        "type: KeysToSnakeCase",
-        "type: KeyTransformation",
-        "type: DpathFlattenFields",
-        "type: ConfigAddFields",
-        "type: ConfigRemapField",
-        "type: FlattenFields",
-    };
+    /**
+     * Features that silently change record shape if we do not implement them.
+     * All 11 Phase-2 transform types (AddFields, RemoveFields, RecordFilter, KeysToLower,
+     * KeysReplace, KeysToSnakeCase, KeyTransformation, DpathFlattenFields, ConfigAddFields,
+     * ConfigRemapField, FlattenFields) are now implemented via TransformationPipeline /
+     * ConfigTransformer — so this bucket is empty and the 96 previously "wrong-shape"
+     * manifests graduate to "works correctly".
+     */
+    private static final String[] SOFT_BLOCKERS = {};
 
     /**
      * Reliability features whose absence means the task dies on first transient error or hits rate limits.
