@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -60,6 +61,21 @@ public class RequesterSpec {
     @JsonProperty("request_headers")
     @JsonDeserialize(using = StringMapTolerantDeserializer.class)
     private Map<String, String> requestHeaders = Collections.emptyMap();
+
+    /**
+     * JSON body for POST/PUT requests. Each top-level value may be a Jinja template string
+     * or a nested structure (map, list, scalar). Mirrors Airbyte's {@code request_body_json}.
+     */
+    @JsonProperty("request_body_json")
+    private Map<String, Object> requestBodyJson;
+
+    /**
+     * Body for POST/PUT requests as a raw string or form-encoded key=value pairs.
+     * Mirrors Airbyte's {@code request_body_data} which accepts either a string or a mapping.
+     */
+    @JsonProperty("request_body_data")
+    @JsonDeserialize(using = BodyDataSpecDeserializer.class)
+    private BodyDataSpec requestBodyData;
 
     @JsonProperty("error_handler")
     private ErrorHandlerSpec errorHandler;
@@ -136,6 +152,27 @@ public class RequesterSpec {
         this.requestHeaders = requestHeaders;
     }
 
+    public Map<String, Object> getRequestBodyJson() {
+        return requestBodyJson;
+    }
+
+    public void setRequestBodyJson(Map<String, Object> requestBodyJson) {
+        this.requestBodyJson = requestBodyJson;
+    }
+
+    public BodyDataSpec getRequestBodyData() {
+        return requestBodyData;
+    }
+
+    public void setRequestBodyData(BodyDataSpec requestBodyData) {
+        this.requestBodyData = requestBodyData;
+    }
+
+    /** Returns true if this requester has an explicit body payload. */
+    public boolean hasRequestBody() {
+        return requestBodyJson != null || requestBodyData != null;
+    }
+
     public ErrorHandlerSpec getErrorHandler() {
         return errorHandler;
     }
@@ -177,6 +214,66 @@ public class RequesterSpec {
     /** HTTP status codes that the error_handler treats as SUCCESS (e.g. 403 for Yahoo Finance). */
     public Set<Integer> successHttpCodes() {
         return errorHandler != null ? errorHandler.getSuccessHttpCodes() : Collections.emptySet();
+    }
+
+    /**
+     * Holds the value of {@code request_body_data} which Airbyte allows as either a plain
+     * string (raw body) or a mapping of form fields.
+     */
+    public static final class BodyDataSpec {
+        private final String rawBody;
+        private final Map<String, String> formFields;
+
+        public BodyDataSpec(String rawBody) {
+            this.rawBody = rawBody;
+            this.formFields = null;
+        }
+
+        public BodyDataSpec(Map<String, String> formFields) {
+            this.rawBody = null;
+            this.formFields = formFields;
+        }
+
+        /** Non-null when the YAML value was a scalar string. */
+        public String getRawBody() {
+            return rawBody;
+        }
+
+        /** Non-null when the YAML value was a mapping of form fields. */
+        public Map<String, String> getFormFields() {
+            return formFields;
+        }
+
+        public boolean isRaw() {
+            return rawBody != null;
+        }
+    }
+
+    /** Deserializes {@code request_body_data} as either a raw string or a form-field map. */
+    static final class BodyDataSpecDeserializer
+            extends com.fasterxml.jackson.databind.JsonDeserializer<BodyDataSpec> {
+        @Override
+        public BodyDataSpec deserialize(com.fasterxml.jackson.core.JsonParser p,
+                                        com.fasterxml.jackson.databind.DeserializationContext ctxt)
+                throws java.io.IOException {
+            com.fasterxml.jackson.databind.JsonNode node = p.readValueAsTree();
+            if (node == null || node.isNull()) {
+                return null;
+            }
+            if (node.isTextual()) {
+                return new BodyDataSpec(node.asText());
+            }
+            if (node.isObject()) {
+                Map<String, String> out = new LinkedHashMap<>();
+                for (Map.Entry<String, com.fasterxml.jackson.databind.JsonNode> e : node.properties()) {
+                    com.fasterxml.jackson.databind.JsonNode v = e.getValue();
+                    if (v == null || v.isNull()) continue;
+                    out.put(e.getKey(), v.isTextual() ? v.asText() : v.toString());
+                }
+                return new BodyDataSpec(out);
+            }
+            return new BodyDataSpec(node.toString());
+        }
     }
 
     /**
