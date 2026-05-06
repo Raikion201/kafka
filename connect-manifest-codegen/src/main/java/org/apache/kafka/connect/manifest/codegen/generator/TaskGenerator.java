@@ -1020,26 +1020,66 @@ public class TaskGenerator {
             firstParam = false;
         }
 
-        // Build HTTP request with optional auth and custom static headers
+        // Build HTTP request with optional auth, custom headers and method (GET/POST/PUT)
         body.beginControlFlow("try");
+        String lcHttpMethod = requester.getHttpMethod();
+        boolean lcJsonBody = needsJsonBody(requester, null);
+        boolean lcDataBody = needsDataBody(requester, null);
+        String lcBodyVar = null;
+        if (lcJsonBody || lcDataBody) {
+            try {
+                lcBodyVar = buildBodyPreamble(body, requester, null);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new CodegenException("Failed to serialize request_body_json: " + e.getMessage());
+            }
+        }
+        if (auth != null && auth.isOAuth()) {
+            body.addStatement("$T accessToken = refreshAccessToken()", String.class);
+        } else if (auth != null && auth.isJwt()) {
+            body.addStatement("$T jwtToken = buildJwt()", String.class);
+        }
         StringBuilder reqFmt = new StringBuilder(
             "$T request = $T.newBuilder()\n        .uri($T.create(urlBuilder.toString()))");
         List<Object> reqArgs = new ArrayList<>();
         reqArgs.add(HTTP_REQUEST);
         reqArgs.add(HTTP_REQUEST);
         reqArgs.add(URI_CLASS);
-        if (auth != null && auth.isBearer()) {
+        if (lcBodyVar != null) {
+            if (lcJsonBody) {
+                reqFmt.append("\n        .header(\"Content-Type\", \"application/json\")");
+            } else if (lcDataBody) {
+                reqFmt.append("\n        .header(\"Content-Type\", \"application/x-www-form-urlencoded\")");
+            }
+        }
+        if (auth == null || auth.isNoAuth() || (auth.isApiKey() && isApiKeyQueryParam(auth))) {
+            // no auth header
+        } else if (auth.isBearer()) {
             reqFmt.append("\n        .header(\"Authorization\", \"Bearer \" + $L)");
             reqArgs.add(interpolateTemplate(auth.getApiToken()));
-        } else if (auth != null && auth.isBasicHttp()) {
+        } else if (auth.isApiKey()) {
+            reqFmt.append("\n        .header($S, $L)");
+            reqArgs.add(resolveApiKeyHeaderName(auth));
+            reqArgs.add(interpolateTemplate(auth.getApiToken()));
+        } else if (auth.isBasicHttp()) {
             reqFmt.append("\n        .header(\"Authorization\", \"Basic \" + cachedCredentials)");
+        } else if (auth.isOAuth()) {
+            reqFmt.append("\n        .header(\"Authorization\", \"Bearer \" + accessToken)");
+        } else if (auth.isSessionToken()) {
+            reqFmt.append("\n        .header(\"Authorization\", \"Bearer \" + cachedSessionToken)");
+        } else if (auth.isLegacySessionToken()) {
+            reqFmt.append("\n        .header($S, cachedLegacyToken)");
+            reqArgs.add(auth.getHeader());
+        } else if (auth.isJwt()) {
+            reqFmt.append("\n        .header(\"Authorization\", \"$L \" + jwtToken)");
+            reqArgs.add(auth.getHeaderPrefix());
         }
         for (Map.Entry<String, String> h : requestHeaders.entrySet()) {
             reqFmt.append("\n        .header($S, $S)");
             reqArgs.add(h.getKey());
             reqArgs.add(h.getValue());
         }
-        reqFmt.append("\n        .GET()\n        .build()");
+        appendHttpMethod(reqFmt, reqArgs, lcHttpMethod, lcJsonBody, lcDataBody, lcBodyVar);
+        reqFmt.append("\n        .build()");
         body.addStatement(reqFmt.toString(), reqArgs.toArray());
 
         // Fetch with retry
@@ -2920,7 +2960,7 @@ public class TaskGenerator {
         AuthenticatorSpec auth,
         String suffix,
         boolean isFirstLevel
-    ) {
+    ) throws CodegenException {
         RequesterSpec parentRequester = parentStream.getRetriever().getRequester();
         String baseUrl = parentRequester.effectiveBaseUrl();
         String path = parentRequester.getPath();
@@ -2958,7 +2998,7 @@ public class TaskGenerator {
         }
 
         // Build + send request, with full auth.
-        emitAuthedGet(body, auth, "_url" + suffix, "_req" + suffix, "_resp" + suffix);
+        emitAuthedGet(body, auth, parentRequester, "_url" + suffix, "_req" + suffix, "_resp" + suffix);
 
         // Skip branch on non-2xx: continue if not first-level (we're inside a for-loop),
         // else return whatever we have so far.
@@ -3014,16 +3054,28 @@ public class TaskGenerator {
 
     /**
      * Emits {@code HttpRequest <reqVar> = ...; HttpResponse<String> <respVar> = sendWithRetry(<reqVar>);}
-     * with auth headers matching {@code auth}. Mirrors the auth branches in
-     * {@link #buildRequestStatement} but uses caller-supplied variable names so
-     * multiple requests can coexist in the same scope.
+     * with auth headers, custom request headers, and HTTP method matching the requester spec.
+     * Uses caller-supplied variable names so multiple requests can coexist in the same scope.
      */
     private void emitAuthedGet(
-        CodeBlock.Builder body, AuthenticatorSpec auth,
+        CodeBlock.Builder body, AuthenticatorSpec auth, RequesterSpec requester,
         String urlExpr, String reqVar, String respVar
-    ) {
+    ) throws CodegenException {
+        String httpMethod = requester != null ? requester.getHttpMethod() : "GET";
+        boolean jsonBody  = needsJsonBody(requester, null);
+        boolean dataBody  = needsDataBody(requester, null);
+        String bodyVar    = null;
+        if (jsonBody || dataBody) {
+            try {
+                bodyVar = buildBodyPreamble(body, requester, null);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new CodegenException("Failed to serialize request_body_json: " + e.getMessage());
+            }
+        }
         if (auth != null && auth.isOAuth()) {
             body.addStatement("$T _accessToken_$L = refreshAccessToken()", String.class, reqVar);
+        } else if (auth != null && auth.isJwt()) {
+            body.addStatement("$T _jwtToken_$L = buildJwt()", String.class, reqVar);
         }
         StringBuilder fmt = new StringBuilder("$T $L = $T.newBuilder()\n        .uri($T.create($L))");
         List<Object> args = new ArrayList<>();
@@ -3032,12 +3084,19 @@ public class TaskGenerator {
         args.add(HTTP_REQUEST);
         args.add(URI_CLASS);
         args.add(urlExpr);
-        if (auth == null || auth.isNoAuth()) {
+        if (bodyVar != null) {
+            if (jsonBody) {
+                fmt.append("\n        .header(\"Content-Type\", \"application/json\")");
+            } else if (dataBody) {
+                fmt.append("\n        .header(\"Content-Type\", \"application/x-www-form-urlencoded\")");
+            }
+        }
+        if (auth == null || auth.isNoAuth() || (auth.isApiKey() && isApiKeyQueryParam(auth))) {
             // no header
         } else if (auth.isBearer()) {
             fmt.append("\n        .header(\"Authorization\", \"Bearer \" + $L)");
             args.add(interpolateTemplate(auth.getApiToken()));
-        } else if (auth.isApiKey() && !isApiKeyQueryParam(auth)) {
+        } else if (auth.isApiKey()) {
             fmt.append("\n        .header($S, $L)");
             args.add(resolveApiKeyHeaderName(auth));
             args.add(interpolateTemplate(auth.getApiToken()));
@@ -3050,8 +3109,19 @@ public class TaskGenerator {
         } else if (auth.isLegacySessionToken()) {
             fmt.append("\n        .header($S, cachedLegacyToken)");
             args.add(auth.getHeader());
+        } else if (auth.isJwt()) {
+            fmt.append("\n        .header(\"Authorization\", \"$L \" + _jwtToken_").append(reqVar).append(")");
+            args.add(auth.getHeaderPrefix());
         }
-        fmt.append("\n        .GET()\n        .build()");
+        if (requester != null) {
+            for (Map.Entry<String, String> h : requester.getRequestHeaders().entrySet()) {
+                fmt.append("\n        .header($S, $S)");
+                args.add(h.getKey());
+                args.add(h.getValue());
+            }
+        }
+        appendHttpMethod(fmt, args, httpMethod, jsonBody, dataBody, bodyVar);
+        fmt.append("\n        .build()");
         body.addStatement(fmt.toString(), args.toArray());
         body.addStatement("$T<$T> $L = sendWithRetry($L)",
             HTTP_RESPONSE, String.class, respVar, reqVar);
