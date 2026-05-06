@@ -65,7 +65,12 @@ dependencies {
 
     testImplementation libs.junitJupiter
     testImplementation libs.mockitoCore
+    testImplementation libs.jacksonDataformatYaml
     testRuntimeOnly runtimeTestLibs
+
+    // Acceptance-test harness needs to reflectively instantiate generated SourceTask classes
+    // (io.kafka.connect.generated.*SourceTask) and the codegen-time runtime helpers they depend on.
+    testImplementation sourceSets.generated.output
 
     // Generated connector sources need AbstractConfig/ConfigDef (clients), SourceConnector/SourceTask (connect:api),
     // and Jackson (ObjectMapper used in poll() to parse HTTP responses)

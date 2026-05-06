@@ -1,0 +1,37 @@
+# Acceptance test config for the Google Classroom connector.
+#
+# Mirrors Airbyte's acceptance-test-config.yaml model. Secrets resolve at test
+# runtime from environment variables (${ENV_VAR}); when any required env var is
+# missing the harness SKIPS the test, matching Airbyte's CAT semantics.
+#
+# Live run:
+#   export AIRBYTE_GOOGLE_CLASSROOM_CLIENT_ID=...
+#   export AIRBYTE_GOOGLE_CLASSROOM_CLIENT_SECRET=...
+#   export AIRBYTE_GOOGLE_CLASSROOM_REFRESH_TOKEN=...
+#   ./gradlew :connect-manifest-codegen:test \
+#     --tests 'org.apache.kafka.connect.manifest.codegen.acceptance.AcceptanceTest'
+
+connector: GoogleClassroom
+
+config:
+  client_id: ${AIRBYTE_GOOGLE_CLASSROOM_CLIENT_ID}
+  client_secret: ${AIRBYTE_GOOGLE_CLASSROOM_CLIENT_SECRET}
+  client_refresh_token: ${AIRBYTE_GOOGLE_CLASSROOM_REFRESH_TOKEN}
+
+# Bound polls to keep tests deterministic against a live API.
+max_polls: 10
+resume_after_polls: 2
+
+# min_records: 0 because a fresh classroom domain may legitimately be empty;
+# we still verify start()/poll() does not throw and offsets advance/persist.
+streams:
+  - name: courses
+    min_records: 0
+  - name: teachers
+    min_records: 0
+  - name: students
+    min_records: 0
+  - name: coursework
+    min_records: 0
+  - name: studentsubmissions
+    min_records: 0
