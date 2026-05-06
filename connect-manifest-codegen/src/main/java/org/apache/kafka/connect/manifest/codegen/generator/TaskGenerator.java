@@ -98,6 +98,12 @@ public class TaskGenerator {
     private static final ClassName CUSTOM_REQUESTER =
         ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.customs",
             "CustomRequester");
+    private static final ClassName CUSTOM_TRANSFORMATION =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.customs",
+            "CustomTransformation");
+    private static final ClassName CUSTOM_RECORD_EXTRACTOR =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.customs",
+            "CustomRecordExtractor");
     private static final ClassName JSON_NODE =
         ClassName.get("com.fasterxml.jackson.databind", "JsonNode");
     private static final ClassName JINJA_RENDERER =
@@ -454,11 +460,11 @@ public class TaskGenerator {
             String transformsJson = TransformationPipelineFactory.toJson(s.getTransformations());
             String filterCondition = filterConditionFor(s);
             if (filterCondition != null) {
-                m.addStatement("this.$L = $T.fromJson($S, $S)",
+                m.addStatement("this.$L = $T.fromJson($S, $S, this.config.originalsStrings())",
                     pipelineFieldName(s.getName()), TRANSFORMATION_PIPELINE_FACTORY,
                     transformsJson, filterCondition);
             } else {
-                m.addStatement("this.$L = $T.fromJson($S, null)",
+                m.addStatement("this.$L = $T.fromJson($S, this.config.originalsStrings())",
                     pipelineFieldName(s.getName()), TRANSFORMATION_PIPELINE_FACTORY,
                     transformsJson);
             }
@@ -629,7 +635,11 @@ public class TaskGenerator {
         if (hasPagination && paginator.isCursor()) {
             body.add(buildCursorStateUpdate(paginator));
         }
-        body.add(buildFieldPathNav(fieldPath, hasPagination));
+        if (isCustomExtractor(stream)) {
+            body.add(buildCustomExtractorNavBlock(stream.getRetriever().getRecordSelector().getExtractor().getClassName()));
+        } else {
+            body.add(buildFieldPathNav(fieldPath, hasPagination));
+        }
         body.add(buildNormalizeAndCollect(hasPagination, paginator, cursorVar,
             isIncremental ? incrementalSync.getCursorField() : null,
             pipelineFieldName(streamName), incrementalSync));
@@ -744,7 +754,11 @@ public class TaskGenerator {
         if (hasPagination && paginator.isCursor()) {
             body.add(buildCursorStateUpdate(paginator));
         }
-        body.add(buildFieldPathNav(fieldPath, hasPagination));
+        if (isCustomExtractor(stream)) {
+            body.add(buildCustomExtractorNavBlock(stream.getRetriever().getRecordSelector().getExtractor().getClassName()));
+        } else {
+            body.add(buildFieldPathNav(fieldPath, hasPagination));
+        }
         body.add(buildNormalizeAndCollect(hasPagination, paginator, null, null,
             pipelineFieldName(streamName)));
 
@@ -1111,7 +1125,9 @@ public class TaskGenerator {
         body.endControlFlow();
         body.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
 
-        if (!fieldPath.isEmpty()) {
+        if (isCustomExtractor(stream)) {
+            body.add(buildCustomExtractorNavBlock(stream.getRetriever().getRecordSelector().getExtractor().getClassName()));
+        } else if (!fieldPath.isEmpty()) {
             body.add(buildFieldPathNav(fieldPath, true));
         }
 
@@ -1480,6 +1496,26 @@ public class TaskGenerator {
             CONNECT_EXCEPTION);
         b.endControlFlow();
         b.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
+        return b.build();
+    }
+
+    private boolean isCustomExtractor(StreamSpec stream) {
+        if (stream == null || stream.getRetriever() == null) return false;
+        RecordSelectorSpec sel = stream.getRetriever().getRecordSelector();
+        if (sel == null || sel.getExtractor() == null) return false;
+        return "CustomRecordExtractor".equals(sel.getExtractor().getType())
+            && sel.getExtractor().getClassName() != null
+            && !sel.getExtractor().getClassName().isBlank();
+    }
+
+    private CodeBlock buildCustomExtractorNavBlock(String className) {
+        CodeBlock.Builder b = CodeBlock.builder();
+        b.addStatement(
+            "$T<$T<$T, $T>> _extracted = $T.create($S, $T.class, this.config.originalsStrings(), $T.of())"
+                + ".extract(MAPPER.readTree(MAPPER.writeValueAsString(json)))",
+            List.class, Map.class, String.class, Object.class,
+            CUSTOM_REGISTRY, className, CUSTOM_RECORD_EXTRACTOR, Map.class);
+        b.addStatement("json = _extracted");
         return b.build();
     }
 
@@ -2784,7 +2820,11 @@ public class TaskGenerator {
         if (hasPagination && paginator.isCursor()) {
             body.add(buildCursorStateUpdate(paginator));
         }
-        body.add(buildFieldPathNav(fieldPath, hasPagination));
+        if (isCustomExtractor(stream)) {
+            body.add(buildCustomExtractorNavBlock(stream.getRetriever().getRecordSelector().getExtractor().getClassName()));
+        } else {
+            body.add(buildFieldPathNav(fieldPath, hasPagination));
+        }
         body.add(buildNormalizeAndCollect(hasPagination, paginator, null, null,
             pipelineFieldName(streamName)));
         body.nextControlFlow("catch ($T e)", InterruptedException.class);

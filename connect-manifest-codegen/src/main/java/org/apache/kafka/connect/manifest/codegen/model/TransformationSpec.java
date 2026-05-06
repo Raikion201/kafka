@@ -55,6 +55,10 @@ public class TransformationSpec {
     @JsonProperty("flatten_lists")
     private Boolean flattenLists;
 
+    /** CustomTransformation — fully-qualified Java class_name registered in CustomComponentRegistry. */
+    @JsonProperty("class_name")
+    private String className;
+
     /** DpathFlattenFields. */
     @JsonProperty("field_path")
     private List<String> fieldPath = Collections.emptyList();
@@ -98,6 +102,14 @@ public class TransformationSpec {
 
     public void setCondition(String condition) {
         this.condition = condition;
+    }
+
+    public String getClassName() {
+        return className;
+    }
+
+    public void setClassName(String className) {
+        this.className = className;
     }
 
     public String getOld() {

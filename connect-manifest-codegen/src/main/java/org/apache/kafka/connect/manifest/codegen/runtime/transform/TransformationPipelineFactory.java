@@ -22,9 +22,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.connect.manifest.codegen.model.AddedFieldSpec;
 import org.apache.kafka.connect.manifest.codegen.model.KeyTransformationSpec;
 import org.apache.kafka.connect.manifest.codegen.model.TransformationSpec;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomComponentRegistry;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomTransformation;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.logging.Logger;
 
 /**
@@ -43,29 +47,50 @@ public final class TransformationPipelineFactory {
     }
 
     /**
-     * Deserializes {@code specsJson} (Jackson-serialized {@code List<TransformationSpec>})
-     * and builds a {@link TransformationPipeline} with the supplied filter condition.
+     * Deserializes {@code specsJson} and builds a pipeline with the supplied filter condition.
      *
      * @param specsJson       JSON string, or {@code null}/{@code "[]"} for no transforms
      * @param filterCondition Jinja boolean template for record filtering, or {@code null}
      * @return a ready-to-use pipeline; never {@code null}
      */
     public static TransformationPipeline fromJson(String specsJson, String filterCondition) {
+        return fromJson(specsJson, filterCondition, null);
+    }
+
+    /**
+     * Overload that accepts a connector config for instantiating {@code CustomTransformation}
+     * components via {@link CustomComponentRegistry}.
+     */
+    public static TransformationPipeline fromJson(String specsJson, Map<String, String> connectorConfig) {
+        return fromJson(specsJson, null, connectorConfig);
+    }
+
+    /**
+     * Full form — filter condition + connector config for Custom* lookups.
+     */
+    public static TransformationPipeline fromJson(
+            String specsJson, String filterCondition, Map<String, String> connectorConfig) {
         List<TransformationSpec> specs = parseSpecs(specsJson);
         RecordFilter filter = (filterCondition != null && !filterCondition.isBlank())
             ? new RecordFilter(filterCondition) : null;
-        return fromSpecs(specs, filter);
+        return fromSpecs(specs, filter, connectorConfig);
     }
 
-    /** Builds a pipeline from already-parsed specs. */
+    /** Builds a pipeline from already-parsed specs without a connector config. */
     public static TransformationPipeline fromSpecs(List<TransformationSpec> specs, RecordFilter filter) {
+        return fromSpecs(specs, filter, null);
+    }
+
+    /** Builds a pipeline from already-parsed specs, with optional connector config for Custom* components. */
+    public static TransformationPipeline fromSpecs(
+            List<TransformationSpec> specs, RecordFilter filter, Map<String, String> connectorConfig) {
         if ((specs == null || specs.isEmpty()) && (filter == null || !filter.hasCondition())) {
             return TransformationPipeline.NOOP;
         }
         List<RecordTransformation> transforms = new ArrayList<>();
         if (specs != null) {
             for (TransformationSpec spec : specs) {
-                RecordTransformation t = buildTransform(spec);
+                RecordTransformation t = buildTransform(spec, connectorConfig);
                 if (t != null) {
                     transforms.add(t);
                 }
@@ -87,7 +112,7 @@ public final class TransformationPipelineFactory {
     }
 
     @SuppressWarnings("unchecked")
-    private static RecordTransformation buildTransform(TransformationSpec spec) {
+    private static RecordTransformation buildTransform(TransformationSpec spec, Map<String, String> connectorConfig) {
         if (spec == null || spec.getType() == null) {
             return null;
         }
@@ -112,9 +137,36 @@ public final class TransformationPipelineFactory {
                     Boolean.TRUE.equals(spec.getDeleteOriginValue()),
                     Boolean.TRUE.equals(spec.getReplaceRecord()),
                     kt);
+            case "CustomTransformation":
+                String cls = spec.getClassName();
+                if (cls == null || cls.isBlank()) {
+                    LOG.warning("TransformationPipelineFactory: CustomTransformation missing class_name, skipping");
+                    return null;
+                }
+                CustomTransformation delegate =
+                    CustomComponentRegistry.create(cls, CustomTransformation.class, connectorConfig, Map.of());
+                return new CustomTransformationAdapter(delegate);
             default:
                 LOG.warning("TransformationPipelineFactory: unknown transform type '" + spec.getType() + "', skipping");
                 return null;
+        }
+    }
+
+    /** Wraps a {@link CustomTransformation} as a {@link RecordTransformation}. */
+    static final class CustomTransformationAdapter implements RecordTransformation {
+        private final CustomTransformation delegate;
+
+        CustomTransformationAdapter(CustomTransformation delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void apply(Map<String, Object> record, Map<String, Object> ctx) {
+            Map<String, Object> result = delegate.transform(new HashMap<>(record));
+            if (result != null) {
+                record.clear();
+                record.putAll(result);
+            }
         }
     }
 
