@@ -34,6 +34,13 @@ sourceSets {
         java {
             srcDir layout.buildDirectory.dir('generated-sources/connectors')
         }
+        // The CLI writes META-INF/services/... into generated-sources/connectors alongside
+        // the .java files. Including it as a resources srcDir causes processGeneratedResources
+        // to copy that file into the JAR so Kafka Connect's plugin scanner finds the connectors.
+        resources {
+            srcDir layout.buildDirectory.dir('generated-sources/connectors')
+            exclude '**/*.java'
+        }
     }
 }
 
@@ -103,6 +110,7 @@ tasks.register('generateConnectors', JavaExec) {
 }
 
 compileGeneratedJava.dependsOn generateConnectors
+processGeneratedResources.dependsOn generateConnectors
 
 // Include generated connector classes in the main jar so they can be deployed as a connector plugin
 jar {

@@ -32,8 +32,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -89,6 +91,9 @@ public class ManifestCodegenCli {
      *
      * @return exit code
      */
+    private static final String CONNECTOR_SERVICE_FILE =
+        "META-INF/services/org.apache.kafka.connect.source.SourceConnector";
+
     static int run(String[] args) {
         if (args.length < 2 || args.length > 3) {
             System.err.println("Usage: ManifestCodegenCli <manifest.yaml> <output-dir> [package]");
@@ -122,17 +127,38 @@ public class ManifestCodegenCli {
             return EXIT_IO_ERROR;
         }
 
+        List<String> connectorFqcns = new ArrayList<>();
         for (File manifestFile : manifestFiles) {
-            int code = generateOne(manifestFile, outputDir, pkgName);
+            int code = generateOne(manifestFile, outputDir, pkgName, connectorFqcns);
             if (code != 0) {
                 return code;
             }
         }
 
+        return writeServiceLoaderFile(outputDir, connectorFqcns);
+    }
+
+    private static int writeServiceLoaderFile(Path outputDir, List<String> connectorFqcns) {
+        if (connectorFqcns.isEmpty()) {
+            return 0;
+        }
+        Path serviceFile = outputDir.resolve(CONNECTOR_SERVICE_FILE);
+        try {
+            Files.createDirectories(serviceFile.getParent());
+            Files.writeString(serviceFile,
+                String.join(System.lineSeparator(), connectorFqcns) + System.lineSeparator(),
+                StandardCharsets.UTF_8);
+            LOG.info("Wrote service-loader file: {}", serviceFile);
+        } catch (IOException e) {
+            LOG.error("Failed to write service-loader file {}: {}", serviceFile, e.getMessage(), e);
+            System.err.println("I/O error writing service-loader file: " + e.getMessage());
+            return EXIT_IO_ERROR;
+        }
         return 0;
     }
 
-    private static int generateOne(File manifestFile, Path outputDir, String pkgName) {
+    private static int generateOne(File manifestFile, Path outputDir, String pkgName,
+            List<String> connectorFqcns) {
         ManifestSpec spec;
         try {
             spec = new ManifestParser().parse(manifestFile);
@@ -151,6 +177,8 @@ public class ManifestCodegenCli {
             configFile.writeTo(outputDir);
             connectorFile.writeTo(outputDir);
             taskFile.writeTo(outputDir);
+
+            connectorFqcns.add(pkgName + "." + connectorFile.typeSpec.name);
 
             LOG.info("Generated {} in {}", configFile.typeSpec.name, outputDir);
             LOG.info("Generated {} in {}", connectorFile.typeSpec.name, outputDir);
