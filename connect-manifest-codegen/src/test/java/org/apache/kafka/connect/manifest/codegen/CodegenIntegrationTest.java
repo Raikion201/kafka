@@ -550,6 +550,25 @@ public class CodegenIntegrationTest {
     }
 
     @Test
+    void googleClassroom_generatedTask_nestedFetchTraversesParentChain() throws Exception {
+        String taskSrc = generate("google_classroom.yaml").task.toString();
+        // Nested fetch must call BOTH parent endpoints in order: courses → coursework
+        int coursesIdx = taskSrc.indexOf("/v1/courses\"");
+        int courseworkIdx = taskSrc.indexOf("/courseWork\"");
+        int submissionsIdx = taskSrc.indexOf("/studentSubmissions");
+        assertTrue(coursesIdx > 0,     "Nested fetch must request /v1/courses (level 1 parent)");
+        assertTrue(courseworkIdx > 0,  "Nested fetch must request /courseWork (level 2 parent)");
+        assertTrue(submissionsIdx > 0, "Child poll must request /studentSubmissions");
+        assertTrue(coursesIdx < courseworkIdx,
+            "Level-1 (courses) fetch must be emitted before level-2 (courseWork) fetch");
+        // Each slice carries both parent ids — partition_field 'course' and 'coursework'
+        assertTrue(taskSrc.contains("\"course\""),
+            "Nested fetch must store 'course' partition_field in slice map");
+        assertTrue(taskSrc.contains("\"coursework\""),
+            "Nested fetch must store 'coursework' partition_field in slice map");
+    }
+
+    @Test
     void googleClassroom_generatedTask_storesPartitionIndex() throws Exception {
         String taskSrc = generate("google_classroom.yaml").task.toString();
         // Partition index is persisted in offset store so polls resume across restarts
