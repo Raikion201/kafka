@@ -247,4 +247,64 @@ public class ManifestParserTest {
         assertEquals(0, retriever.getSubstreamRouter() == null ? 0 : 1);
         assertTrue(!retriever.hasSubstreamPartition());
     }
+
+    // ── DefaultErrorHandler / backoff / response_filter ───────────────────────
+
+    @Test
+    void airtable_parsesDefaultErrorHandlerMaxRetriesAndBackoffStrategies() throws Exception {
+        ManifestSpec spec = parser.parse(resource("source-airtable.yaml"));
+        var requester = spec.resolvedStreams().get(0).getRetriever().getRequester();
+        var eh = requester.getErrorHandler();
+        assertNotNull(eh, "airtable bases stream must inherit error_handler from base_requester via $ref");
+        assertEquals("DefaultErrorHandler", eh.getType());
+        assertEquals(Integer.valueOf(10), eh.getMaxRetries());
+        assertEquals(1, eh.getBackoffStrategies().size());
+        var backoff = eh.getBackoffStrategies().get(0);
+        assertEquals("ConstantBackoffStrategy", backoff.getType());
+        assertEquals(Double.valueOf(30.0), backoff.getBackoffTimeInSeconds());
+    }
+
+    @Test
+    void airtable_parsesResponseFilterPredicateAndFailureType() throws Exception {
+        ManifestSpec spec = parser.parse(resource("source-airtable.yaml"));
+        var eh = spec.resolvedStreams().get(0).getRetriever().getRequester().getErrorHandler();
+        var filters = eh.getResponseFilters();
+        assertEquals(3, filters.size(), "airtable defines 3 response_filters (predicate + 2 http_codes)");
+
+        var predicateFilter = filters.get(0);
+        assertNotNull(predicateFilter.getPredicate());
+        assertTrue(predicateFilter.getPredicate().contains("INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND"));
+        assertEquals("FAIL", predicateFilter.getAction());
+        assertEquals("config_error", predicateFilter.getFailureType());
+        assertNotNull(predicateFilter.getErrorMessage());
+        assertTrue(predicateFilter.getErrorMessage().contains("Personal Access Token"));
+
+        var codeFilter = filters.get(1);
+        assertEquals(java.util.List.of(403, 422), codeFilter.getHttpCodes());
+        assertEquals("FAIL", codeFilter.getAction());
+        assertEquals("config_error", codeFilter.getFailureType());
+        assertEquals("Permission denied or entity is unprocessable.", codeFilter.getErrorMessage());
+    }
+
+    @Test
+    void assemblyai_parsesCompositeErrorHandlerWithIgnoreFilter() throws Exception {
+        ManifestSpec spec = parser.parse(resource("assemblyai.yaml"));
+        var lemur = spec.resolvedStreams().stream()
+            .filter(s -> "lemur_response".equals(s.getName()))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("lemur_response stream missing"));
+        var eh = lemur.getRetriever().getRequester().getErrorHandler();
+        assertNotNull(eh);
+        assertEquals("CompositeErrorHandler", eh.getType());
+        assertEquals(1, eh.getErrorHandlers().size());
+
+        var nested = eh.getErrorHandlers().get(0);
+        assertEquals("DefaultErrorHandler", nested.getType());
+        assertEquals(1, nested.getResponseFilters().size());
+
+        var filter = nested.getResponseFilters().get(0);
+        assertEquals("IGNORE", filter.getAction());
+        assertEquals(java.util.List.of(401), filter.getHttpCodes());
+        assertEquals("Paid plan required", filter.getErrorMessage());
+    }
 }

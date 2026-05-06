@@ -247,6 +247,15 @@ public class RequesterSpec {
         @JsonDeserialize(using = ResponseFilterListDeserializer.class)
         private List<ResponseFilterSpec> responseFilters = Collections.emptyList();
 
+        @JsonProperty("max_retries")
+        private Integer maxRetries;
+
+        @JsonProperty("max_time")
+        private Integer maxTime;
+
+        @JsonProperty("backoff_strategies")
+        private List<BackoffStrategySpec> backoffStrategies = Collections.emptyList();
+
         public String getType() {
             return type;
         }
@@ -279,6 +288,30 @@ public class RequesterSpec {
             this.responseFilters = v;
         }
 
+        public Integer getMaxRetries() {
+            return maxRetries;
+        }
+
+        public void setMaxRetries(Integer v) {
+            this.maxRetries = v;
+        }
+
+        public Integer getMaxTime() {
+            return maxTime;
+        }
+
+        public void setMaxTime(Integer v) {
+            this.maxTime = v;
+        }
+
+        public List<BackoffStrategySpec> getBackoffStrategies() {
+            return backoffStrategies == null ? Collections.emptyList() : backoffStrategies;
+        }
+
+        public void setBackoffStrategies(List<BackoffStrategySpec> v) {
+            this.backoffStrategies = v;
+        }
+
         /** Recursively collects HTTP status codes mapped to SUCCESS action. */
         public Set<Integer> getSuccessHttpCodes() {
             Set<Integer> codes = new HashSet<>();
@@ -303,6 +336,17 @@ public class RequesterSpec {
         @JsonProperty("http_codes")
         private List<Integer> httpCodes = Collections.emptyList();
 
+        @JsonProperty("error_message_contains")
+        private String errorMessageContains;
+
+        private String predicate;
+
+        @JsonProperty("error_message")
+        private String errorMessage;
+
+        @JsonProperty("failure_type")
+        private String failureType;
+
         public String getAction() {
             return action;
         }
@@ -317,6 +361,125 @@ public class RequesterSpec {
 
         public void setHttpCodes(List<Integer> v) {
             this.httpCodes = v;
+        }
+
+        public String getErrorMessageContains() {
+            return errorMessageContains;
+        }
+
+        public void setErrorMessageContains(String v) {
+            this.errorMessageContains = v;
+        }
+
+        public String getPredicate() {
+            return predicate;
+        }
+
+        public void setPredicate(String v) {
+            this.predicate = v;
+        }
+
+        public String getErrorMessage() {
+            return errorMessage;
+        }
+
+        public void setErrorMessage(String v) {
+            this.errorMessage = v;
+        }
+
+        public String getFailureType() {
+            return failureType;
+        }
+
+        public void setFailureType(String v) {
+            this.failureType = v;
+        }
+    }
+
+    /**
+     * Models one entry inside {@code backoff_strategies}. The {@code type} field
+     * selects which subset of attributes is meaningful at runtime. Mirrors:
+     * <ul>
+     *   <li>ConstantBackoff → backoffTimeInSeconds</li>
+     *   <li>ExponentialBackoff → factor (default 5)</li>
+     *   <li>WaitTimeFromHeader → header, regex?, maxWaitingTimeInSeconds?</li>
+     *   <li>WaitUntilTimeFromHeader → header, minWait?, regex?</li>
+     * </ul>
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class BackoffStrategySpec {
+
+        private String type;
+
+        @JsonProperty("backoff_time_in_seconds")
+        private Double backoffTimeInSeconds;
+
+        private Double factor;
+
+        private String header;
+
+        private String regex;
+
+        @JsonProperty("max_waiting_time_in_seconds")
+        private Double maxWaitingTimeInSeconds;
+
+        @JsonProperty("min_wait")
+        private Double minWait;
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String v) {
+            this.type = v;
+        }
+
+        public Double getBackoffTimeInSeconds() {
+            return backoffTimeInSeconds;
+        }
+
+        public void setBackoffTimeInSeconds(Double v) {
+            this.backoffTimeInSeconds = v;
+        }
+
+        public Double getFactor() {
+            return factor;
+        }
+
+        public void setFactor(Double v) {
+            this.factor = v;
+        }
+
+        public String getHeader() {
+            return header;
+        }
+
+        public void setHeader(String v) {
+            this.header = v;
+        }
+
+        public String getRegex() {
+            return regex;
+        }
+
+        public void setRegex(String v) {
+            this.regex = v;
+        }
+
+        public Double getMaxWaitingTimeInSeconds() {
+            return maxWaitingTimeInSeconds;
+        }
+
+        public void setMaxWaitingTimeInSeconds(Double v) {
+            this.maxWaitingTimeInSeconds = v;
+        }
+
+        public Double getMinWait() {
+            return minWait;
+        }
+
+        public void setMinWait(Double v) {
+            this.minWait = v;
         }
     }
 }
