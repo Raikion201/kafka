@@ -148,6 +148,8 @@ public class TaskGenerator {
         ClassName.get("java.net.http", "HttpRequest.BodyPublishers");
     private static final ClassName STD_CHARSETS =
         ClassName.get("java.nio.charset", "StandardCharsets");
+    private static final ClassName DATETIME_WINDOW_HELPER =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime", "DatetimeWindowHelper");
 
     /** Used at codegen time to serialize nested {@code request_body_json} values to JSON literals. */
     private static final com.fasterxml.jackson.databind.ObjectMapper CODEGEN_MAPPER =
@@ -612,6 +614,11 @@ public class TaskGenerator {
         // Restore or initialise DatetimeBasedCursor from offset store.
         if (isIncremental) {
             body.add(buildIncrementalInit(streamName, incrementalSync));
+            // Window slicing: compute window end once here so it's in scope for both
+            // URL building (end_time_option injection) and cursor advancement after fetch.
+            if (incrementalSync.hasStep()) {
+                emitWindowEndComputation(body, incrementalSync, cursorVar);
+            }
         }
 
         body.add(buildUrlBlock(baseUrl, path, requestParams, paginator, hasPagination, auth,
@@ -625,7 +632,7 @@ public class TaskGenerator {
         body.add(buildFieldPathNav(fieldPath, hasPagination));
         body.add(buildNormalizeAndCollect(hasPagination, paginator, cursorVar,
             isIncremental ? incrementalSync.getCursorField() : null,
-            pipelineFieldName(streamName)));
+            pipelineFieldName(streamName), incrementalSync));
         body.nextControlFlow("catch ($T e)", InterruptedException.class);
         body.addStatement("$T.currentThread().interrupt()", Thread.class);
         body.addStatement(
@@ -1286,7 +1293,8 @@ public class TaskGenerator {
             hasParams = true;
         }
 
-        // DatetimeBasedCursor: inject start / end date range as query params
+        // DatetimeBasedCursor: inject start / end date range as query params.
+        // _windowEnd (for step-based cursors) is declared before this block by the caller.
         if (incrementalSync != null && incrementalSync.isDatetimeBased()) {
             hasParams = appendIncrementalSyncParams(b, incrementalSync, hasParams, cursorVarName);
         }
@@ -1377,13 +1385,60 @@ public class TaskGenerator {
         IncrementalSyncSpec.TimeOptionSpec endOpt = sync.getEndTimeOption();
         if (endOpt != null && endOpt.getFieldName() != null) {
             String sep = hasParams ? "&" : "?";
-            // Epoch seconds — many APIs (e.g. Delighted) expect integer timestamps.
-            b.addStatement("urlBuilder.append($S + $T.valueOf($T.currentTimeMillis() / 1000))",
-                sep + endOpt.getFieldName() + "=",
-                String.class, System.class);
+            if (sync.hasStep()) {
+                // Window slicing — use the precomputed _windowEnd (already URL-safe ISO string).
+                b.addStatement("urlBuilder.append($S + $T.encode(_windowEnd, $T.UTF_8))",
+                    sep + endOpt.getFieldName() + "=",
+                    ClassName.get("java.net", "URLEncoder"),
+                    ClassName.get("java.nio.charset", "StandardCharsets"));
+            } else {
+                // Epoch seconds — many APIs (e.g. Delighted) expect integer timestamps.
+                b.addStatement("urlBuilder.append($S + $T.valueOf($T.currentTimeMillis() / 1000))",
+                    sep + endOpt.getFieldName() + "=",
+                    String.class, System.class);
+            }
             hasParams = true;
         }
         return hasParams;
+    }
+
+    /**
+     * Emits {@code String _windowEnd = DatetimeWindowHelper.computeWindowEnd(cursor, fmt, step);}.
+     * Immediately follows with {@code if (_windowEnd == null) return result;} so the poll method
+     * exits early when the sync has caught up to the current time.
+     *
+     * <p>The step value is Jinja-interpolated when it contains a template expression.</p>
+     */
+    private void emitWindowEndComputation(
+        CodeBlock.Builder b, IncrementalSyncSpec sync, String cursorVarName
+    ) {
+        String fmt = sync.getDatetimeFormat();
+        String step = sync.getStep();
+        boolean stepIsTemplate = step != null && (step.contains("{{") || step.contains("{%"));
+        if (stepIsTemplate) {
+            b.addStatement("$T _windowEnd = $T.computeWindowEnd($L, $S, $L)",
+                String.class, DATETIME_WINDOW_HELPER, cursorVarName, fmt, interpolateTemplate(step));
+        } else {
+            b.addStatement("$T _windowEnd = $T.computeWindowEnd($L, $S, $S)",
+                String.class, DATETIME_WINDOW_HELPER, cursorVarName, fmt, step);
+        }
+        b.beginControlFlow("if (_windowEnd == null)");
+        b.addStatement("return result");
+        b.endControlFlow();
+    }
+
+    /**
+     * Emits cursor advancement for window-sliced incremental sync:
+     * {@code cursorVar = DatetimeWindowHelper.advanceCursor(_windowEnd, fmt, granularity);}.
+     * Advances past the window end by the cursor_granularity, then persists it.
+     */
+    private void emitWindowCursorAdvance(
+        CodeBlock.Builder b, IncrementalSyncSpec sync, String cursorVarName
+    ) {
+        String fmt = sync.getDatetimeFormat();
+        String gran = sync.getCursorGranularity();
+        b.addStatement("$L = $T.advanceCursor(_windowEnd, $S, $S)",
+            cursorVarName, DATETIME_WINDOW_HELPER, fmt, gran);
     }
 
     /**
@@ -1449,6 +1504,14 @@ public class TaskGenerator {
         boolean hasPagination, PaginatorSpec paginator, String cursorVarName, String jsonCursorField,
         String pipelineField
     ) {
+        return buildNormalizeAndCollect(hasPagination, paginator, cursorVarName, jsonCursorField,
+            pipelineField, null);
+    }
+
+    private CodeBlock buildNormalizeAndCollect(
+        boolean hasPagination, PaginatorSpec paginator, String cursorVarName, String jsonCursorField,
+        String pipelineField, IncrementalSyncSpec incrementalSync
+    ) {
         CodeBlock.Builder b = CodeBlock.builder();
         b.addStatement("$T<$T> records", List.class, Object.class);
         b.beginControlFlow("if (json instanceof $T)", List.class);
@@ -1466,11 +1529,14 @@ public class TaskGenerator {
             }
         }
 
-        // For DatetimeBasedCursor: scan records for the max cursor value BEFORE emitting
-        // SourceRecords so that the offset stored in each record already reflects the
-        // most advanced position in this batch.
+        // For DatetimeBasedCursor: advance cursor before emitting so offsets are current.
+        // With step: advance to window end (+ granularity); without step: scan records for max.
         if (cursorVarName != null && jsonCursorField != null) {
-            b.add(buildIncrementalCursorUpdate(cursorVarName, jsonCursorField));
+            if (incrementalSync != null && incrementalSync.hasStep()) {
+                emitWindowCursorAdvance(b, incrementalSync, cursorVarName);
+            } else {
+                b.add(buildIncrementalCursorUpdate(cursorVarName, jsonCursorField));
+            }
         }
 
         CodeBlock positionMap = buildPositionMapCode(paginator, cursorVarName);
