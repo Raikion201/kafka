@@ -168,12 +168,6 @@ public class ManifestCoverageReport {
                 Set<String> hits = featureHits(body, HARD_BLOCKERS);
                 Set<String> soft = featureHits(body, SOFT_BLOCKERS);
                 Set<String> rely = featureHits(body, RELIABILITY_GAPS);
-                // DatetimeBasedCursor with step → window slicing not implemented.
-                boolean slicedCursor = body.contains("type: DatetimeBasedCursor")
-                    && body.matches("(?s).*\\bstep:\\s*P[A-Z0-9]+.*");
-                if (slicedCursor) {
-                    hits.add("DatetimeBasedCursor.step (slicing)");
-                }
 
                 hits.forEach(f -> blockerCounts.merge(f, 1, Integer::sum));
                 soft.forEach(f -> blockerCounts.merge(f + " [soft]", 1, Integer::sum));

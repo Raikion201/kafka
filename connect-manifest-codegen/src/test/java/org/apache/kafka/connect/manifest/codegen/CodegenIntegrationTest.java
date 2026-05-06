@@ -1297,6 +1297,145 @@ public class CodegenIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // PHASE 4 — DatetimeBasedCursor window slicing
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void stepWindow_generatedTaskCompiles(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("step_window_test.yaml");
+        compileTriple(g, tmpDir);
+        String taskSrc = g.task.toString();
+        // Window-end computation must be emitted
+        assertTrue(taskSrc.contains("_windowEnd"), "Must emit _windowEnd variable");
+        assertTrue(taskSrc.contains("DatetimeWindowHelper.computeWindowEnd"),
+            "Must call computeWindowEnd");
+        assertTrue(taskSrc.contains("DatetimeWindowHelper.advanceCursor"),
+            "Must call advanceCursor for cursor advancement");
+        // end_time_option must inject _windowEnd, not raw epoch seconds
+        assertTrue(taskSrc.contains("encode(_windowEnd"),
+            "end_time_option must be URL-encoded _windowEnd");
+        // Jinja-templated step (dynamic_step stream)
+        assertTrue(taskSrc.contains("render(\"P"), "Dynamic step stream must interpolate step");
+    }
+
+    @Test
+    void stepWindow_mockHttp_windowBoundaries(@TempDir Path tmpDir) throws Exception {
+        // Window: 2020-01-01 → 2020-01-02 (P1D step, events_daily stream)
+        String startDate = "2020-01-01T00:00:00";
+        String expectedEnd = "2020-01-02T00:00:00";
+
+        com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer.create(
+            new java.net.InetSocketAddress(0), 0);
+        java.util.concurrent.atomic.AtomicReference<String> capturedStart = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<String> capturedEnd   = new java.util.concurrent.atomic.AtomicReference<>();
+
+        server.createContext("/api/events", exchange -> {
+            String query = exchange.getRequestURI().getQuery();
+            if (query != null) {
+                for (String part : query.split("&")) {
+                    if (part.startsWith("start=")) capturedStart.set(java.net.URLDecoder.decode(part.substring(6), java.nio.charset.StandardCharsets.UTF_8));
+                    if (part.startsWith("end=")) capturedEnd.set(java.net.URLDecoder.decode(part.substring(4), java.nio.charset.StandardCharsets.UTF_8));
+                }
+            }
+            byte[] body = "{\"items\":[{\"id\":1,\"created_at\":\"2020-01-01T10:00:00\"}]}".getBytes();
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.getResponseBody().close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            GeneratedTriple g = generate("step_window_test.yaml");
+            compileTriple(g, tmpDir);
+
+            URLClassLoader loader = new URLClassLoader(new URL[]{tmpDir.toUri().toURL()}, getClass().getClassLoader());
+            Class<?> taskClass = loader.loadClass(PKG + ".StepWindowTestSourceTask");
+            SourceTaskContext ctx = Mockito.mock(SourceTaskContext.class);
+            OffsetStorageReader reader = Mockito.mock(OffsetStorageReader.class);
+            Mockito.when(ctx.offsetStorageReader()).thenReturn(reader);
+            Mockito.when(reader.offset(Mockito.any())).thenReturn(null);
+            Object task = taskClass.getDeclaredConstructor().newInstance();
+            taskClass.getMethod("initialize", SourceTaskContext.class).invoke(task, ctx);
+            taskClass.getMethod("start", Map.class).invoke(task,
+                Map.of("server_url", "http://localhost:" + port,
+                       "start_date", startDate));
+
+            List<?> records = pollStream(task, "pollEventsDaily");
+            assertFalse(records.isEmpty(), "Must return records from window");
+            // start param must match cursor (start_date on first poll)
+            assertNotNull(capturedStart.get(), "start query param must be sent");
+            assertEquals(startDate, capturedStart.get(), "start must be the cursor (start_date)");
+            assertNotNull(capturedEnd.get(), "end query param must be sent");
+            assertEquals(expectedEnd, capturedEnd.get(),
+                "end must be cursor + P1D (window end)");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void stepWindow_mockHttp_cursorAdvancesAfterWindow(@TempDir Path tmpDir) throws Exception {
+        // After first window, cursor must advance to windowEnd + granularity
+        // events_daily: step=P1D, granularity=PT1S
+        // Window 1: 2020-01-01 → 2020-01-02; cursor after = 2020-01-02T00:00:01
+        String startDate = "2020-01-01T00:00:00";
+
+        com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer.create(
+            new java.net.InetSocketAddress(0), 0);
+        java.util.concurrent.atomic.AtomicReference<String> window2Start = new java.util.concurrent.atomic.AtomicReference<>();
+
+        final int[] callCount = {0};
+        server.createContext("/api/events", exchange -> {
+            callCount[0]++;
+            String query = exchange.getRequestURI().getQuery();
+            if (callCount[0] == 2 && query != null) {
+                for (String part : query.split("&")) {
+                    if (part.startsWith("start=")) {
+                        window2Start.set(java.net.URLDecoder.decode(part.substring(6), java.nio.charset.StandardCharsets.UTF_8));
+                    }
+                }
+            }
+            byte[] body = ("{\"items\":[{\"id\":" + callCount[0] + ",\"created_at\":\"2020-01-01T10:00:00\"}]}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.getResponseBody().close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            GeneratedTriple g = generate("step_window_test.yaml");
+            compileTriple(g, tmpDir);
+
+            URLClassLoader loader = new URLClassLoader(new URL[]{tmpDir.toUri().toURL()}, getClass().getClassLoader());
+            Class<?> taskClass = loader.loadClass(PKG + ".StepWindowTestSourceTask");
+            SourceTaskContext ctx = Mockito.mock(SourceTaskContext.class);
+            OffsetStorageReader reader = Mockito.mock(OffsetStorageReader.class);
+            Mockito.when(ctx.offsetStorageReader()).thenReturn(reader);
+            Mockito.when(reader.offset(Mockito.any())).thenReturn(null);
+            Object task = taskClass.getDeclaredConstructor().newInstance();
+            taskClass.getMethod("initialize", SourceTaskContext.class).invoke(task, ctx);
+            taskClass.getMethod("start", Map.class).invoke(task,
+                Map.of("server_url", "http://localhost:" + port,
+                       "start_date", startDate));
+
+            // Poll 1: window 2020-01-01 → 2020-01-02
+            pollStream(task, "pollEventsDaily");
+
+            // Simulate cursor save: extract cursor value from first poll's SourceRecord offset
+            // and mock reader returning it for second poll
+            java.lang.reflect.Field cursorField = taskClass.getDeclaredField("cursor_events_daily");
+            cursorField.setAccessible(true);
+            String savedCursor = (String) cursorField.get(task);
+            assertNotNull(savedCursor, "Cursor must be set after first window");
+            // Cursor should be 2020-01-02T00:00:01 (window end + 1s granularity)
+            assertEquals("2020-01-02T00:00:01", savedCursor,
+                "Cursor must advance to windowEnd + cursor_granularity");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // HELPERS
     // ══════════════════════════════════════════════════════════════════════════
 
