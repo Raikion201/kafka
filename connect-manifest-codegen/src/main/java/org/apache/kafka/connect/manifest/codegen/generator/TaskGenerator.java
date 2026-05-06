@@ -111,6 +111,8 @@ public class TaskGenerator {
         ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry", "ResponseAction");
     private static final ClassName ERROR_RESOLUTION =
         ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry", "ErrorResolution");
+    private static final ClassName IGNORED_RESPONSES =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry", "IgnoredResponses");
     private static final ClassName BACKOFF_STRATEGY =
         ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry.backoff", "BackoffStrategy");
     private static final ClassName BACKOFF_STRATEGY_CHAIN =
@@ -1977,9 +1979,11 @@ public class TaskGenerator {
         );
         body.addStatement("$T resolution = retryPolicy.interpretResponse(resp)", ERROR_RESOLUTION);
         body.addStatement("$T action = resolution.action()", RESPONSE_ACTION);
-        body.beginControlFlow("if (action == $T.SUCCESS || action == $T.IGNORE)",
-            RESPONSE_ACTION, RESPONSE_ACTION);
+        body.beginControlFlow("if (action == $T.SUCCESS)", RESPONSE_ACTION);
         body.addStatement("return resp");
+        body.endControlFlow();
+        body.beginControlFlow("if (action == $T.IGNORE)", RESPONSE_ACTION);
+        body.addStatement("return $T.empty(resp)", IGNORED_RESPONSES);
         body.endControlFlow();
         body.beginControlFlow("if (action == $T.FAIL)", RESPONSE_ACTION);
         body.addStatement(

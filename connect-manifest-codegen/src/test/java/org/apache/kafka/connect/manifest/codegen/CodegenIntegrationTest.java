@@ -682,6 +682,133 @@ public class CodegenIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // ERROR HANDLER + BACKOFF — codegen + mock HTTP runtime
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void errorHandler_generatedTask_containsDefaultRetryPolicyAndConstantBackoff() throws Exception {
+        String taskSrc = generate("error_handler_test.yaml").task.toString();
+        assertTrue(taskSrc.contains("new DefaultRetryPolicy("),
+            "Generated task must instantiate DefaultRetryPolicy from the parsed error_handler");
+        assertTrue(taskSrc.contains("new ConstantBackoffStrategy("),
+            "Generated task must instantiate ConstantBackoffStrategy from backoff_strategies");
+        assertTrue(taskSrc.contains("retryPolicy.interpretResponse"),
+            "sendWithRetry must delegate response classification to the RetryPolicy field");
+        assertTrue(taskSrc.contains("backoffStrategy.backoffMillis"),
+            "sendWithRetry must delegate sleep timing to the BackoffStrategy field");
+    }
+
+    @Test
+    void errorHandler_mockHttp_retriesTransient500ThenSucceeds(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("error_handler_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+
+        byte[] body = "{\"results\":[{\"id\":1,\"name\":\"widget\"}]}".getBytes(StandardCharsets.UTF_8);
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/items", exchange -> {
+            int n = calls.incrementAndGet();
+            if (n <= 2) {
+                exchange.sendResponseHeaders(500, -1);
+            } else {
+                exchange.sendResponseHeaders(200, body.length);
+                exchange.getResponseBody().write(body);
+            }
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+
+        try {
+            Object task = startMockTask(g, tmpDir, port);
+            List<?> records = pollOnce(task);
+            assertEquals(1, records.size(), "Task must succeed after 2 transient 500s");
+            assertEquals(3, calls.get(), "Task must have called the endpoint exactly 3 times");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void errorHandler_mockHttp_ignoreFilterReturnsEmptyForMatchingStatus(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("error_handler_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/items", exchange -> {
+            byte[] msg = "{\"error\":\"paid plan required\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(401, msg.length);
+            exchange.getResponseBody().write(msg);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+
+        try {
+            Object task = startMockTask(g, tmpDir, port);
+            List<?> records = pollOnce(task);
+            // IGNORE keeps the response as-is; field_path navigation finds no `results` array →
+            // poll() yields no records but does not throw.
+            assertEquals(0, records.size(),
+                "401 IGNORE must result in zero records, not a thrown ConnectException");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void errorHandler_mockHttp_failFilterThrowsConnectException(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("error_handler_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/items", exchange -> {
+            exchange.sendResponseHeaders(418, -1);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+
+        try {
+            Object task = startMockTask(g, tmpDir, port);
+            java.lang.reflect.InvocationTargetException ex = assertThrows(
+                java.lang.reflect.InvocationTargetException.class,
+                () -> task.getClass().getMethod("poll").invoke(task));
+            Throwable cause = ex.getCause();
+            assertNotNull(cause, "poll() must propagate the underlying exception");
+            assertTrue(cause.getClass().getSimpleName().contains("ConnectException")
+                    || (cause.getCause() != null
+                        && cause.getCause().getClass().getSimpleName().contains("ConnectException")),
+                "418 FAIL filter must surface as ConnectException, got: " + cause);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    private Object startMockTask(GeneratedTriple g, Path tmpDir, int port) throws Exception {
+        URLClassLoader loader = new URLClassLoader(
+            new URL[]{tmpDir.toUri().toURL()}, getClass().getClassLoader());
+        Class<?> taskClass = loader.loadClass(PKG + "." + g.task.typeSpec.name);
+
+        SourceTaskContext ctx = Mockito.mock(SourceTaskContext.class);
+        OffsetStorageReader reader = Mockito.mock(OffsetStorageReader.class);
+        Mockito.when(ctx.offsetStorageReader()).thenReturn(reader);
+        Mockito.when(reader.offset(Mockito.any())).thenReturn(null);
+
+        Object task = taskClass.getDeclaredConstructor().newInstance();
+        Method initialize = taskClass.getMethod("initialize", SourceTaskContext.class);
+        initialize.invoke(task, ctx);
+
+        Map<String, String> props = Map.of("server_url", "http://localhost:" + port);
+        taskClass.getMethod("start", Map.class).invoke(task, props);
+        return task;
+    }
+
+    private List<?> pollOnce(Object task) throws Exception {
+        return (List<?>) task.getClass().getMethod("poll").invoke(task);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // BAD PATHS
     // ══════════════════════════════════════════════════════════════════════════
 
