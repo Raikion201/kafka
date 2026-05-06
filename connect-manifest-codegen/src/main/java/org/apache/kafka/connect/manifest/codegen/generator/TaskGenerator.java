@@ -1044,7 +1044,9 @@ public class TaskGenerator {
         reqArgs.add(HTTP_REQUEST);
         reqArgs.add(HTTP_REQUEST);
         reqArgs.add(URI_CLASS);
-        if (lcBodyVar != null) {
+        boolean lcHasExplicitCt = requestHeaders.keySet().stream()
+            .anyMatch(k -> k.equalsIgnoreCase("Content-Type"));
+        if (lcBodyVar != null && !lcHasExplicitCt) {
             if (lcJsonBody) {
                 reqFmt.append("\n        .header(\"Content-Type\", \"application/json\")");
             } else if (lcDataBody) {
@@ -1384,12 +1386,6 @@ public class TaskGenerator {
         return hasParams;
     }
 
-    private void appendPaginationParams(
-        CodeBlock.Builder b, PaginatorSpec paginator, boolean firstParam
-    ) {
-        appendPaginationParams(b, paginator, firstParam, false);
-    }
-
     /**
      * Appends page-token / page-number / offset query-string parameters to {@code urlBuilder}.
      * When {@code skipBodyInjected} is {@code true}, parameters whose {@code inject_into} is
@@ -1609,22 +1605,22 @@ public class TaskGenerator {
      * Jinja-templated strings are wrapped in {@code render(...)}, nested maps/lists are
      * serialized to a JSON literal and decoded at runtime via {@code MAPPER.readValue}.
      */
-    private void emitBodyMapPut(CodeBlock.Builder b, String key, Object val)
+    private void emitBodyMapPut(CodeBlock.Builder b, String mapVar, String key, Object val)
             throws com.fasterxml.jackson.core.JsonProcessingException {
         if (val instanceof String strVal) {
             if (strVal.contains("{{") || strVal.contains("{%")) {
-                b.addStatement("_bodyMap.put($S, $L)", key, interpolateTemplate(strVal));
+                b.addStatement("$L.put($S, $L)", mapVar, key, interpolateTemplate(strVal));
             } else {
-                b.addStatement("_bodyMap.put($S, $S)", key, strVal);
+                b.addStatement("$L.put($S, $S)", mapVar, key, strVal);
             }
         } else if (val instanceof Number || val instanceof Boolean) {
-            b.addStatement("_bodyMap.put($S, $L)", key, val);
+            b.addStatement("$L.put($S, $L)", mapVar, key, val);
         } else if (val == null) {
-            b.addStatement("_bodyMap.put($S, ($T) null)", key, Object.class);
+            b.addStatement("$L.put($S, ($T) null)", mapVar, key, Object.class);
         } else {
             String jsonLiteral = CODEGEN_MAPPER.writeValueAsString(val);
-            b.addStatement("_bodyMap.put($S, MAPPER.readValue($S, $T.class))",
-                key, jsonLiteral, Object.class);
+            b.addStatement("$L.put($S, MAPPER.readValue($S, $T.class))",
+                mapVar, key, jsonLiteral, Object.class);
         }
     }
 
@@ -1644,6 +1640,16 @@ public class TaskGenerator {
     private String buildBodyPreamble(
         CodeBlock.Builder b, RequesterSpec requester, PaginatorSpec paginator
     ) throws com.fasterxml.jackson.core.JsonProcessingException {
+        return buildBodyPreamble(b, requester, paginator, "");
+    }
+
+    /**
+     * @param varSuffix appended to {@code _bodyMap}/{@code _bodyStr} to avoid name collisions
+     *                  when this method is called multiple times in the same scope.
+     */
+    private String buildBodyPreamble(
+        CodeBlock.Builder b, RequesterSpec requester, PaginatorSpec paginator, String varSuffix
+    ) throws com.fasterxml.jackson.core.JsonProcessingException {
         boolean jsonBody = needsJsonBody(requester, paginator);
         boolean dataBody = !jsonBody && needsDataBody(requester, paginator);
 
@@ -1651,38 +1657,50 @@ public class TaskGenerator {
             return null;
         }
 
+        String bodyMapVar = "_bodyMap" + varSuffix;
+        String bodyStrVar = "_bodyStr" + varSuffix;
+
         ParameterizedTypeName mapStrObj = ParameterizedTypeName.get(
             ClassName.get("java.util", "Map"), ClassName.get(String.class), ClassName.get(Object.class));
 
         if (jsonBody) {
-            b.addStatement("$T _bodyMap = new $T<>()", mapStrObj, ClassName.get("java.util", "LinkedHashMap"));
+            b.addStatement("$T $L = new $T<>()", mapStrObj, bodyMapVar, ClassName.get("java.util", "LinkedHashMap"));
             if (requester != null && requester.getRequestBodyJson() != null) {
                 for (Map.Entry<String, Object> entry : requester.getRequestBodyJson().entrySet()) {
-                    emitBodyMapPut(b, entry.getKey(), entry.getValue());
+                    emitBodyMapPut(b, bodyMapVar, entry.getKey(), entry.getValue());
                 }
             }
             if (isBodyInjectedJson(paginator)) {
                 String fieldName = paginator.getPageTokenOption().getFieldName();
                 if (fieldName != null && !fieldName.isEmpty()) {
-                    b.beginControlFlow("if (nextCursor != null)");
-                    b.addStatement("_bodyMap.put($S, nextCursor)", fieldName);
-                    b.endControlFlow();
+                    if (paginator.isCursor()) {
+                        b.beginControlFlow("if (nextCursor != null)");
+                        b.addStatement("$L.put($S, nextCursor)", bodyMapVar, fieldName);
+                        b.endControlFlow();
+                    } else if (paginator.isOffsetIncrement()) {
+                        b.addStatement("$L.put($S, $T.valueOf(offset))", bodyMapVar, fieldName, String.class);
+                    } else if (paginator.isPageIncrement()) {
+                        b.addStatement("$L.put($S, $T.valueOf(page))", bodyMapVar, fieldName, String.class);
+                    }
                 }
-            }
-            if (paginator != null && paginator.isPageIncrement() && isBodyInjectedJson(paginator)) {
-                b.addStatement("_bodyMap.put($S, $T.valueOf(page))", paginator.pageParamName(), String.class);
             }
             if (paginator != null && paginator.getPageSizeOption() != null
                     && "body_json".equalsIgnoreCase(paginator.getPageSizeOption().getInjectInto())) {
-                b.addStatement("_bodyMap.put($S, $T.valueOf(pageLimit))",
-                    paginator.getPageSizeOption().getFieldName(), String.class);
+                if (paginator.isCursor()) {
+                    // For cursor paginators pageLimit is not declared as a variable; use literal.
+                    b.addStatement("$L.put($S, $L)",
+                        bodyMapVar, paginator.getPageSizeOption().getFieldName(), paginator.pageSize());
+                } else {
+                    b.addStatement("$L.put($S, $T.valueOf(pageLimit))",
+                        bodyMapVar, paginator.getPageSizeOption().getFieldName(), String.class);
+                }
             }
-            b.addStatement("$T _bodyStr = MAPPER.writeValueAsString(_bodyMap)", String.class);
+            b.addStatement("$T $L = MAPPER.writeValueAsString($L)", String.class, bodyStrVar, bodyMapVar);
         } else {
             // data body
             RequesterSpec.BodyDataSpec dataSpec = requester != null ? requester.getRequestBodyData() : null;
             if (dataSpec != null && dataSpec.isRaw()) {
-                b.addStatement("$T _bodyStr = $L", String.class, interpolateTemplate(dataSpec.getRawBody()));
+                b.addStatement("$T $L = $L", String.class, bodyStrVar, interpolateTemplate(dataSpec.getRawBody()));
             } else {
                 b.addStatement("$T _bodyBuilder = new $T()", StringBuilder.class, StringBuilder.class);
                 boolean firstField = true;
@@ -1699,18 +1717,26 @@ public class TaskGenerator {
                 }
                 if (isBodyInjectedData(paginator)) {
                     String fieldName = paginator.getPageTokenOption().getFieldName();
-                    b.beginControlFlow("if (nextCursor != null)");
                     String sep = firstField ? "" : "&";
-                    b.addStatement("_bodyBuilder.append($S + $T.encode(nextCursor, $T.UTF_8))",
-                        sep + fieldName + "=",
-                        ClassName.get("java.net", "URLEncoder"),
-                        STD_CHARSETS);
-                    b.endControlFlow();
+                    if (paginator.isCursor()) {
+                        b.beginControlFlow("if (nextCursor != null)");
+                        b.addStatement("_bodyBuilder.append($S + $T.encode(nextCursor, $T.UTF_8))",
+                            sep + fieldName + "=",
+                            ClassName.get("java.net", "URLEncoder"),
+                            STD_CHARSETS);
+                        b.endControlFlow();
+                    } else if (paginator.isOffsetIncrement()) {
+                        b.addStatement("_bodyBuilder.append($S + $T.valueOf(offset))",
+                            sep + fieldName + "=", String.class);
+                    } else if (paginator.isPageIncrement()) {
+                        b.addStatement("_bodyBuilder.append($S + $T.valueOf(page))",
+                            sep + fieldName + "=", String.class);
+                    }
                 }
-                b.addStatement("$T _bodyStr = _bodyBuilder.toString()", String.class);
+                b.addStatement("$T $L = _bodyBuilder.toString()", String.class, bodyStrVar);
             }
         }
-        return "_bodyStr";
+        return bodyStrVar;
     }
 
     /**
@@ -1784,8 +1810,12 @@ public class TaskGenerator {
         args.add(URI_CLASS);
         args.add(urlExpr(auth, paginator));
 
-        // Content-Type header when a body is present.
-        if (bodyVar != null) {
+        // Content-Type header when a body is present — skip if manifest already declares one.
+        Map<String, String> reqHeaders = requester != null
+            ? requester.getRequestHeaders() : Collections.emptyMap();
+        boolean hasExplicitContentType = reqHeaders.keySet().stream()
+            .anyMatch(k -> k.equalsIgnoreCase("Content-Type"));
+        if (bodyVar != null && !hasExplicitContentType) {
             if (jsonBody) {
                 fmt.append("\n        .header(\"Content-Type\", \"application/json\")");
             } else if (dataBody) {
@@ -1818,8 +1848,6 @@ public class TaskGenerator {
         }
 
         // Custom request headers from the manifest.
-        Map<String, String> reqHeaders = requester != null
-            ? requester.getRequestHeaders() : Collections.emptyMap();
         for (Map.Entry<String, String> h : reqHeaders.entrySet()) {
             fmt.append("\n        .header($S, $S)");
             args.add(h.getKey());
@@ -3067,7 +3095,8 @@ public class TaskGenerator {
         String bodyVar    = null;
         if (jsonBody || dataBody) {
             try {
-                bodyVar = buildBodyPreamble(body, requester, null);
+                // Use reqVar as suffix to avoid collisions when called multiple times in one scope.
+                bodyVar = buildBodyPreamble(body, requester, null, "_" + reqVar);
             } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
                 throw new CodegenException("Failed to serialize request_body_json: " + e.getMessage());
             }
@@ -3084,7 +3113,10 @@ public class TaskGenerator {
         args.add(HTTP_REQUEST);
         args.add(URI_CLASS);
         args.add(urlExpr);
-        if (bodyVar != null) {
+        Map<String, String> egHeaders = requester != null ? requester.getRequestHeaders() : Collections.emptyMap();
+        boolean egHasExplicitCt = egHeaders.keySet().stream()
+            .anyMatch(k -> k.equalsIgnoreCase("Content-Type"));
+        if (bodyVar != null && !egHasExplicitCt) {
             if (jsonBody) {
                 fmt.append("\n        .header(\"Content-Type\", \"application/json\")");
             } else if (dataBody) {
@@ -3113,12 +3145,10 @@ public class TaskGenerator {
             fmt.append("\n        .header(\"Authorization\", \"$L \" + _jwtToken_").append(reqVar).append(")");
             args.add(auth.getHeaderPrefix());
         }
-        if (requester != null) {
-            for (Map.Entry<String, String> h : requester.getRequestHeaders().entrySet()) {
-                fmt.append("\n        .header($S, $S)");
-                args.add(h.getKey());
-                args.add(h.getValue());
-            }
+        for (Map.Entry<String, String> h : egHeaders.entrySet()) {
+            fmt.append("\n        .header($S, $S)");
+            args.add(h.getKey());
+            args.add(h.getValue());
         }
         appendHttpMethod(fmt, args, httpMethod, jsonBody, dataBody, bodyVar);
         fmt.append("\n        .build()");

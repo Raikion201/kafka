@@ -168,12 +168,6 @@ public class ManifestCoverageReport {
                 Set<String> hits = featureHits(body, HARD_BLOCKERS);
                 Set<String> soft = featureHits(body, SOFT_BLOCKERS);
                 Set<String> rely = featureHits(body, RELIABILITY_GAPS);
-                // POST/PUT requesters — codegen emits GET only.
-                boolean nonGet = body.contains("http_method: POST") || body.contains("http_method: PUT")
-                    || body.contains("http_method: \"POST\"") || body.contains("http_method: \"PUT\"");
-                if (nonGet) {
-                    hits.add("http_method: POST/PUT");
-                }
                 // DatetimeBasedCursor with step → window slicing not implemented.
                 boolean slicedCursor = body.contains("type: DatetimeBasedCursor")
                     && body.matches("(?s).*\\bstep:\\s*P[A-Z0-9]+.*");

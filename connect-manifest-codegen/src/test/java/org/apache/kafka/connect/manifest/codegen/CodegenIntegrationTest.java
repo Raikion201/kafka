@@ -1139,6 +1139,164 @@ public class CodegenIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // POST / PUT — request_body_json + request_body_data
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void postBody_generatedTaskCompiles(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("post_body_test.yaml");
+        String taskSrc = g.task.toString();
+        assertTrue(taskSrc.contains("BodyPublishers"),
+            "POST task must reference HttpRequest.BodyPublishers");
+        assertTrue(taskSrc.contains(".POST("),
+            "POST task must call .POST(...)");
+        assertTrue(taskSrc.contains("application/json"),
+            "JSON-body stream must set Content-Type: application/json");
+        assertTrue(taskSrc.contains("application/x-www-form-urlencoded"),
+            "form-body stream must set Content-Type: application/x-www-form-urlencoded");
+        assertTrue(taskSrc.contains("_bodyMap.put(\"cursor\""),
+            "cursor page token must be injected into body map for post_cursor_body");
+        assertFalse(taskSrc.contains("\"cursor=\""),
+            "cursor page token must not be appended to URL query string");
+        compileTripleWithOutputDir(g, tmpDir);
+    }
+
+    @Test
+    void postBody_mockHttp_staticBody(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("post_body_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+
+        java.util.concurrent.atomic.AtomicReference<String> capturedBody =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        byte[] resp = ("{\"results\":[{\"id\":1,\"name\":\"alice\"}]}")
+            .getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/records", exchange -> {
+            if ("POST".equals(exchange.getRequestMethod())) {
+                capturedBody.set(new String(exchange.getRequestBody().readAllBytes(),
+                    StandardCharsets.UTF_8));
+            }
+            exchange.sendResponseHeaders(200, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            Object task = loadAndStartTask(g, tmpDir, port);
+            List<?> records = pollStream(task, "pollPostStatic");
+            assertEquals(1, records.size(), "Expected 1 record from post_static stream");
+            assertNotNull(capturedBody.get(), "Server must receive a POST body");
+            assertTrue(capturedBody.get().contains("\"query\""),
+                "POST body must contain static field 'query'");
+            assertTrue(capturedBody.get().contains("\"active\""),
+                "POST body must contain static value 'active'");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void postBody_mockHttp_cursorBodyInjection(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("post_body_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+
+        // Cursor pagination emits one page per poll() call; state is preserved via SourceRecord offsets.
+        // To simulate a second page, we: (1) collect the cursor from the first poll's SourceRecord offset,
+        // (2) configure the mock OffsetStorageReader to return it, (3) call poll again.
+        java.util.concurrent.CopyOnWriteArrayList<String> bodies =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/paged", exchange -> {
+            bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            String payload = bodies.size() == 1
+                ? "{\"data\":[{\"id\":1}],\"next_cursor\":\"tok42\"}"
+                : "{\"data\":[{\"id\":2}],\"next_cursor\":\"\"}";
+            byte[] out = payload.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, out.length);
+            exchange.getResponseBody().write(out);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            URLClassLoader loader = new URLClassLoader(
+                new URL[]{tmpDir.toUri().toURL()}, getClass().getClassLoader());
+            Class<?> taskClass = loader.loadClass(PKG + "." + g.task.typeSpec.name);
+            SourceTaskContext ctx = Mockito.mock(SourceTaskContext.class);
+            OffsetStorageReader reader = Mockito.mock(OffsetStorageReader.class);
+            Mockito.when(ctx.offsetStorageReader()).thenReturn(reader);
+
+            // First poll: OffsetStorageReader returns null (fresh start).
+            Mockito.when(reader.offset(Mockito.any())).thenReturn(null);
+            Object task = taskClass.getDeclaredConstructor().newInstance();
+            taskClass.getMethod("initialize", SourceTaskContext.class).invoke(task, ctx);
+            taskClass.getMethod("start", Map.class).invoke(task,
+                Map.of("server_url", "http://localhost:" + port));
+
+            List<?> page1 = pollStream(task, "pollPostCursorBody");
+            assertFalse(page1.isEmpty(), "First poll must return records");
+            // Extract cursor from offset map stored in the first SourceRecord.
+            Object firstRecord = page1.get(0);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> offset1 = (Map<String, Object>)
+                firstRecord.getClass().getMethod("sourceOffset").invoke(firstRecord);
+            String savedCursor = String.valueOf(offset1.get("cursor"));
+            assertEquals("tok42", savedCursor, "Cursor must be saved in SourceRecord offset");
+
+            // Second poll: OffsetStorageReader returns the saved cursor.
+            Mockito.when(reader.offset(Mockito.any()))
+                .thenReturn(Map.of("cursor", savedCursor));
+            List<?> page2 = pollStream(task, "pollPostCursorBody");
+            assertFalse(page2.isEmpty(), "Second poll must return records");
+            assertEquals(2, bodies.size(), "Server must receive exactly 2 requests");
+            String secondBody = bodies.get(1);
+            assertTrue(secondBody.contains("tok42"),
+                "Second request body must contain cursor token 'tok42'");
+            assertFalse(secondBody.contains("cursor=tok42"),
+                "Cursor must not appear as URL-encoded form field");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void postBody_mockHttp_rawDataBody(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("post_body_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+
+        java.util.concurrent.atomic.AtomicReference<String> capturedBody =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<String> capturedContentType =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        byte[] resp = ("{\"items\":[{\"id\":99}]}").getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/form", exchange -> {
+            capturedBody.set(new String(exchange.getRequestBody().readAllBytes(),
+                StandardCharsets.UTF_8));
+            capturedContentType.set(exchange.getRequestHeaders().getFirst("Content-Type"));
+            exchange.sendResponseHeaders(200, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            Object task = loadAndStartTask(g, tmpDir, port);
+            List<?> records = pollStream(task, "pollPostData");
+            assertEquals(1, records.size(), "Expected 1 record from post_data stream");
+            assertNotNull(capturedBody.get(), "Server must receive a POST body");
+            assertEquals("format=json&version=2", capturedBody.get(),
+                "Raw request_body_data must be sent verbatim");
+            assertEquals("application/x-www-form-urlencoded", capturedContentType.get(),
+                "form-data stream must set Content-Type: application/x-www-form-urlencoded");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // HELPERS
     // ══════════════════════════════════════════════════════════════════════════
 
