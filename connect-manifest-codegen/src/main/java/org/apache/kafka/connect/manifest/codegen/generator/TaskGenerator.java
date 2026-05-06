@@ -186,7 +186,8 @@ public class TaskGenerator {
         // - ≥1 ListPartitionRouter (no substream) → fan-out over static values, include it.
         // - 0 routers AND path has no stream_partition template → normal stream, include.
         // - 0 routers AND path contains stream_partition → broken ref (no router), skip.
-        // - >1 SubstreamPartitionRouter → multi-level substream, out of scope, skip.
+        // - >1 SubstreamPartitionRouter → include only when nested pattern matches
+        //   (router N's parent is itself a substream of router N-1's parent).
         List<StreamSpec> runnableStreams = streams.stream()
             .filter(s -> {
                 if (isCustomDispatch(s)) return true;
@@ -194,7 +195,7 @@ public class TaskGenerator {
                     .filter(PartitionRouterSpec::isSubstream).count();
                 long listCount = s.getRetriever().getListRouters().size();
                 if (substreamCount == 1 && listCount == 0) return true;
-                if (substreamCount > 1) return false;
+                if (substreamCount > 1) return multiSubstreamChain(s, spec) != null;
                 if (substreamCount == 0 && listCount > 0) return true;
                 String p = s.getRetriever().getRequester().getPath();
                 return p == null || (!p.contains("stream_partition") && !p.contains("stream_slice"));
@@ -222,6 +223,11 @@ public class TaskGenerator {
         for (StreamSpec stream : runnableStreams) {
             typeBuilder.addMethod(buildStreamPollMethod(stream, configClass, auth, listOfSourceRecord));
             if (isCustomDispatch(stream)) continue;
+            List<PartitionRouterSpec> chain = multiSubstreamChain(stream, spec);
+            if (chain != null) {
+                typeBuilder.addMethod(buildNestedFetchPartitionKeys(stream, chain, auth, spec));
+                continue;
+            }
             PartitionRouterSpec router = stream.getRetriever().getSubstreamRouter();
             if (router != null) {
                 typeBuilder.addMethod(buildFetchPartitionKeys(stream, router, auth, spec));
@@ -308,14 +314,25 @@ public class TaskGenerator {
         }
 
         // SubstreamPartitionRouter: partition key list + current index per child stream.
+        // Single-router child streams hold List<String>; multi-router (nested) child streams
+        // hold List<Map<String,String>> so each entry carries one value per partition_field.
         ParameterizedTypeName listString = ParameterizedTypeName.get(
             ClassName.get("java.util", "List"), ClassName.get(String.class));
+        ParameterizedTypeName mapStringStringField = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"),
+            ClassName.get(String.class), ClassName.get(String.class));
+        ParameterizedTypeName listMapStringString = ParameterizedTypeName.get(
+            ClassName.get("java.util", "List"), mapStringStringField);
         for (StreamSpec s : streams) {
             if (isCustomDispatch(s)) continue;
+            long subCount = s.getRetriever().getPartitionRouter().stream()
+                .filter(PartitionRouterSpec::isSubstream).count();
+            boolean isNested = subCount > 1;
             PartitionRouterSpec router = s.getRetriever().getSubstreamRouter();
-            if (router != null) {
+            if (isNested || router != null) {
                 typeBuilder.addField(
-                    FieldSpec.builder(listString, partitionKeysFieldName(s.getName()),
+                    FieldSpec.builder(isNested ? listMapStringString : listString,
+                            partitionKeysFieldName(s.getName()),
                         Modifier.PRIVATE, Modifier.VOLATILE)
                         .build()
                 );
@@ -368,11 +385,13 @@ public class TaskGenerator {
             m.endControlFlow();
         }
 
-        // Pre-fetch parent partition keys for each substream.
+        // Pre-fetch parent partition keys for each substream (single-router or nested).
         for (StreamSpec s : streams) {
             if (isCustomDispatch(s)) continue;
+            long subCount = s.getRetriever().getPartitionRouter().stream()
+                .filter(PartitionRouterSpec::isSubstream).count();
             PartitionRouterSpec router = s.getRetriever().getSubstreamRouter();
-            if (router != null) {
+            if (router != null || subCount > 1) {
                 String keysField = partitionKeysFieldName(s.getName());
                 String fetchMethod = "fetch" + ManifestSpec.toClassName(s.getName()) + "PartitionKeys";
                 m.beginControlFlow("try");
@@ -432,6 +451,13 @@ public class TaskGenerator {
             return buildListCyclePollMethod(stream, configClass, auth, listOfSourceRecord, listCycleField);
         }
 
+        // Nested SubstreamPartitionRouter: ≥2 substream routers in chain. Uses Map<String,String>
+        // _partition values per stream slice.
+        long subCount = stream.getRetriever().getPartitionRouter().stream()
+            .filter(PartitionRouterSpec::isSubstream).count();
+        if (subCount > 1) {
+            return buildNestedSubstreamPollMethod(stream, configClass, auth, listOfSourceRecord);
+        }
         // SubstreamPartitionRouter: child stream whose path contains a partition variable.
         PartitionRouterSpec router = stream.getRetriever().getSubstreamRouter();
         if (router != null) {
@@ -2263,5 +2289,400 @@ public class TaskGenerator {
         }
 
         return b.build();
+    }
+
+    // ── Multi-level (nested) SubstreamPartitionRouter support ───────────────────
+    //
+    // A child stream like google_classroom.studentsubmissions has two
+    // SubstreamPartitionRouters whose parents form a nested chain:
+    //   Router 1: parent=courses
+    //   Router 2: parent=coursework  (coursework is itself a substream of courses)
+    //   Path:     /v1/courses/{{stream_partition.course}}/courseWork/
+    //             {{stream_partition.coursework}}/studentSubmissions
+    //
+    // We emit a {@code fetchXxxPartitionKeys()} method that walks the parent
+    // chain via per-level fetch helpers and accumulates {@code Map<String,String>}
+    // partition entries. The poll method consumes one entry per call, exposing the
+    // partition map to the URL via JinjaRenderer's {@code stream_partition} key.
+    //
+    // Limitations of this first cut (acceptable per CLAUDE.md §1 spec-correctness
+    // bar — record set is identical to Airbyte for typical small parent counts;
+    // pagination support on parent fetches comes in a follow-up):
+    //   - Parent-stream pagination is ignored: only the first page of each level
+    //     is consumed.
+    //   - Parent-fetch failures (non-2xx) skip that branch silently.
+
+    /**
+     * Returns the ordered chain of substream routers when {@code child} matches the
+     * nested pattern (router N's parent is itself a substream of router N-1's parent),
+     * or {@code null} otherwise.
+     */
+    private List<PartitionRouterSpec> multiSubstreamChain(StreamSpec child, ManifestSpec spec) {
+        List<PartitionRouterSpec> subs = child.getRetriever().getPartitionRouter().stream()
+            .filter(PartitionRouterSpec::isSubstream)
+            .collect(java.util.stream.Collectors.toList());
+        if (subs.size() < 2) return null;
+        for (PartitionRouterSpec r : subs) {
+            if (r.parentStreamName() == null || r.parentKey() == null || r.partitionField() == null) {
+                return null;
+            }
+            StreamSpec ps = lookupStream(spec, r.parentStreamName());
+            if (ps == null || ps.getRetriever() == null || ps.getRetriever().getRequester() == null) {
+                return null;
+            }
+        }
+        for (int i = 1; i < subs.size(); i++) {
+            StreamSpec parentN = lookupStream(spec, subs.get(i).parentStreamName());
+            PartitionRouterSpec parentNRouter = parentN.getRetriever().getSubstreamRouter();
+            if (parentNRouter == null) return null;
+            String prev = subs.get(i - 1).parentStreamName();
+            if (prev == null || !prev.equals(parentNRouter.parentStreamName())) {
+                return null;
+            }
+        }
+        return subs;
+    }
+
+    private StreamSpec lookupStream(ManifestSpec spec, String name) {
+        if (name == null) return null;
+        return spec.resolvedStreams().stream()
+            .filter(s -> name.equals(s.getName()))
+            .findFirst().orElse(null);
+    }
+
+    /**
+     * Emits {@code fetchXxxPartitionKeys()} plus one private level helper per router.
+     * Each level helper fetches its parent stream's records and produces the partition
+     * maps for the next level (or the final {@code Map<String,String>} list).
+     */
+    private MethodSpec buildNestedFetchPartitionKeys(
+        StreamSpec childStream,
+        List<PartitionRouterSpec> chain,
+        AuthenticatorSpec auth,
+        ManifestSpec spec
+    ) throws CodegenException {
+        String childName = childStream.getName();
+        String orchestratorName = "fetch" + ManifestSpec.toClassName(childName) + "PartitionKeys";
+
+        ParameterizedTypeName mapStringString = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"),
+            ClassName.get(String.class), ClassName.get(String.class));
+        ParameterizedTypeName listMap = ParameterizedTypeName.get(
+            ClassName.get("java.util", "List"), mapStringString);
+
+        // Emit a single method body that inlines per-level fetches using suffixed
+        // variable names (_req1/_resp1, _req2/_resp2, ...) to avoid Java's
+        // no-shadowing rule for nested local declarations.
+        CodeBlock.Builder body = CodeBlock.builder();
+        body.addStatement("$T keys = new $T<>()", listMap, ArrayList.class);
+
+        // Open one nested for-loop per level, inlining the HTTP fetch + extraction.
+        for (int i = 0; i < chain.size(); i++) {
+            PartitionRouterSpec r = chain.get(i);
+            StreamSpec parentStream = lookupStream(spec, r.parentStreamName());
+            String suffix = String.valueOf(i + 1);
+            emitNestedFetchLevel(body, parentStream, r, auth, suffix, i == 0);
+        }
+
+        // Innermost: emit the partition Map for the deepest level.
+        // _p<N> is built up from each level's parent_key extraction.
+        // We emit a single LinkedHashMap that copies the previous level's _p and
+        // adds this level's partition_field → extracted value.
+        // Built progressively inside emitNestedFetchLevel via _p<level>.
+        // At innermost level, accumulate into keys.
+        body.addStatement("keys.add(_p$L)", chain.size());
+
+        // Close all nested for-loops.
+        for (int i = 0; i < chain.size(); i++) {
+            body.endControlFlow();
+        }
+
+        body.addStatement("return keys");
+
+        return MethodSpec.methodBuilder(orchestratorName)
+            .addModifiers(Modifier.PRIVATE)
+            .returns(listMap)
+            .addException(Exception.class)
+            .addCode(body.build())
+            .build();
+    }
+
+    /**
+     * Emits one level of the nested-fetch loop:
+     *   - URL build (rendered through JinjaRenderer with cumulative stream_partition)
+     *   - Auth + GET via {@code _reqN}/{@code _respN}
+     *   - 2xx check (skip-on-failure: continue/return-keys)
+     *   - field-path navigation
+     *   - opens a {@code for (Object _recN : _recordsN)} loop and extracts {@code _kN}
+     *   - copies previous {@code _p<N-1>} → {@code _p<N>} and adds the new partition_field
+     */
+    private void emitNestedFetchLevel(
+        CodeBlock.Builder body,
+        StreamSpec parentStream,
+        PartitionRouterSpec router,
+        AuthenticatorSpec auth,
+        String suffix,
+        boolean isFirstLevel
+    ) {
+        RequesterSpec parentRequester = parentStream.getRetriever().getRequester();
+        String baseUrl = parentRequester.effectiveBaseUrl();
+        String path = parentRequester.getPath();
+        if (!baseUrl.isEmpty() && !baseUrl.endsWith("/") && !path.isEmpty() && !path.startsWith("/")) {
+            baseUrl = baseUrl + "/";
+        }
+        String fullUrlTemplate = baseUrl + path;
+        List<String> fieldPath = extractFieldPath(parentStream);
+        String partitionField = router.partitionField();
+        String parentKey = router.parentKey();
+
+        ParameterizedTypeName mapStringString = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"),
+            ClassName.get(String.class), ClassName.get(String.class));
+        ParameterizedTypeName mapStringObject = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"),
+            ClassName.get(String.class), ClassName.get(Object.class));
+
+        // Build URL: render via JinjaRenderer with cumulative stream_partition map.
+        if (isFirstLevel) {
+            // No accumulated context yet — but path may still reference config.
+            if (!fullUrlTemplate.contains("{{") && !fullUrlTemplate.contains("{%")) {
+                body.addStatement("$T _url$L = $S", String.class, suffix, fullUrlTemplate);
+            } else {
+                body.addStatement("$T _url$L = render($S, jinjaCtx())",
+                    String.class, suffix, fullUrlTemplate);
+            }
+        } else {
+            // Pass cumulative partition (_p<level-1>) through stream_partition.
+            int prev = Integer.parseInt(suffix) - 1;
+            body.addStatement("$T _ctx$L = jinjaCtx()", mapStringObject, suffix);
+            body.addStatement("_ctx$L.put($S, _p$L)", suffix, "stream_partition", prev);
+            body.addStatement("$T _url$L = render($S, _ctx$L)",
+                String.class, suffix, fullUrlTemplate, suffix);
+        }
+
+        // Build + send request, with full auth.
+        emitAuthedGet(body, auth, "_url" + suffix, "_req" + suffix, "_resp" + suffix);
+
+        // Skip branch on non-2xx: continue if not first-level (we're inside a for-loop),
+        // else return whatever we have so far.
+        body.beginControlFlow("if (_resp$L.statusCode() < 200 || _resp$L.statusCode() >= 300)",
+            suffix, suffix);
+        body.addStatement(isFirstLevel ? "return keys" : "continue");
+        body.endControlFlow();
+
+        body.addStatement("$T _json$L = MAPPER.readValue(_resp$L.body(), $T.class)",
+            Object.class, suffix, suffix, Object.class);
+
+        // Navigate field path (each segment unwraps a Map).
+        for (String seg : fieldPath) {
+            body.beginControlFlow("if (_json$L instanceof $T<?,?> _fpm$L)",
+                suffix, Map.class, suffix);
+            body.addStatement("_json$L = _fpm$L.get($S)", suffix, suffix, seg);
+            body.endControlFlow();
+        }
+
+        // Normalise to List<Object>.
+        body.addStatement("$T<$T> _records$L", List.class, Object.class, suffix);
+        body.beginControlFlow("if (_json$L instanceof $T)", suffix, List.class);
+        body.addStatement("_records$L = ($T<$T>) _json$L", suffix, List.class, Object.class, suffix);
+        body.nextControlFlow("else if (_json$L != null)", suffix);
+        body.addStatement("_records$L = $T.singletonList(_json$L)", suffix, Collections.class, suffix);
+        body.nextControlFlow("else");
+        body.addStatement("_records$L = $T.emptyList()", suffix, Collections.class);
+        body.endControlFlow();
+
+        // Open the for-loop. Body of the next level (or innermost keys.add) is emitted
+        // by the caller into this open scope.
+        body.beginControlFlow("for ($T _rec$L : _records$L)", Object.class, suffix, suffix);
+        body.beginControlFlow("if (!(_rec$L instanceof $T<?,?> _m$L))", suffix, Map.class, suffix);
+        body.addStatement("continue");
+        body.endControlFlow();
+        body.addStatement("$T _v$L = _m$L.get($S)", Object.class, suffix, suffix, parentKey);
+        body.beginControlFlow("if (_v$L == null)", suffix);
+        body.addStatement("continue");
+        body.endControlFlow();
+
+        // Build _p<level>: copy _p<level-1> if any, then add partition_field=extracted value.
+        if (isFirstLevel) {
+            body.addStatement("$T _p$L = new $T<>()",
+                mapStringString, suffix, LinkedHashMap.class);
+        } else {
+            int prev = Integer.parseInt(suffix) - 1;
+            body.addStatement("$T _p$L = new $T<>(_p$L)",
+                mapStringString, suffix, LinkedHashMap.class, prev);
+        }
+        body.addStatement("_p$L.put($S, $T.valueOf(_v$L))",
+            suffix, partitionField, String.class, suffix);
+    }
+
+    /**
+     * Emits {@code HttpRequest <reqVar> = ...; HttpResponse<String> <respVar> = sendWithRetry(<reqVar>);}
+     * with auth headers matching {@code auth}. Mirrors the auth branches in
+     * {@link #buildRequestStatement} but uses caller-supplied variable names so
+     * multiple requests can coexist in the same scope.
+     */
+    private void emitAuthedGet(
+        CodeBlock.Builder body, AuthenticatorSpec auth,
+        String urlExpr, String reqVar, String respVar
+    ) {
+        if (auth != null && auth.isOAuth()) {
+            body.addStatement("$T _accessToken_$L = refreshAccessToken()", String.class, reqVar);
+        }
+        StringBuilder fmt = new StringBuilder("$T $L = $T.newBuilder()\n        .uri($T.create($L))");
+        List<Object> args = new ArrayList<>();
+        args.add(HTTP_REQUEST);
+        args.add(reqVar);
+        args.add(HTTP_REQUEST);
+        args.add(URI_CLASS);
+        args.add(urlExpr);
+        if (auth == null || auth.isNoAuth()) {
+            // no header
+        } else if (auth.isBearer()) {
+            fmt.append("\n        .header(\"Authorization\", \"Bearer \" + $L)");
+            args.add(interpolateTemplate(auth.getApiToken()));
+        } else if (auth.isApiKey() && !isApiKeyQueryParam(auth)) {
+            fmt.append("\n        .header($S, $L)");
+            args.add(resolveApiKeyHeaderName(auth));
+            args.add(interpolateTemplate(auth.getApiToken()));
+        } else if (auth.isBasicHttp()) {
+            fmt.append("\n        .header(\"Authorization\", \"Basic \" + cachedCredentials)");
+        } else if (auth.isOAuth()) {
+            fmt.append("\n        .header(\"Authorization\", \"Bearer \" + _accessToken_").append(reqVar).append(")");
+        } else if (auth.isSessionToken()) {
+            fmt.append("\n        .header(\"Authorization\", \"Bearer \" + cachedSessionToken)");
+        } else if (auth.isLegacySessionToken()) {
+            fmt.append("\n        .header($S, cachedLegacyToken)");
+            args.add(auth.getHeader());
+        }
+        fmt.append("\n        .GET()\n        .build()");
+        body.addStatement(fmt.toString(), args.toArray());
+        body.addStatement("$T<$T> $L = sendWithRetry($L)",
+            HTTP_RESPONSE, String.class, respVar, reqVar);
+    }
+
+    /**
+     * Generates the poll method for a child stream with multiple (nested)
+     * SubstreamPartitionRouters. Consumes one {@code Map<String,String>} partition
+     * entry per call from the cached {@code <stream>_partitionKeys} field.
+     */
+    private MethodSpec buildNestedSubstreamPollMethod(
+        StreamSpec stream,
+        ClassName configClass,
+        AuthenticatorSpec auth,
+        ParameterizedTypeName listOfSourceRecord
+    ) throws CodegenException {
+        RequesterSpec requester = stream.getRetriever().getRequester();
+        String baseUrl = requester.effectiveBaseUrl();
+        String rawPath = requester.getPath();
+        if (!baseUrl.isEmpty() && !baseUrl.endsWith("/") && !rawPath.isEmpty() && !rawPath.startsWith("/")) {
+            baseUrl = baseUrl + "/";
+        }
+        String fullUrlTemplate = baseUrl + rawPath;
+        String streamName = stream.getName();
+        String methodName = "poll" + ManifestSpec.toClassName(streamName);
+        List<String> fieldPath = extractFieldPath(stream);
+
+        String keysField = partitionKeysFieldName(streamName);
+        String idxField  = partitionIdxFieldName(streamName);
+
+        ParameterizedTypeName mapStringString = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"),
+            ClassName.get(String.class), ClassName.get(String.class));
+        ParameterizedTypeName mapStringObject = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"),
+            ClassName.get(String.class), ClassName.get(Object.class));
+
+        CodeBlock.Builder body = CodeBlock.builder();
+        body.addStatement("final $T streamName = $S", String.class, streamName);
+        body.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
+
+        // Restore partition index from offset store on first poll.
+        body.beginControlFlow("if ($L < 0)", idxField);
+        body.addStatement(
+            "$T<$T, $T> _stored = context.offsetStorageReader().offset($T.of($S, streamName))",
+            Map.class, String.class, Object.class, Map.class, "stream");
+        body.addStatement("$L = 0", idxField);
+        body.beginControlFlow(
+            "if (_stored != null && _stored.get($S) instanceof $T _p)", "partition_idx", Number.class);
+        body.addStatement("$L = _p.intValue()", idxField);
+        body.endControlFlow();
+        body.endControlFlow();
+
+        body.beginControlFlow("if ($L == null || $L.isEmpty())", keysField, keysField);
+        body.addStatement("return result");
+        body.endControlFlow();
+
+        body.beginControlFlow("if ($L >= $L.size())", idxField, keysField);
+        body.addStatement("$L = 0", idxField);
+        body.beginControlFlow("try");
+        body.addStatement("$L = fetch$LPartitionKeys()", keysField, ManifestSpec.toClassName(streamName));
+        body.nextControlFlow("catch ($T _e)", Exception.class);
+        body.endControlFlow();
+        body.beginControlFlow("if ($L == null || $L.isEmpty())", keysField, keysField);
+        body.addStatement("return result");
+        body.endControlFlow();
+        body.endControlFlow();
+
+        body.addStatement("$T _partition = $L.get($L)", mapStringString, keysField, idxField);
+        body.addStatement("int _nextIdx = ($L + 1 >= $L.size()) ? 0 : $L + 1",
+            idxField, keysField, idxField);
+
+        // Build URL via JinjaRenderer with stream_partition exposed.
+        body.addStatement("$T _ctx = jinjaCtx()", mapStringObject);
+        body.addStatement("_ctx.put($S, _partition)", "stream_partition");
+        body.addStatement("$T urlBuilder = new $T(render($S, _ctx))",
+            StringBuilder.class, StringBuilder.class, fullUrlTemplate);
+
+        body.beginControlFlow("try");
+        buildRequestStatement(body, auth, null);
+        body.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
+
+        // 4xx/5xx: skip + advance (don't crash the connector).
+        body.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");
+        body.addStatement("$L = _nextIdx", idxField);
+        body.addStatement("return result");
+        body.endControlFlow();
+
+        body.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)",
+            Object.class, Object.class);
+        for (String seg : fieldPath) {
+            body.beginControlFlow("if (json instanceof $T<?,?> _fpm)", Map.class);
+            body.addStatement("json = _fpm.get($S)", seg);
+            body.endControlFlow();
+        }
+
+        body.addStatement("$T<$T> records", List.class, Object.class);
+        body.beginControlFlow("if (json instanceof $T)", List.class);
+        body.addStatement("records = ($T<$T>) json", List.class, Object.class);
+        body.nextControlFlow("else if (json != null)");
+        body.addStatement("records = $T.singletonList(json)", Collections.class);
+        body.nextControlFlow("else");
+        body.addStatement("records = $T.emptyList()", Collections.class);
+        body.endControlFlow();
+
+        body.beginControlFlow("for ($T record : records)", Object.class);
+        body.addStatement("$T value = MAPPER.writeValueAsString(record)", String.class);
+        body.addStatement(
+            "result.add(new $T($T.of($S, streamName), $T.of($S, _nextIdx), streamName, $T.STRING_SCHEMA, value))",
+            SOURCE_RECORD, Map.class, "stream", Map.class, "partition_idx", SCHEMA);
+        body.endControlFlow();
+
+        body.addStatement("$L = _nextIdx", idxField);
+
+        body.nextControlFlow("catch ($T e)", InterruptedException.class);
+        body.addStatement("$T.currentThread().interrupt()", Thread.class);
+        body.addStatement("throw new $T(\"Interrupted while polling \" + streamName, e)", CONNECT_EXCEPTION);
+        body.nextControlFlow("catch ($T e)", Exception.class);
+        body.addStatement("throw new $T(\"Failed to poll \" + streamName, e)", CONNECT_EXCEPTION);
+        body.endControlFlow();
+
+        body.addStatement("return result");
+
+        return MethodSpec.methodBuilder(methodName)
+            .addModifiers(Modifier.PRIVATE)
+            .returns(listOfSourceRecord)
+            .addException(InterruptedException.class)
+            .addCode(body.build())
+            .build();
     }
 }

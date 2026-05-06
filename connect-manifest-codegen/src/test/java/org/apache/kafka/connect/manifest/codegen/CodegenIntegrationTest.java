@@ -520,21 +520,24 @@ public class CodegenIntegrationTest {
     }
 
     @Test
-    void googleClassroom_generatedTask_skipsMultiLevelSubstreams() throws Exception {
+    void googleClassroom_generatedTask_supportsMultiLevelSubstreams() throws Exception {
         String taskSrc = generate("google_classroom.yaml").task.toString();
-        // studentsubmissions has 2 partition routers (course + coursework), must be skipped
-        assertFalse(taskSrc.contains("pollStudentsubmissions"),
-            "Google Classroom task must not generate pollStudentsubmissions — it requires 2-level nesting");
+        // studentsubmissions has 2 nested SubstreamPartitionRouters (course → coursework)
+        assertTrue(taskSrc.contains("pollStudentsubmissions"),
+            "Google Classroom task must generate pollStudentsubmissions for nested substream pattern");
+        assertTrue(taskSrc.contains("fetchStudentsubmissionsPartitionKeys"),
+            "Google Classroom task must generate fetchStudentsubmissionsPartitionKeys for 2-level nested fetch");
     }
 
     @Test
     void googleClassroom_generatedTask_substitutesPartitionKeyInUrl() throws Exception {
         String taskSrc = generate("google_classroom.yaml").task.toString();
-        // The child stream URL template {{ stream_partition.course }} must be resolved at runtime
-        assertFalse(taskSrc.contains("stream_partition"),
-            "Google Classroom task must not contain raw 'stream_partition' Jinja2 template in generated code");
+        // Single-router child streams (teachers/students/coursework) inject via _partitionKey
         assertTrue(taskSrc.contains("_partitionKey"),
-            "Google Classroom task must use _partitionKey variable in URL construction");
+            "Google Classroom task must use _partitionKey variable in single-router URL construction");
+        // Nested-router child stream (studentsubmissions) injects via Map<String,String> _partition
+        assertTrue(taskSrc.contains("_partition.get(") || taskSrc.contains("Map<String, String> _partition"),
+            "Google Classroom task must use Map<String,String> _partition for nested substream");
     }
 
     @Test

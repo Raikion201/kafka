@@ -250,12 +250,21 @@ public class PartitionRouterSpec {
         }
     }
 
-    /** A {@code stream: {$ref: "#/definitions/streams/courses"}} block inside parent_stream_configs. */
+    /**
+     * A {@code stream:} block inside parent_stream_configs. May appear as:
+     *   stream: { $ref: "#/definitions/streams/courses" }
+     * where ManifestParser pre-resolves the ref into the full stream subtree.
+     * After resolution, the {@code name} field is populated from the target stream;
+     * before resolution (or for raw-ref inspection) {@code ref} carries the pointer.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class StreamRef {
 
         @JsonProperty("$ref")
         private String ref;
+
+        @JsonProperty("name")
+        private String name;
 
         public String getRef() {
             return ref;
@@ -265,8 +274,21 @@ public class PartitionRouterSpec {
             this.ref = ref;
         }
 
-        /** Extracts the stream name from a ref like {@code "#/definitions/streams/courses"}. */
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        /**
+         * Returns the parent stream's name. Prefers the resolved {@code name} field
+         * (populated after ManifestParser pre-resolves the {@code $ref}); falls back
+         * to deriving the name from the raw ref pointer.
+         */
         public String refStreamName() {
+            if (name != null && !name.isEmpty()) return name;
             if (ref == null || ref.isEmpty()) return null;
             int last = ref.lastIndexOf('/');
             return last >= 0 ? ref.substring(last + 1) : ref;
