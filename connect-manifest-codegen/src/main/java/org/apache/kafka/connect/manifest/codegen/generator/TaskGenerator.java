@@ -144,6 +144,15 @@ public class TaskGenerator {
         ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.transform.config",
             "ConfigTransformerFactory");
 
+    private static final ClassName BODY_PUBLISHERS =
+        ClassName.get("java.net.http", "HttpRequest.BodyPublishers");
+    private static final ClassName STD_CHARSETS =
+        ClassName.get("java.nio.charset", "StandardCharsets");
+
+    /** Used at codegen time to serialize nested {@code request_body_json} values to JSON literals. */
+    private static final com.fasterxml.jackson.databind.ObjectMapper CODEGEN_MAPPER =
+        new com.fasterxml.jackson.databind.ObjectMapper();
+
     private static final String APP_VERSION = "1.0.0";
 
     /** Keys declared in the current manifest's spec.connection_specification.properties.
@@ -608,7 +617,7 @@ public class TaskGenerator {
         body.add(buildUrlBlock(baseUrl, path, requestParams, paginator, hasPagination, auth,
             incrementalSync, cursorVar));
         body.beginControlFlow("try");
-        buildRequestStatement(body, auth, paginator);
+        buildRequestStatement(body, auth, paginator, requester);
         body.add(buildFetchBlock(paginator));
         if (hasPagination && paginator.isCursor()) {
             body.add(buildCursorStateUpdate(paginator));
@@ -723,7 +732,7 @@ public class TaskGenerator {
         body.add(buildSubstreamUrlBlock(baseUrl, rawPath, paginator, hasPagination));
 
         body.beginControlFlow("try");
-        buildRequestStatement(body, auth, paginator);
+        buildRequestStatement(body, auth, paginator, requester);
         body.add(buildFetchBlock(paginator));
         if (hasPagination && paginator.isCursor()) {
             body.add(buildCursorStateUpdate(paginator));
@@ -814,7 +823,8 @@ public class TaskGenerator {
                 after);
         }
         if (hasPagination && paginator != null) {
-            appendPaginationParams(b, paginator, !(baseUrl + rawPath).contains("?"));
+            appendPaginationParams(b, paginator, !(baseUrl + rawPath).contains("?"),
+                isBodyInjectedJson(paginator) || isBodyInjectedData(paginator));
         }
         return b.build();
     }
@@ -878,7 +888,7 @@ public class TaskGenerator {
         }
 
         // Build and send request (same auth as child stream).
-        buildRequestStatement(body, auth, null);
+        buildRequestStatement(body, auth, null, parentRequester);
         body.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
         body.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");
         body.addStatement("break");
@@ -1240,7 +1250,8 @@ public class TaskGenerator {
         }
 
         if (!hasPagination || paginator == null) return b.build();
-        appendPaginationParams(b, paginator, !hasParams);
+        appendPaginationParams(b, paginator, !hasParams,
+            isBodyInjectedJson(paginator) || isBodyInjectedData(paginator));
         return b.build();
     }
 
@@ -1336,6 +1347,21 @@ public class TaskGenerator {
     private void appendPaginationParams(
         CodeBlock.Builder b, PaginatorSpec paginator, boolean firstParam
     ) {
+        appendPaginationParams(b, paginator, firstParam, false);
+    }
+
+    /**
+     * Appends page-token / page-number / offset query-string parameters to {@code urlBuilder}.
+     * When {@code skipBodyInjected} is {@code true}, parameters whose {@code inject_into} is
+     * {@code body_json} or {@code body_data} are omitted here — they will be added to the
+     * request body by {@link #buildBodyPreamble} instead.
+     */
+    private void appendPaginationParams(
+        CodeBlock.Builder b, PaginatorSpec paginator, boolean firstParam, boolean skipBodyInjected
+    ) {
+        if (skipBodyInjected && (isBodyInjectedJson(paginator) || isBodyInjectedData(paginator))) {
+            return;
+        }
         String sep = firstParam ? "?" : "&";
         if (paginator.isCursor()
                 && paginator.getPageTokenOption() != null
@@ -1514,102 +1540,257 @@ public class TaskGenerator {
         return CodeBlock.builder().addStatement("return result").build();
     }
 
-    /** Generates the {@code HttpRequest.newBuilder()...build()} statement with auth headers. */
-    private void buildRequestStatement(CodeBlock.Builder body, AuthenticatorSpec auth, PaginatorSpec paginator) {
-        if (auth == null || auth.isNoAuth()) {
-            body.addStatement(
-                "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create($L))\n"
-                    + "        .GET()\n"
-                    + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
-            );
-        } else if (auth.isBearer()) {
-            body.addStatement(
-                "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create($L))\n"
-                    + "        .header(\"Authorization\", \"Bearer \" + $L)\n"
-                    + "        .GET()\n"
-                    + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator),
-                interpolateTemplate(auth.getApiToken())
-            );
-        } else if (auth.isApiKey() && isApiKeyQueryParam(auth)) {
-            // key already appended to URL as query param — no auth header needed
-            body.addStatement(
-                "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create($L))\n"
-                    + "        .GET()\n"
-                    + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
-            );
-        } else if (auth.isApiKey()) {
-            String headerName = resolveApiKeyHeaderName(auth);
-            String headerValueExpr = interpolateTemplate(auth.getApiToken());
-            body.addStatement(
-                "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create($L))\n"
-                    + "        .header($S, $L)\n"
-                    + "        .GET()\n"
-                    + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), headerName, headerValueExpr
-            );
-        } else if (auth.isBasicHttp()) {
-            body.addStatement(
-                "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create($L))\n"
-                    + "        .header(\"Authorization\", \"Basic \" + cachedCredentials)\n"
-                    + "        .GET()\n"
-                    + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
-            );
-        } else if (auth.isOAuth()) {
-            body.addStatement("$T accessToken = refreshAccessToken()", String.class);
-            body.addStatement(
-                "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create($L))\n"
-                    + "        .header(\"Authorization\", \"Bearer \" + accessToken)\n"
-                    + "        .GET()\n"
-                    + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
-            );
-        } else if (auth.isSessionToken()) {
-            body.addStatement(
-                "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create($L))\n"
-                    + "        .header(\"Authorization\", \"Bearer \" + cachedSessionToken)\n"
-                    + "        .GET()\n"
-                    + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
-            );
-        } else if (auth.isLegacySessionToken()) {
-            body.addStatement(
-                "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create($L))\n"
-                    + "        .header($S, cachedLegacyToken)\n"
-                    + "        .GET()\n"
-                    + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), auth.getHeader()
-            );
-        } else if (auth.isJwt()) {
-            body.addStatement("$T jwtToken = buildJwt()", String.class);
-            body.addStatement(
-                "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create($L))\n"
-                    + "        .header(\"Authorization\", \"$L \" + jwtToken)\n"
-                    + "        .GET()\n"
-                    + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator), auth.getHeaderPrefix()
-            );
+    // ── Body injection detection helpers ─────────────────────────────────────
+
+    private static boolean isBodyInjectedJson(PaginatorSpec paginator) {
+        if (paginator == null) return false;
+        PaginatorSpec.OptionSpec opt = paginator.getPageTokenOption();
+        return opt != null && "body_json".equalsIgnoreCase(opt.getInjectInto());
+    }
+
+    private static boolean isBodyInjectedData(PaginatorSpec paginator) {
+        if (paginator == null) return false;
+        PaginatorSpec.OptionSpec opt = paginator.getPageTokenOption();
+        return opt != null && "body_data".equalsIgnoreCase(opt.getInjectInto());
+    }
+
+    private static boolean needsJsonBody(RequesterSpec requester, PaginatorSpec paginator) {
+        return (requester != null && requester.getRequestBodyJson() != null)
+            || isBodyInjectedJson(paginator);
+    }
+
+    private static boolean needsDataBody(RequesterSpec requester, PaginatorSpec paginator) {
+        return (requester != null && requester.getRequestBodyData() != null)
+            || isBodyInjectedData(paginator);
+    }
+
+    /**
+     * Emits a single {@code _bodyMap.put(key, value)} statement.
+     * Jinja-templated strings are wrapped in {@code render(...)}, nested maps/lists are
+     * serialized to a JSON literal and decoded at runtime via {@code MAPPER.readValue}.
+     */
+    private void emitBodyMapPut(CodeBlock.Builder b, String key, Object val)
+            throws com.fasterxml.jackson.core.JsonProcessingException {
+        if (val instanceof String strVal) {
+            if (strVal.contains("{{") || strVal.contains("{%")) {
+                b.addStatement("_bodyMap.put($S, $L)", key, interpolateTemplate(strVal));
+            } else {
+                b.addStatement("_bodyMap.put($S, $S)", key, strVal);
+            }
+        } else if (val instanceof Number || val instanceof Boolean) {
+            b.addStatement("_bodyMap.put($S, $L)", key, val);
+        } else if (val == null) {
+            b.addStatement("_bodyMap.put($S, ($T) null)", key, Object.class);
         } else {
-            body.addStatement(
-                "$T request = $T.newBuilder()\n"
-                    + "        .uri($T.create($L))\n"
-                    + "        .GET()\n"
-                    + "        .build()",
-                HTTP_REQUEST, HTTP_REQUEST, URI_CLASS, urlExpr(auth, paginator)
-            );
+            String jsonLiteral = CODEGEN_MAPPER.writeValueAsString(val);
+            b.addStatement("_bodyMap.put($S, MAPPER.readValue($S, $T.class))",
+                key, jsonLiteral, Object.class);
         }
+    }
+
+    /**
+     * Emits code to build the POST/PUT request body into variable {@code _bodyStr}.
+     * Returns {@code "_bodyStr"} if a body was emitted, {@code null} if no body is needed.
+     *
+     * <p>Handles:
+     * <ul>
+     *   <li>{@code request_body_json} — emits a {@code Map<String,Object>} and serializes to JSON.</li>
+     *   <li>Paginator {@code inject_into: body_json} — adds page-token to the body map.</li>
+     *   <li>{@code request_body_data} raw string — emits the string directly.</li>
+     *   <li>{@code request_body_data} form map / paginator {@code inject_into: body_data} —
+     *       builds URL-encoded form string.</li>
+     * </ul>
+     */
+    private String buildBodyPreamble(
+        CodeBlock.Builder b, RequesterSpec requester, PaginatorSpec paginator
+    ) throws com.fasterxml.jackson.core.JsonProcessingException {
+        boolean jsonBody = needsJsonBody(requester, paginator);
+        boolean dataBody = !jsonBody && needsDataBody(requester, paginator);
+
+        if (!jsonBody && !dataBody) {
+            return null;
+        }
+
+        ParameterizedTypeName mapStrObj = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"), ClassName.get(String.class), ClassName.get(Object.class));
+
+        if (jsonBody) {
+            b.addStatement("$T _bodyMap = new $T<>()", mapStrObj, ClassName.get("java.util", "LinkedHashMap"));
+            if (requester != null && requester.getRequestBodyJson() != null) {
+                for (Map.Entry<String, Object> entry : requester.getRequestBodyJson().entrySet()) {
+                    emitBodyMapPut(b, entry.getKey(), entry.getValue());
+                }
+            }
+            if (isBodyInjectedJson(paginator)) {
+                String fieldName = paginator.getPageTokenOption().getFieldName();
+                if (fieldName != null && !fieldName.isEmpty()) {
+                    b.beginControlFlow("if (nextCursor != null)");
+                    b.addStatement("_bodyMap.put($S, nextCursor)", fieldName);
+                    b.endControlFlow();
+                }
+            }
+            if (paginator != null && paginator.isPageIncrement() && isBodyInjectedJson(paginator)) {
+                b.addStatement("_bodyMap.put($S, $T.valueOf(page))", paginator.pageParamName(), String.class);
+            }
+            if (paginator != null && paginator.getPageSizeOption() != null
+                    && "body_json".equalsIgnoreCase(paginator.getPageSizeOption().getInjectInto())) {
+                b.addStatement("_bodyMap.put($S, $T.valueOf(pageLimit))",
+                    paginator.getPageSizeOption().getFieldName(), String.class);
+            }
+            b.addStatement("$T _bodyStr = MAPPER.writeValueAsString(_bodyMap)", String.class);
+        } else {
+            // data body
+            RequesterSpec.BodyDataSpec dataSpec = requester != null ? requester.getRequestBodyData() : null;
+            if (dataSpec != null && dataSpec.isRaw()) {
+                b.addStatement("$T _bodyStr = $L", String.class, interpolateTemplate(dataSpec.getRawBody()));
+            } else {
+                b.addStatement("$T _bodyBuilder = new $T()", StringBuilder.class, StringBuilder.class);
+                boolean firstField = true;
+                if (dataSpec != null && dataSpec.getFormFields() != null) {
+                    for (Map.Entry<String, String> e : dataSpec.getFormFields().entrySet()) {
+                        String sep = firstField ? "" : "&";
+                        b.addStatement("_bodyBuilder.append($S + $T.encode($L, $T.UTF_8))",
+                            sep + e.getKey() + "=",
+                            ClassName.get("java.net", "URLEncoder"),
+                            interpolateTemplate(e.getValue()),
+                            STD_CHARSETS);
+                        firstField = false;
+                    }
+                }
+                if (isBodyInjectedData(paginator)) {
+                    String fieldName = paginator.getPageTokenOption().getFieldName();
+                    b.beginControlFlow("if (nextCursor != null)");
+                    String sep = firstField ? "" : "&";
+                    b.addStatement("_bodyBuilder.append($S + $T.encode(nextCursor, $T.UTF_8))",
+                        sep + fieldName + "=",
+                        ClassName.get("java.net", "URLEncoder"),
+                        STD_CHARSETS);
+                    b.endControlFlow();
+                }
+                b.addStatement("$T _bodyStr = _bodyBuilder.toString()", String.class);
+            }
+        }
+        return "_bodyStr";
+    }
+
+    /**
+     * Appends {@code .POST(publisher)} or {@code .PUT(publisher)} or {@code .GET()} to the
+     * given format-string builder. The caller provides an {@code args} list to which any
+     * ClassName type tokens are appended.
+     */
+    private void appendHttpMethod(
+        StringBuilder fmt, List<Object> args,
+        String httpMethod, boolean jsonBody, boolean dataBody, String bodyVar
+    ) {
+        boolean isPost = "POST".equalsIgnoreCase(httpMethod);
+        boolean isPut  = "PUT".equalsIgnoreCase(httpMethod);
+
+        if ((isPost || isPut) && bodyVar != null) {
+            fmt.append(isPost
+                ? "\n        .POST($T.ofString($L, $T.UTF_8))"
+                : "\n        .PUT($T.ofString($L, $T.UTF_8))");
+            args.add(BODY_PUBLISHERS);
+            args.add(bodyVar);
+            args.add(STD_CHARSETS);
+        } else if (isPost) {
+            fmt.append("\n        .POST($T.noBody())");
+            args.add(BODY_PUBLISHERS);
+        } else if (isPut) {
+            fmt.append("\n        .PUT($T.noBody())");
+            args.add(BODY_PUBLISHERS);
+        } else {
+            fmt.append("\n        .GET()");
+        }
+    }
+
+    /**
+     * Generates the {@code HttpRequest.newBuilder()...build()} statement with auth headers,
+     * custom request headers, and the appropriate HTTP method (GET/POST/PUT) with body.
+     *
+     * <p>Call {@link #buildBodyPreamble} separately when the method is POST/PUT so the body
+     * variables are in scope before this statement runs.</p>
+     */
+    private void buildRequestStatement(
+        CodeBlock.Builder body, AuthenticatorSpec auth, PaginatorSpec paginator,
+        RequesterSpec requester
+    ) throws CodegenException {
+        String httpMethod  = requester != null ? requester.getHttpMethod() : "GET";
+        boolean jsonBody   = needsJsonBody(requester, paginator);
+        boolean dataBody   = needsDataBody(requester, paginator);
+        boolean hasBody    = jsonBody || dataBody;
+
+        // Emit body-building preamble (sets _bodyStr) when applicable.
+        String bodyVar = null;
+        if (hasBody) {
+            try {
+                bodyVar = buildBodyPreamble(body, requester, paginator);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new CodegenException("Failed to serialize request_body_json: " + e.getMessage());
+            }
+        }
+
+        // Pre-statements for auth mechanisms that need a helper call first.
+        if (auth != null && auth.isOAuth()) {
+            body.addStatement("$T accessToken = refreshAccessToken()", String.class);
+        } else if (auth != null && auth.isJwt()) {
+            body.addStatement("$T jwtToken = buildJwt()", String.class);
+        }
+
+        StringBuilder fmt = new StringBuilder(
+            "$T request = $T.newBuilder()\n        .uri($T.create($L))");
+        List<Object> args = new ArrayList<>();
+        args.add(HTTP_REQUEST);
+        args.add(HTTP_REQUEST);
+        args.add(URI_CLASS);
+        args.add(urlExpr(auth, paginator));
+
+        // Content-Type header when a body is present.
+        if (bodyVar != null) {
+            if (jsonBody) {
+                fmt.append("\n        .header(\"Content-Type\", \"application/json\")");
+            } else if (dataBody) {
+                fmt.append("\n        .header(\"Content-Type\", \"application/x-www-form-urlencoded\")");
+            }
+        }
+
+        // Auth headers.
+        if (auth == null || auth.isNoAuth() || (auth.isApiKey() && isApiKeyQueryParam(auth))) {
+            // no auth header
+        } else if (auth.isBearer()) {
+            fmt.append("\n        .header(\"Authorization\", \"Bearer \" + $L)");
+            args.add(interpolateTemplate(auth.getApiToken()));
+        } else if (auth.isApiKey()) {
+            fmt.append("\n        .header($S, $L)");
+            args.add(resolveApiKeyHeaderName(auth));
+            args.add(interpolateTemplate(auth.getApiToken()));
+        } else if (auth.isBasicHttp()) {
+            fmt.append("\n        .header(\"Authorization\", \"Basic \" + cachedCredentials)");
+        } else if (auth.isOAuth()) {
+            fmt.append("\n        .header(\"Authorization\", \"Bearer \" + accessToken)");
+        } else if (auth.isSessionToken()) {
+            fmt.append("\n        .header(\"Authorization\", \"Bearer \" + cachedSessionToken)");
+        } else if (auth.isLegacySessionToken()) {
+            fmt.append("\n        .header($S, cachedLegacyToken)");
+            args.add(auth.getHeader());
+        } else if (auth.isJwt()) {
+            fmt.append("\n        .header(\"Authorization\", \"$L \" + jwtToken)");
+            args.add(auth.getHeaderPrefix());
+        }
+
+        // Custom request headers from the manifest.
+        Map<String, String> reqHeaders = requester != null
+            ? requester.getRequestHeaders() : Collections.emptyMap();
+        for (Map.Entry<String, String> h : reqHeaders.entrySet()) {
+            fmt.append("\n        .header($S, $S)");
+            args.add(h.getKey());
+            args.add(h.getValue());
+        }
+
+        // HTTP method.
+        appendHttpMethod(fmt, args, httpMethod, jsonBody, dataBody, bodyVar);
+        fmt.append("\n        .build()");
+
+        body.addStatement(fmt.toString(), args.toArray());
     }
 
     /**
@@ -2464,7 +2645,7 @@ public class TaskGenerator {
         body.add(buildListRouterUrlBlock(baseUrl, rawPath, listRouters, paginator, hasPagination));
 
         body.beginControlFlow("try");
-        buildRequestStatement(body, auth, paginator);
+        buildRequestStatement(body, auth, paginator, requester);
         body.add(buildFetchBlock(paginator));
         if (hasPagination && paginator.isCursor()) {
             body.add(buildCursorStateUpdate(paginator));
@@ -2594,7 +2775,8 @@ public class TaskGenerator {
         }
 
         if (hasPagination && paginator != null) {
-            appendPaginationParams(b, paginator, !rawPath.contains("?"));
+            appendPaginationParams(b, paginator, !rawPath.contains("?"),
+                isBodyInjectedJson(paginator) || isBodyInjectedData(paginator));
         }
 
         // For RequestPath cursor paginators, the cursor IS the next URL. On page 1, use the
@@ -2949,7 +3131,7 @@ public class TaskGenerator {
             StringBuilder.class, StringBuilder.class, fullUrlTemplate);
 
         body.beginControlFlow("try");
-        buildRequestStatement(body, auth, null);
+        buildRequestStatement(body, auth, null, requester);
         body.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
 
         // 4xx/5xx: skip + advance (don't crash the connector).
