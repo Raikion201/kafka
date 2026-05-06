@@ -1,0 +1,38 @@
+# Acceptance test config for the Akeneo connector.
+#
+# Akeneo exercises a single-level SubstreamPartitionRouter:
+#   families → /families/{family_code}/variants  (parent_key=code, partition_field=family_code)
+# So a passing read phase proves end-to-end that:
+#   1. Parent stream (families) is fetched.
+#   2. Each parent record's `code` is captured as a partition slice.
+#   3. The child URL template {{ stream_partition.family_code }} is rendered.
+#   4. The child stream (family_variants) is polled per slice and produces records.
+#
+# Live run:
+#   export AIRBYTE_AKENEO_HOST=https://prov-e764no6bc5.trial.akeneo.cloud
+#   export AIRBYTE_AKENEO_API_USERNAME=...
+#   export AIRBYTE_AKENEO_PASSWORD=...
+#   export AIRBYTE_AKENEO_CLIENT_ID=...
+#   export AIRBYTE_AKENEO_SECRET=...
+#   ./gradlew :connect-manifest-codegen:test \
+#     --tests 'org.apache.kafka.connect.manifest.codegen.acceptance.AcceptanceTest'
+
+connector: Akeneo
+
+config:
+  host: ${AIRBYTE_AKENEO_HOST}
+  api_username: ${AIRBYTE_AKENEO_API_USERNAME}
+  password: ${AIRBYTE_AKENEO_PASSWORD}
+  client_id: ${AIRBYTE_AKENEO_CLIENT_ID}
+  secret: ${AIRBYTE_AKENEO_SECRET}
+
+max_polls: 15
+resume_after_polls: 3
+
+streams:
+  - name: families
+    min_records: 1
+  - name: family_variants
+    min_records: 0   # trial accounts may not have variants on every family
+  - name: measure_families
+    min_records: 1
