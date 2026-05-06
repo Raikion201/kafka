@@ -1532,14 +1532,8 @@ public class TaskGenerator {
             StringBuilder extraFields = new StringBuilder();
             if (auth.getRefreshRequestBody() != null) {
                 for (Map.Entry<String, String> e : auth.getRefreshRequestBody().entrySet()) {
-                    Matcher cfgMatch = CONFIG_TEMPLATE.matcher(e.getValue());
-                    if (cfgMatch.find()) {
-                        extraFields.append("\n        + \"&").append(e.getKey())
-                            .append("=\" + ").append(interpolateTemplate(e.getValue()));
-                    } else {
-                        extraFields.append("\n        + \"&").append(e.getKey())
-                            .append("=").append(e.getValue()).append("\"");
-                    }
+                    extraFields.append("\n        + \"&").append(e.getKey())
+                        .append("=\" + ").append(interpolateTemplate(e.getValue()));
                 }
             }
             body.addStatement("$T reqBody = \"grant_type=client_credentials\"\n"
@@ -1615,15 +1609,7 @@ public class TaskGenerator {
 
         // Resolve the login URL — may be a mixed template like "{{ config["host"] }}/api/oauth/v1"
         String urlBase = login.getUrlBase() == null ? "" : login.getUrlBase();
-        Matcher urlMatcher = CONFIG_TEMPLATE.matcher(urlBase);
-        String loginUrlExpr;
-        if (urlMatcher.find()) {
-            String getter = "get" + ManifestSpec.toClassName(urlMatcher.group(1));
-            String suffix = urlBase.substring(urlMatcher.end()).replaceAll("\\s*\\}\\}.*", "");
-            loginUrlExpr = "config." + getter + "() + \"" + suffix + "/" + login.getPath() + "\"";
-        } else {
-            loginUrlExpr = "\"" + urlBase + "/" + login.getPath() + "\"";
-        }
+        String loginUrlExpr = interpolateTemplate(urlBase + "/" + login.getPath());
 
         // Build JSON body string from requestBodyJson
         CodeBlock.Builder body = CodeBlock.builder();
@@ -1631,13 +1617,7 @@ public class TaskGenerator {
             ClassName.get("java.util", "LinkedHashMap"));
         if (login.getRequestBodyJson() != null) {
             for (Map.Entry<String, String> e : login.getRequestBodyJson().entrySet()) {
-                Matcher m = CONFIG_TEMPLATE.matcher(e.getValue());
-                if (m.matches() || m.find()) {
-                    String getter = "get" + ManifestSpec.toClassName(m.group(1));
-                    body.addStatement("bodyMap.put($S, config.$L())", e.getKey(), getter);
-                } else {
-                    body.addStatement("bodyMap.put($S, $S)", e.getKey(), e.getValue());
-                }
+                body.addStatement("bodyMap.put($S, $L)", e.getKey(), interpolateTemplate(e.getValue()));
             }
         }
         body.addStatement("$T loginBody = MAPPER.writeValueAsString(bodyMap)", String.class);
@@ -1706,15 +1686,7 @@ public class TaskGenerator {
     private MethodSpec buildLoginAndCacheLegacyToken(
         ClassName configClass, AuthenticatorSpec auth, String baseUrl
     ) {
-        Matcher urlMatcher = CONFIG_TEMPLATE.matcher(baseUrl);
-        String loginUrlExpr;
-        if (urlMatcher.find()) {
-            String getter = "get" + ManifestSpec.toClassName(urlMatcher.group(1));
-            String suffix = baseUrl.substring(urlMatcher.end()).replaceAll("\\s*\\}\\}.*", "");
-            loginUrlExpr = "config." + getter + "() + \"" + suffix + auth.getLoginUrl() + "\"";
-        } else {
-            loginUrlExpr = "\"" + baseUrl + auth.getLoginUrl() + "\"";
-        }
+        String loginUrlExpr = interpolateTemplate(baseUrl + auth.getLoginUrl());
 
         String userExpr = interpolateTemplate(auth.getUsername());
         String passExpr = interpolateTemplate(auth.getPassword());
@@ -1809,7 +1781,6 @@ public class TaskGenerator {
         body.addStatement("payloadMap.put(\"iat\", now)");
         body.addStatement("payloadMap.put(\"exp\", exp)");
         for (Map.Entry<String, String> e : payloadFields.entrySet()) {
-            Matcher cfgM = CONFIG_TEMPLATE.matcher(e.getValue());
             Matcher jlPayload = jsonLoads.matcher(e.getValue());
             Matcher ncPayload = nestedConfig.matcher(e.getValue());
             if (jlPayload.find()) {
@@ -1824,11 +1795,8 @@ public class TaskGenerator {
                 body.addStatement(
                     "payloadMap.put($S, ($T)(($T<?,?>) MAPPER.readValue(config.$L(), $T.class)).get($S))",
                     e.getKey(), String.class, Map.class, outerGetter, Object.class, innerKey);
-            } else if (cfgM.find()) {
-                String getter = "get" + ManifestSpec.toClassName(cfgM.group(1));
-                body.addStatement("payloadMap.put($S, config.$L())", e.getKey(), getter);
             } else {
-                body.addStatement("payloadMap.put($S, $S)", e.getKey(), e.getValue());
+                body.addStatement("payloadMap.put($S, $L)", e.getKey(), interpolateTemplate(e.getValue()));
             }
         }
         body.addStatement("$T payloadJson = MAPPER.writeValueAsString(payloadMap)", String.class);
