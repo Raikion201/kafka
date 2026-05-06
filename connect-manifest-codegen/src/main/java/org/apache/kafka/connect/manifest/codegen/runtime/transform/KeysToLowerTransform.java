@@ -1,0 +1,41 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.kafka.connect.manifest.codegen.runtime.transform;
+
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+
+/**
+ * Java port of Airbyte's {@code keys_to_lower_transformation.py KeysToLowerTransformation}.
+ * Rebuilds the top-level record map with all keys lowercased.
+ * Flat rebuild — does not recurse into nested maps (matches the Python source).
+ */
+public final class KeysToLowerTransform implements RecordTransformation {
+
+    public static final KeysToLowerTransform INSTANCE = new KeysToLowerTransform();
+
+    @Override
+    public void apply(Map<String, Object> record, Map<String, Object> ctx) {
+        Map<String, Object> lowered = new LinkedHashMap<>(record.size());
+        for (Map.Entry<String, Object> e : record.entrySet()) {
+            lowered.put(e.getKey().toLowerCase(Locale.ROOT), e.getValue());
+        }
+        record.clear();
+        record.putAll(lowered);
+    }
+}
