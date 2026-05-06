@@ -93,12 +93,14 @@ dependencies {
 // ── generateConnectors task ───────────────────────────────────────────────────
 
 tasks.register('generateConnectors', JavaExec) {
-    description = 'Generates Kafka Connect connector source files from manifests in src/main/manifests/'
+    description = 'Generates Kafka Connect connector source files from all manifests in src/test/resources/manifests/'
     group = 'build'
 
     dependsOn compileJava   // generator classes must be compiled before we can invoke the CLI
 
-    def manifestsDir = file('src/main/manifests')
+    // Single source of truth: the full Airbyte manifest corpus lives in test resources.
+    // src/main/manifests/ is kept for any hand-written overrides but is no longer the primary input.
+    def manifestsDir = file('src/test/resources/manifests')
     def outputDir = layout.buildDirectory.dir('generated-sources/connectors')
 
     classpath = sourceSets.main.runtimeClasspath
