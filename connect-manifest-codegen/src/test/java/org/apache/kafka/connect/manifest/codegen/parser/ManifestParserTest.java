@@ -20,7 +20,9 @@ import org.apache.kafka.connect.manifest.codegen.model.ManifestSpec;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -306,5 +308,188 @@ public class ManifestParserTest {
         assertEquals("IGNORE", filter.getAction());
         assertEquals(java.util.List.of(401), filter.getHttpCodes());
         assertEquals("Paid plan required", filter.getErrorMessage());
+    }
+
+    // ── transformations: AddFields / RemoveFields / RecordFilter / Keys* / Flatten* ────
+
+    private InputStream yaml(String body) {
+        return new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String streamWith(String transformationsYaml) {
+        return ""
+            + "version: 0.50.0\n"
+            + "type: DeclarativeSource\n"
+            + "streams:\n"
+            + "  - type: DeclarativeStream\n"
+            + "    name: s\n"
+            + "    retriever:\n"
+            + "      type: SimpleRetriever\n"
+            + "      requester:\n"
+            + "        type: HttpRequester\n"
+            + "        url_base: https://example.com\n"
+            + "        path: /x\n"
+            + "      record_selector:\n"
+            + "        type: RecordSelector\n"
+            + "        extractor:\n"
+            + "          type: DpathExtractor\n"
+            + "          field_path: []\n"
+            + transformationsYaml;
+    }
+
+    @Test
+    void parsesAddFieldsTransformationFromInlineYaml() throws Exception {
+        ManifestSpec spec = parser.parse(yaml(streamWith(""
+            + "    transformations:\n"
+            + "      - type: AddFields\n"
+            + "        fields:\n"
+            + "          - path: [\"shop_id\"]\n"
+            + "            value: \"{{ config.shop_id }}\"\n"
+            + "          - path: [\"nested\", \"static\"]\n"
+            + "            value: \"hello\"\n"
+            + "            value_type: string\n")));
+        var t = spec.resolvedStreams().get(0).getTransformations();
+        assertEquals(1, t.size());
+        assertEquals("AddFields", t.get(0).getType());
+        assertEquals(2, t.get(0).getFields().size());
+        assertEquals(java.util.List.of("shop_id"), t.get(0).getFields().get(0).getPath());
+        assertEquals("{{ config.shop_id }}", t.get(0).getFields().get(0).getValue());
+        assertEquals(java.util.List.of("nested", "static"), t.get(0).getFields().get(1).getPath());
+        assertEquals("string", t.get(0).getFields().get(1).getValueType());
+    }
+
+    @Test
+    void parsesRemoveFieldsTransformationFromInlineYaml() throws Exception {
+        ManifestSpec spec = parser.parse(yaml(streamWith(""
+            + "    transformations:\n"
+            + "      - type: RemoveFields\n"
+            + "        field_pointers:\n"
+            + "          - [\"private_key\"]\n"
+            + "          - [\"nested\", \"secret\"]\n"
+            + "        condition: \"{{ record.cleanup }}\"\n")));
+        var t = spec.resolvedStreams().get(0).getTransformations().get(0);
+        assertEquals("RemoveFields", t.getType());
+        assertEquals(2, t.getFieldPointers().size());
+        assertEquals(java.util.List.of("private_key"), t.getFieldPointers().get(0));
+        assertEquals(java.util.List.of("nested", "secret"), t.getFieldPointers().get(1));
+        assertEquals("{{ record.cleanup }}", t.getCondition());
+    }
+
+    @Test
+    void parsesRecordFilterCondition() throws Exception {
+        ManifestSpec spec = parser.parse(yaml(""
+            + "version: 0.50.0\n"
+            + "type: DeclarativeSource\n"
+            + "streams:\n"
+            + "  - type: DeclarativeStream\n"
+            + "    name: s\n"
+            + "    retriever:\n"
+            + "      type: SimpleRetriever\n"
+            + "      requester: { type: HttpRequester, url_base: https://e.com, path: /x }\n"
+            + "      record_selector:\n"
+            + "        type: RecordSelector\n"
+            + "        extractor: { type: DpathExtractor, field_path: [] }\n"
+            + "        record_filter:\n"
+            + "          type: RecordFilter\n"
+            + "          condition: \"{{ record.id != none }}\"\n"));
+        var rf = spec.resolvedStreams().get(0).getRetriever().getRecordSelector().getRecordFilter();
+        assertNotNull(rf);
+        assertEquals("RecordFilter", rf.getType());
+        assertEquals("{{ record.id != none }}", rf.getCondition());
+    }
+
+    @Test
+    void parsesKeysToLowerKeysReplaceKeysToSnake() throws Exception {
+        ManifestSpec spec = parser.parse(yaml(streamWith(""
+            + "    transformations:\n"
+            + "      - type: KeysToLower\n"
+            + "      - type: KeysReplace\n"
+            + "        old: \" \"\n"
+            + "        new: \"_\"\n"
+            + "      - type: KeysToSnakeCase\n")));
+        var ts = spec.resolvedStreams().get(0).getTransformations();
+        assertEquals(3, ts.size());
+        assertEquals("KeysToLower", ts.get(0).getType());
+        assertEquals("KeysReplace", ts.get(1).getType());
+        assertEquals(" ", ts.get(1).getOld());
+        assertEquals("_", ts.get(1).getNewValue());
+        assertEquals("KeysToSnakeCase", ts.get(2).getType());
+    }
+
+    @Test
+    void parsesFlattenFieldsAndDpathFlattenWithKeyTransformation() throws Exception {
+        ManifestSpec spec = parser.parse(yaml(streamWith(""
+            + "    transformations:\n"
+            + "      - type: FlattenFields\n"
+            + "        flatten_lists: false\n"
+            + "      - type: DpathFlattenFields\n"
+            + "        field_path: [\"data\", \"*\"]\n"
+            + "        delete_origin_value: true\n"
+            + "        replace_record: false\n"
+            + "        key_transformation:\n"
+            + "          type: KeyTransformation\n"
+            + "          prefix: \"x_\"\n"
+            + "          suffix: \"_y\"\n")));
+        var ts = spec.resolvedStreams().get(0).getTransformations();
+        assertEquals(2, ts.size());
+        assertEquals("FlattenFields", ts.get(0).getType());
+        assertEquals(Boolean.FALSE, ts.get(0).getFlattenLists());
+
+        var d = ts.get(1);
+        assertEquals("DpathFlattenFields", d.getType());
+        assertEquals(java.util.List.of("data", "*"), d.getFieldPath());
+        assertEquals(Boolean.TRUE, d.getDeleteOriginValue());
+        assertEquals(Boolean.FALSE, d.getReplaceRecord());
+        assertNotNull(d.getKeyTransformation());
+        assertEquals("x_", d.getKeyTransformation().getPrefix());
+        assertEquals("_y", d.getKeyTransformation().getSuffix());
+    }
+
+    @Test
+    void parsesConfigTransformationsBlock() throws Exception {
+        ManifestSpec spec = parser.parse(yaml(""
+            + "version: 0.50.0\n"
+            + "type: DeclarativeSource\n"
+            + "config_transformations:\n"
+            + "  - type: ConfigAddFields\n"
+            + "    fields:\n"
+            + "      - path: [\"derived\"]\n"
+            + "        value: \"{{ config.api_key | upper }}\"\n"
+            + "  - type: ConfigRemapField\n"
+            + "    field_path: [\"region\"]\n"
+            + "    map:\n"
+            + "      us: \"us-east-1\"\n"
+            + "      eu: \"eu-west-1\"\n"
+            + "streams: []\n"));
+        assertEquals(2, spec.getConfigTransformations().size());
+        var add = spec.getConfigTransformations().get(0);
+        assertEquals("ConfigAddFields", add.getType());
+        assertEquals(java.util.List.of("derived"), add.getFields().get(0).getPath());
+        assertEquals("{{ config.api_key | upper }}", add.getFields().get(0).getValue());
+
+        var remap = spec.getConfigTransformations().get(1);
+        assertEquals("ConfigRemapField", remap.getType());
+        assertEquals(java.util.List.of("region"), remap.getFieldPath());
+        assertEquals("us-east-1", remap.getMap().get("us"));
+        assertEquals("eu-west-1", remap.getMap().get("eu"));
+    }
+
+    @Test
+    void preservesTransformationOrderAndKeepsUnknownTypes() throws Exception {
+        ManifestSpec spec = parser.parse(yaml(streamWith(""
+            + "    transformations:\n"
+            + "      - type: AddFields\n"
+            + "        fields:\n"
+            + "          - path: [\"a\"]\n"
+            + "            value: \"1\"\n"
+            + "      - type: SomeFutureTransform\n"
+            + "      - type: RemoveFields\n"
+            + "        field_pointers:\n"
+            + "          - [\"b\"]\n")));
+        var ts = spec.resolvedStreams().get(0).getTransformations();
+        assertEquals(3, ts.size());
+        assertEquals("AddFields", ts.get(0).getType());
+        assertEquals("SomeFutureTransform", ts.get(1).getType());
+        assertEquals("RemoveFields", ts.get(2).getType());
     }
 }

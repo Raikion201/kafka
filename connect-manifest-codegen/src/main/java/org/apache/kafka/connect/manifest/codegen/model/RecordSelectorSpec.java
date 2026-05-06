@@ -31,6 +31,9 @@ public class RecordSelectorSpec {
     private String type;
     private ExtractorSpec extractor;
 
+    @JsonProperty("record_filter")
+    private RecordFilterSpec recordFilter;
+
     public String getType() {
         return type;
     }
@@ -45,6 +48,14 @@ public class RecordSelectorSpec {
 
     public void setExtractor(ExtractorSpec extractor) {
         this.extractor = extractor;
+    }
+
+    public RecordFilterSpec getRecordFilter() {
+        return recordFilter;
+    }
+
+    public void setRecordFilter(RecordFilterSpec recordFilter) {
+        this.recordFilter = recordFilter;
     }
 
     /** Models the {@code extractor} inside a record_selector — the JSON path to the records array. */

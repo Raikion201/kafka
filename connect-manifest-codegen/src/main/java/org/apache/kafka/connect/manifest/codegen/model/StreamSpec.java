@@ -53,6 +53,8 @@ public class StreamSpec {
     @JsonProperty("incremental_sync")
     private IncrementalSyncSpec incrementalSync;
 
+    private List<TransformationSpec> transformations = Collections.emptyList();
+
     /**
      * Marker set by ManifestSpec when this stream was synthesised from a top-level
      * {@code dynamic_streams:} block. The codegen task will discover concrete stream
@@ -136,6 +138,14 @@ public class StreamSpec {
 
     public void setIncrementalSync(IncrementalSyncSpec incrementalSync) {
         this.incrementalSync = incrementalSync;
+    }
+
+    public List<TransformationSpec> getTransformations() {
+        return transformations == null ? Collections.emptyList() : transformations;
+    }
+
+    public void setTransformations(List<TransformationSpec> transformations) {
+        this.transformations = transformations == null ? Collections.emptyList() : transformations;
     }
 
     /**

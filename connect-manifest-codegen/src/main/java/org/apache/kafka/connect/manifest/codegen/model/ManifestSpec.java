@@ -49,6 +49,9 @@ public class ManifestSpec {
     @JsonProperty("dynamic_streams")
     private List<DynamicStreamSpec> dynamicStreams = Collections.emptyList();
 
+    @JsonProperty("config_transformations")
+    private List<ConfigTransformationSpec> configTransformations = Collections.emptyList();
+
     private SpecDef spec;
     private DefinitionsDef definitions;
     private String manifestName;
@@ -125,6 +128,14 @@ public class ManifestSpec {
 
     public void setDynamicStreams(List<DynamicStreamSpec> v) {
         this.dynamicStreams = v == null ? Collections.emptyList() : v;
+    }
+
+    public List<ConfigTransformationSpec> getConfigTransformations() {
+        return configTransformations == null ? Collections.emptyList() : configTransformations;
+    }
+
+    public void setConfigTransformations(List<ConfigTransformationSpec> v) {
+        this.configTransformations = v == null ? Collections.emptyList() : v;
     }
 
     public List<StreamSpec> resolvedStreams() {
