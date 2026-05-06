@@ -123,17 +123,17 @@ If any rule above is in tension with a specific change, raise it explicitly
 before deviating — do not silently skip. These rules cost time up front and
 save much more time at review and in production.
 
-## Coverage baseline (as of 2026-05-06, after Phase 3)
+## Coverage baseline (as of 2026-05-06, after Phase 4)
 
-Of the 549 manifests under `src/test/resources/manifests/`:
+Of the 550 manifests under `src/test/resources/manifests/`:
 
 | Class | Count | % | Meaning |
 |---|---:|---:|---|
-| Works correctly | 432 | 79% | Uses only features we implement |
+| Works correctly | 465 | 84.5% | Uses only features we implement |
 | Works but wrong record shape | 0 | 0% | All transforms now implemented |
 | Works until first transient error | 0 | 0% | Retry/backoff now implemented |
-| Broken (uses unimplemented feature) | 104 | 19% | Fails at runtime or silently misses data |
-| Stub (throws on `start()`) | 13 | 2% | `GenericDynamicStreamStub` |
+| Broken (uses unimplemented feature) | 72 | 13% | Fails at runtime or silently misses data |
+| Stub (throws on `start()`) | 13 | 2.4% | `GenericDynamicStreamStub` |
 
 Phases implemented so far:
 - **Phase 1**: `DefaultErrorHandler` / `CompositeErrorHandler` / backoff strategies → wired
@@ -141,6 +141,7 @@ Phases implemented so far:
   key transforms, `FlattenFields`, `DpathFlattenFields`, config transforms) → wired
 - **Phase 3**: POST/PUT HTTP methods + `request_body_json` / `request_body_data` +
   paginator `inject_into: body_json` / `body_data` → wired
+- **Phase 4**: `DatetimeBasedCursor` with `step:` ISO-8601 window slicing → wired
 
 Re-run with `./gradlew :connect-manifest-codegen:test --tests
 ManifestCoverageReport.gradeEndToEndCoverage`; the report file
@@ -150,18 +151,18 @@ ManifestCoverageReport.gradeEndToEndCoverage`; the report file
 
 | # | Missing feature | Effect |
 |---:|---|---|
-| 49 | `DatetimeBasedCursor` with `step:` window slicing | sync only fetches one window |
 | 26 | `HTTPAPIBudget` rate limiting | 429-storm |
 | 25 | `MovingWindowCallRatePolicy` | same |
 | 23 | `CustomRecordExtractor` (registry exists, not wired) | nothing extracted |
 | 16 | `CustomTransformation` | records unmodified |
+| 14 | `CustomAuthenticator` | auth fails |
 
 ### Path to ~93% (under the rule-5 constraints)
 
 1. ~~Phase 1: DefaultErrorHandler + backoff~~ ✓ Done.
 2. ~~Phase 2: Transformations pipeline~~ ✓ Done.
 3. ~~Phase 3: POST/PUT + request bodies~~ ✓ Done.
-4. `DatetimeBasedCursor.step` window slicing → unblocks ~49.
+4. ~~Phase 4: `DatetimeBasedCursor.step` window slicing~~ ✓ Done.
 5. Wire `Custom*` registry into the generated task → unblocks ~40.
 
 After 4–5 plus the `ManifestParser.validate()` $ref-string fix (frees 11
