@@ -876,8 +876,302 @@ public class CodegenIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // TRANSFORMATIONS PIPELINE (transformations_test.yaml)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void transformations_generatedTaskCompiles(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("transformations_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+        String src = g.task.toString();
+        assertTrue(src.contains("TransformationPipelineFactory"),
+            "Generated task must reference TransformationPipelineFactory");
+        assertTrue(src.contains("ConfigTransformerFactory"),
+            "Generated task must reference ConfigTransformerFactory");
+        assertTrue(src.contains("pipeline_add_remove"),
+            "Generated task must declare a per-stream pipeline field for add_remove");
+        assertTrue(src.contains("configValues"),
+            "Generated task must store configValues for use in jinjaCtx()");
+    }
+
+    @Test
+    void transformations_mockHttp_addFieldsAppearOnRecords(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("transformations_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+        byte[] body = ("{\"results\":[{\"id\":1,\"name\":\"alice\",\"sensitive\":\"secret\"}]}")
+            .getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            Object task = loadAndStartTask(g, tmpDir, port);
+            List<?> records = pollStream(task, "pollAddRemove");
+            assertEquals(1, records.size(), "Expected exactly 1 record");
+            String json = (String) records.get(0).getClass().getMethod("value").invoke(records.get(0));
+            assertTrue(json.contains("\"source\""), "AddFields must inject 'source' key");
+            assertTrue(json.contains("static_value"), "AddFields must set source=static_value");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void transformations_mockHttp_removeFieldsStrips(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("transformations_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+        byte[] body = ("{\"results\":[{\"id\":1,\"name\":\"alice\",\"sensitive\":\"secret\"}]}")
+            .getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            Object task = loadAndStartTask(g, tmpDir, port);
+            List<?> records = pollStream(task, "pollAddRemove");
+            assertEquals(1, records.size(), "Expected exactly 1 record");
+            String json = (String) records.get(0).getClass().getMethod("value").invoke(records.get(0));
+            assertFalse(json.contains("sensitive"), "RemoveFields must strip 'sensitive' key");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void transformations_mockHttp_recordFilterDropsEvenIds(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("transformations_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+        byte[] body = ("{\"results\":[{\"id\":1},{\"id\":2},{\"id\":3},{\"id\":4}]}")
+            .getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            Object task = loadAndStartTask(g, tmpDir, port);
+            List<?> records = pollStream(task, "pollFiltered");
+            assertEquals(2, records.size(), "RecordFilter must keep only odd-id records (id=1,3)");
+            for (Object r : records) {
+                String json = (String) r.getClass().getMethod("value").invoke(r);
+                assertFalse(json.contains("\"id\":2") || json.contains("\"id\":4"),
+                    "Even-id records must be filtered out by RecordFilter");
+            }
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void transformations_mockHttp_keyRewritesApplied(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("transformations_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+        // Input has camelCase, uppercase, and a key that will be renamed by KeysReplace
+        byte[] body = ("{\"results\":[{\"camelCase\":\"x\",\"FooBar\":\"y\",\"ID\":1}]}")
+            .getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            Object task = loadAndStartTask(g, tmpDir, port);
+            List<?> records = pollStream(task, "pollKeyRewrite");
+            assertEquals(1, records.size(), "Expected exactly 1 record");
+            String json = (String) records.get(0).getClass().getMethod("value").invoke(records.get(0));
+            // KeysToSnakeCase: camelCase→camel_case, FooBar→foo_bar, ID→id
+            // KeysToLower: already lowercase after snake_case
+            // KeysReplace("_bar","_baz"): foo_bar→foo_baz
+            assertTrue(json.contains("camel_case"), "KeysToSnakeCase must convert camelCase→camel_case");
+            assertTrue(json.contains("foo_baz"), "KeysReplace must rename foo_bar→foo_baz");
+            assertTrue(json.contains("\"id\""), "KeysToSnakeCase must convert ID→id");
+            assertFalse(json.contains("camelCase"), "Original camelCase key must not appear");
+            assertFalse(json.contains("FooBar"), "Original FooBar key must not appear");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void transformations_mockHttp_flattenFields(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("transformations_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+        byte[] body = ("{\"results\":[{\"id\":1,\"nested\":{\"x\":1,\"y\":2}}]}")
+            .getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            Object task = loadAndStartTask(g, tmpDir, port);
+            List<?> records = pollStream(task, "pollFlatten");
+            assertEquals(1, records.size(), "Expected exactly 1 record");
+            String json = (String) records.get(0).getClass().getMethod("value").invoke(records.get(0));
+            assertTrue(json.contains("nested.x"), "FlattenFields must produce dot-notation key 'nested.x'");
+            assertTrue(json.contains("nested.y"), "FlattenFields must produce dot-notation key 'nested.y'");
+            assertFalse(json.contains("\"nested\":{"), "FlattenFields must collapse nested object");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void transformations_mockHttp_dpathFlattenWithKeyTransform(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("transformations_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+        byte[] body = ("{\"results\":[{\"id\":1,\"props\":{\"a\":10,\"b\":20}}]}")
+            .getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            Object task = loadAndStartTask(g, tmpDir, port);
+            List<?> records = pollStream(task, "pollDpathFlat");
+            assertEquals(1, records.size(), "Expected exactly 1 record");
+            String json = (String) records.get(0).getClass().getMethod("value").invoke(records.get(0));
+            assertTrue(json.contains("props_a"), "DpathFlattenFields+KeyTransformation must produce 'props_a'");
+            assertTrue(json.contains("props_b"), "DpathFlattenFields+KeyTransformation must produce 'props_b'");
+            assertFalse(json.contains("\"props\":{"), "DpathFlattenFields must remove origin 'props' object");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void transformations_configAddFields_appliedAtStart(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("transformations_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+        byte[] body = ("{\"results\":[{\"id\":1}]}").getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            URLClassLoader loader = new URLClassLoader(
+                new URL[]{tmpDir.toUri().toURL()}, getClass().getClassLoader());
+            Class<?> taskClass = loader.loadClass(PKG + "." + g.task.typeSpec.name);
+            SourceTaskContext ctx = Mockito.mock(SourceTaskContext.class);
+            OffsetStorageReader reader = Mockito.mock(OffsetStorageReader.class);
+            Mockito.when(ctx.offsetStorageReader()).thenReturn(reader);
+            Mockito.when(reader.offset(Mockito.any())).thenReturn(null);
+            Object task = taskClass.getDeclaredConstructor().newInstance();
+            taskClass.getMethod("initialize", SourceTaskContext.class).invoke(task, ctx);
+            taskClass.getMethod("start", Map.class).invoke(task,
+                Map.of("server_url", "http://localhost:" + port));
+
+            // configValues should contain the added field 'api_version: v2'
+            java.lang.reflect.Field cvField = taskClass.getDeclaredField("configValues");
+            cvField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> configValues = (Map<String, Object>) cvField.get(task);
+            assertEquals("v2", String.valueOf(configValues.get("api_version")),
+                "ConfigAddFields must inject api_version=v2 into configValues");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void transformations_configRemapField_replacesValue(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("transformations_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+        byte[] body = ("{\"results\":[{\"id\":1}]}").getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            URLClassLoader loader = new URLClassLoader(
+                new URL[]{tmpDir.toUri().toURL()}, getClass().getClassLoader());
+            Class<?> taskClass = loader.loadClass(PKG + "." + g.task.typeSpec.name);
+            SourceTaskContext ctx = Mockito.mock(SourceTaskContext.class);
+            OffsetStorageReader reader = Mockito.mock(OffsetStorageReader.class);
+            Mockito.when(ctx.offsetStorageReader()).thenReturn(reader);
+            Mockito.when(reader.offset(Mockito.any())).thenReturn(null);
+            Object task = taskClass.getDeclaredConstructor().newInstance();
+            taskClass.getMethod("initialize", SourceTaskContext.class).invoke(task, ctx);
+            // Pass server_region=us; ConfigRemapField should remap it to us-east-1
+            taskClass.getMethod("start", Map.class).invoke(task, Map.of(
+                "server_url", "http://localhost:" + port,
+                "server_region", "us"
+            ));
+
+            java.lang.reflect.Field cvField = taskClass.getDeclaredField("configValues");
+            cvField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> configValues = (Map<String, Object>) cvField.get(task);
+            assertEquals("us-east-1", String.valueOf(configValues.get("server_region")),
+                "ConfigRemapField must remap server_region: us→us-east-1");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // HELPERS
     // ══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Loads the compiled task class from tmpDir, wires a mock context, and calls
+     * start() with the given server port pointing to server_url.
+     */
+    private Object loadAndStartTask(GeneratedTriple g, Path tmpDir, int port) throws Exception {
+        URLClassLoader loader = new URLClassLoader(
+            new URL[]{tmpDir.toUri().toURL()}, getClass().getClassLoader());
+        Class<?> taskClass = loader.loadClass(PKG + "." + g.task.typeSpec.name);
+        SourceTaskContext ctx = Mockito.mock(SourceTaskContext.class);
+        OffsetStorageReader reader = Mockito.mock(OffsetStorageReader.class);
+        Mockito.when(ctx.offsetStorageReader()).thenReturn(reader);
+        Mockito.when(reader.offset(Mockito.any())).thenReturn(null);
+        Object task = taskClass.getDeclaredConstructor().newInstance();
+        taskClass.getMethod("initialize", SourceTaskContext.class).invoke(task, ctx);
+        taskClass.getMethod("start", Map.class).invoke(task,
+            Map.of("server_url", "http://localhost:" + port));
+        return task;
+    }
+
+    /**
+     * Calls a named poll method on the task via reflection and returns the resulting records.
+     * Method names follow the TaskGenerator naming convention: "poll" + TitleCase(streamName).
+     * The generated poll methods are private, so setAccessible(true) is required.
+     */
+    @SuppressWarnings("unchecked")
+    private List<?> pollStream(Object task, String pollMethodName) throws Exception {
+        java.lang.reflect.Method m = task.getClass().getDeclaredMethod(pollMethodName);
+        m.setAccessible(true);
+        return (List<?>) m.invoke(task);
+    }
 
     private GeneratedTriple generate(String manifestName) throws Exception {
         ManifestSpec spec = load(manifestName);

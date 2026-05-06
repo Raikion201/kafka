@@ -354,6 +354,11 @@ public class TaskGenerator {
 
         // Config-time transformer (applied once in start() before any config reads).
         typeBuilder.addField(CONFIG_TRANSFORMER, "configTransformer", Modifier.PRIVATE);
+        // Stores the (possibly config-transformed) config values, used as the Jinja config context.
+        ParameterizedTypeName mapStrObj = ParameterizedTypeName.get(
+            ClassName.get("java.util", "Map"),
+            ClassName.get(String.class), ClassName.get(Object.class));
+        typeBuilder.addField(mapStrObj, "configValues", Modifier.PRIVATE);
 
         // Per-stream transformation pipelines (applied to each record before emission).
         for (StreamSpec s : streams) {
@@ -423,14 +428,15 @@ public class TaskGenerator {
         // Config-time transforms — applied once before any other initialization reads config.
         m.addStatement("this.configTransformer = $T.fromJson($S)",
             CONFIG_TRANSFORMER_FACTORY, configTransformsJson(spec));
+        m.addStatement("@$T($S) $T<$T, $T> _cfgMap = ($T<$T, $T>) ($T<?, ?>) this.config.values()",
+            SuppressWarnings.class, "unchecked",
+            Map.class, String.class, Object.class,
+            Map.class, String.class, Object.class,
+            Map.class);
         m.beginControlFlow("if (!this.configTransformer.isNoop())")
-            .addStatement("@$T($S) $T<$T, $T> _cfgMap = ($T<$T, $T>) ($T<?, ?>) this.config.values()",
-                SuppressWarnings.class, "unchecked",
-                Map.class, String.class, Object.class,
-                Map.class, String.class, Object.class,
-                Map.class)
             .addStatement("this.configTransformer.apply(_cfgMap)")
             .endControlFlow();
+        m.addStatement("this.configValues = _cfgMap");
 
         // Per-stream transformation pipelines.
         for (StreamSpec s : streams) {
@@ -2254,7 +2260,9 @@ public class TaskGenerator {
             .addModifiers(Modifier.PRIVATE)
             .returns(mapStringObject)
             .addStatement("$T ctx = new $T<>()", mapStringObject, linkedHashMap)
-            .beginControlFlow("if (config != null)")
+            .beginControlFlow("if (configValues != null)")
+            .addStatement("ctx.put($S, configValues)", "config")
+            .nextControlFlow("else if (config != null)")
             .addStatement("ctx.put($S, config.originalsStrings())", "config")
             .endControlFlow()
             .addStatement("return ctx")
