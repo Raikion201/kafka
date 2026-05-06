@@ -43,6 +43,23 @@ public class IncrementalSyncSpec {
     @JsonProperty("end_time_option")
     private TimeOptionSpec endTimeOption;
 
+    /** ISO 8601 duration defining the size of each time window (e.g. {@code P1M}, {@code P30D}). */
+    private String step;
+
+    /**
+     * Smallest cursor increment to avoid overlap between consecutive windows
+     * (e.g. {@code PT0.000001S}).
+     */
+    @JsonProperty("cursor_granularity")
+    private String cursorGranularity;
+
+    /**
+     * Python strftime format string for cursor values (e.g. {@code %Y-%m-%dT%H:%M:%S}).
+     * Required when {@code step} is set so that window boundaries can be formatted correctly.
+     */
+    @JsonProperty("datetime_format")
+    private String datetimeFormat;
+
     public String getType() {
         return type;
     }
@@ -91,8 +108,37 @@ public class IncrementalSyncSpec {
         this.endTimeOption = endTimeOption;
     }
 
+    public String getStep() {
+        return step;
+    }
+
+    public void setStep(String step) {
+        this.step = step;
+    }
+
+    public String getCursorGranularity() {
+        return cursorGranularity;
+    }
+
+    public void setCursorGranularity(String cursorGranularity) {
+        this.cursorGranularity = cursorGranularity;
+    }
+
+    public String getDatetimeFormat() {
+        return datetimeFormat;
+    }
+
+    public void setDatetimeFormat(String datetimeFormat) {
+        this.datetimeFormat = datetimeFormat;
+    }
+
     public boolean isDatetimeBased() {
         return "DatetimeBasedCursor".equalsIgnoreCase(type);
+    }
+
+    /** Returns true when window-slicing is requested (step is present and non-empty). */
+    public boolean hasStep() {
+        return step != null && !step.isEmpty();
     }
 
     // ── inner classes ─────────────────────────────────────────────────────────
