@@ -114,9 +114,37 @@ tasks.register('generateConnectors', JavaExec) {
 compileGeneratedJava.dependsOn generateConnectors
 processGeneratedResources.dependsOn generateConnectors
 
-// Include generated connector classes in the main jar so they can be deployed as a connector plugin
+// ── Plugin fat-JAR ────────────────────────────────────────────────────────────
+// Kafka Connect's PluginClassLoader loads every JAR in a plugin directory into
+// a single classloader. The simplest reliable packaging is one fat JAR that
+// bundles all runtime dependencies that the Connect runtime does NOT already
+// provide (jackson-databind, kafka-clients, connect-api, slf4j are "provided").
+
+configurations {
+    // Runtime deps that need to travel with the plugin JAR (i.e. not provided by Connect)
+    pluginRuntime {
+        extendsFrom runtimeClasspath
+        exclude group: 'org.apache.kafka'
+        exclude group: 'org.slf4j'
+        exclude group: 'com.fasterxml.jackson.core'
+        exclude group: 'com.fasterxml.jackson.dataformat'
+        exclude group: 'com.fasterxml.jackson.datatype'
+        exclude group: 'org.yaml', module: 'snakeyaml'
+    }
+}
+
 jar {
     from sourceSets.generated.output
+
+    // Bundle all pluginRuntime deps (jinjava + its transitive deps) so the plugin
+    // is self-contained. Jackson and kafka classes are excluded above since
+    // Connect already provides them, avoiding VerifyError classloader conflicts.
+    from {
+        configurations.pluginRuntime.resolvedConfiguration.resolvedArtifacts
+            .findAll { it.moduleVersion.id.group != 'org.apache.kafka' }
+            .collect { it.file.isDirectory() ? it.file : zipTree(it.file) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
 // Generated code is not subject to style or static-analysis checks
