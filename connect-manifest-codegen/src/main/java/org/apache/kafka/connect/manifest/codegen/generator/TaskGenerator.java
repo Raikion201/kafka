@@ -99,6 +99,32 @@ public class TaskGenerator {
         ClassName.get("com.fasterxml.jackson.databind", "JsonNode");
     private static final ClassName JINJA_RENDERER =
         ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.jinja", "JinjaRenderer");
+    private static final ClassName RETRY_POLICY =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry", "RetryPolicy");
+    private static final ClassName DEFAULT_RETRY_POLICY =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry", "DefaultRetryPolicy");
+    private static final ClassName COMPOSITE_RETRY_POLICY =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry", "CompositeRetryPolicy");
+    private static final ClassName HTTP_RESPONSE_FILTER =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry", "HttpResponseFilter");
+    private static final ClassName RESPONSE_ACTION =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry", "ResponseAction");
+    private static final ClassName ERROR_RESOLUTION =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry", "ErrorResolution");
+    private static final ClassName BACKOFF_STRATEGY =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry.backoff", "BackoffStrategy");
+    private static final ClassName BACKOFF_STRATEGY_CHAIN =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry.backoff", "BackoffStrategyChain");
+    private static final ClassName EXPONENTIAL_BACKOFF =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry.backoff", "ExponentialBackoffStrategy");
+    private static final ClassName CONSTANT_BACKOFF =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry.backoff", "ConstantBackoffStrategy");
+    private static final ClassName WAIT_TIME_FROM_HEADER =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry.backoff",
+            "WaitTimeFromHeaderBackoffStrategy");
+    private static final ClassName WAIT_UNTIL_TIME_FROM_HEADER =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime.retry.backoff",
+            "WaitUntilTimeFromHeaderBackoffStrategy");
 
     private static final String APP_VERSION = "1.0.0";
 
@@ -267,6 +293,12 @@ public class TaskGenerator {
         typeBuilder.addField(configClass, "config", Modifier.PRIVATE);
         typeBuilder.addField(HTTP_CLIENT, "httpClient", Modifier.PRIVATE);
 
+        boolean hasHttpStream = streams.stream().anyMatch(s -> !isCustomDispatch(s));
+        if (hasHttpStream) {
+            typeBuilder.addField(RETRY_POLICY, "retryPolicy", Modifier.PRIVATE);
+            typeBuilder.addField(BACKOFF_STRATEGY, "backoffStrategy", Modifier.PRIVATE);
+        }
+
         if (auth != null && auth.isBasicHttp()) {
             typeBuilder.addField(String.class, "cachedCredentials", Modifier.PRIVATE);
         }
@@ -358,6 +390,16 @@ public class TaskGenerator {
             .addParameter(mapStringString, "props")
             .addStatement("this.config = new $T(props)", configClass)
             .addStatement("this.httpClient = $T.newHttpClient()", HTTP_CLIENT);
+
+        StreamSpec primaryHttpStream = streams.stream()
+            .filter(s -> !isCustomDispatch(s))
+            .findFirst()
+            .orElse(null);
+        if (primaryHttpStream != null) {
+            RequesterSpec.ErrorHandlerSpec eh = primaryHttpStream.getRetriever().getRequester().getErrorHandler();
+            m.addStatement("this.retryPolicy = $L", retryPolicyExpr(eh));
+            m.addStatement("this.backoffStrategy = $L", backoffChainExpr(eh));
+        }
 
         if (auth != null && auth.isBasicHttp()) {
             String userExpr = interpolateTemplate(auth.getUsername());
@@ -1913,23 +1955,50 @@ public class TaskGenerator {
             .build();
     }
 
-    /** Generates a private {@code sendWithRetry()} method that retries on HTTP 429/5xx. */
+    /**
+     * Generates a private {@code sendWithRetry()} method that delegates response classification
+     * to {@link org.apache.kafka.connect.manifest.codegen.runtime.retry.RetryPolicy} and
+     * sleep timing to {@link org.apache.kafka.connect.manifest.codegen.runtime.retry.backoff.BackoffStrategy}.
+     *
+     * <p>Mirrors Airbyte's HttpRequester._send loop (http_requester.py:550-606): classify, then
+     * either return, fail, ignore, or sleep-and-retry. Exhausting {@code maxRetries} or
+     * {@code maxTimeMillis} throws {@link org.apache.kafka.connect.errors.ConnectException}.</p>
+     */
     private MethodSpec buildSendWithRetry() {
         ParameterizedTypeName httpResponseString = ParameterizedTypeName.get(HTTP_RESPONSE, ClassName.get(String.class));
         CodeBlock.Builder body = CodeBlock.builder();
         body.addStatement("int attempt = 0");
+        body.addStatement("long deadline = $T.currentTimeMillis() + retryPolicy.maxTimeMillis()",
+            System.class);
         body.beginControlFlow("while (true)");
         body.addStatement(
             "$T<$T> resp = httpClient.send(request, $T.BodyHandlers.ofString())",
             HTTP_RESPONSE, String.class, HTTP_RESPONSE
         );
-        body.beginControlFlow(
-            "if ((resp.statusCode() == 429 || resp.statusCode() >= 500) && attempt < 3)");
-        body.addStatement("$T.sleep(1000L << attempt)", Thread.class);
-        body.addStatement("attempt++");
-        body.addStatement("continue");
-        body.endControlFlow();
+        body.addStatement("$T resolution = retryPolicy.interpretResponse(resp)", ERROR_RESOLUTION);
+        body.addStatement("$T action = resolution.action()", RESPONSE_ACTION);
+        body.beginControlFlow("if (action == $T.SUCCESS || action == $T.IGNORE)",
+            RESPONSE_ACTION, RESPONSE_ACTION);
         body.addStatement("return resp");
+        body.endControlFlow();
+        body.beginControlFlow("if (action == $T.FAIL)", RESPONSE_ACTION);
+        body.addStatement(
+            "throw new $T(resolution.errorMessage() != null ? resolution.errorMessage()"
+                + " : \"Request failed with status \" + resp.statusCode())",
+            CONNECT_EXCEPTION);
+        body.endControlFlow();
+        body.beginControlFlow("if (attempt >= retryPolicy.maxRetries() || $T.currentTimeMillis() >= deadline)",
+            System.class);
+        body.addStatement(
+            "throw new $T(\"Exhausted retries (\" + (attempt + 1) + \" attempts) for status \" "
+                + "+ resp.statusCode())",
+            CONNECT_EXCEPTION);
+        body.endControlFlow();
+        body.addStatement("$T sleepMs = backoffStrategy.backoffMillis(resp, attempt)", Long.class);
+        body.beginControlFlow("if (sleepMs != null && sleepMs > 0)");
+        body.addStatement("$T.sleep(sleepMs)", Thread.class);
+        body.endControlFlow();
+        body.addStatement("attempt++");
         body.endControlFlow();
 
         return MethodSpec.methodBuilder("sendWithRetry")
@@ -1939,6 +2008,150 @@ public class TaskGenerator {
             .addException(Exception.class)
             .addCode(body.build())
             .build();
+    }
+
+    /**
+     * Builds a CodeBlock evaluating to a {@code RetryPolicy} expression for the given
+     * error_handler spec. Falls back to {@code DefaultRetryPolicy.fallbackOnly()} when the
+     * manifest has no error_handler. CompositeErrorHandler wraps child policies in a
+     * {@link CompositeRetryPolicy}; everything else becomes a {@link DefaultRetryPolicy}.
+     */
+    private CodeBlock retryPolicyExpr(RequesterSpec.ErrorHandlerSpec eh) {
+        if (eh == null) {
+            return CodeBlock.of("$T.fallbackOnly()", DEFAULT_RETRY_POLICY);
+        }
+        if ("CompositeErrorHandler".equals(eh.getType())
+            && eh.getErrorHandlers() != null
+            && !eh.getErrorHandlers().isEmpty()) {
+            CodeBlock.Builder list = CodeBlock.builder().add("$T.of(", List.class);
+            boolean first = true;
+            for (RequesterSpec.ErrorHandlerSpec child : eh.getErrorHandlers()) {
+                if (!first) list.add(", ");
+                list.add(retryPolicyExpr(child));
+                first = false;
+            }
+            list.add(")");
+            return CodeBlock.of("new $T($L)", COMPOSITE_RETRY_POLICY, list.build());
+        }
+        return CodeBlock.of("new $T($L, $L, $L)",
+            DEFAULT_RETRY_POLICY,
+            responseFiltersExpr(eh.getResponseFilters()),
+            boxedIntOrNull(eh.getMaxRetries()),
+            boxedIntOrNull(eh.getMaxTime()));
+    }
+
+    /**
+     * Builds the {@code List<HttpResponseFilter>} expression used by DefaultRetryPolicy. Each
+     * filter forwards through {@link HttpResponseFilter#from} so {@code action == null}
+     * entries collapse to {@code null} and are skipped by the policy.
+     */
+    private CodeBlock responseFiltersExpr(List<RequesterSpec.ResponseFilterSpec> filters) {
+        if (filters == null || filters.isEmpty()) {
+            return CodeBlock.of("$T.emptyList()", Collections.class);
+        }
+        CodeBlock.Builder b = CodeBlock.builder().add("$T.of(", List.class);
+        boolean first = true;
+        for (RequesterSpec.ResponseFilterSpec f : filters) {
+            if (!first) b.add(", ");
+            b.add(singleResponseFilterExpr(f));
+            first = false;
+        }
+        b.add(")");
+        return b.build();
+    }
+
+    private CodeBlock singleResponseFilterExpr(RequesterSpec.ResponseFilterSpec f) {
+        CodeBlock action = f.getAction() == null
+            ? CodeBlock.of("null")
+            : CodeBlock.of("$T.$L", RESPONSE_ACTION, f.getAction().toUpperCase(java.util.Locale.ROOT));
+        CodeBlock httpCodes = (f.getHttpCodes() == null || f.getHttpCodes().isEmpty())
+            ? CodeBlock.of("$T.emptyList()", Collections.class)
+            : codesListExpr(f.getHttpCodes());
+        return CodeBlock.of(
+            "$T.from($L, $L, $L, $L, $L, $L, jinjaCtx())",
+            HTTP_RESPONSE_FILTER,
+            action,
+            httpCodes,
+            stringLiteralOrNull(f.getPredicate()),
+            stringLiteralOrNull(f.getErrorMessageContains()),
+            stringLiteralOrNull(f.getErrorMessage()),
+            stringLiteralOrNull(f.getFailureType()));
+    }
+
+    private CodeBlock codesListExpr(List<Integer> codes) {
+        CodeBlock.Builder b = CodeBlock.builder().add("$T.of(", List.class);
+        boolean first = true;
+        for (Integer c : codes) {
+            if (!first) b.add(", ");
+            b.add("$L", c);
+            first = false;
+        }
+        b.add(")");
+        return b.build();
+    }
+
+    /**
+     * Builds the {@code BackoffStrategy} expression. An empty list yields a chain that
+     * defaults to ExponentialBackoffStrategy (matching Airbyte's fallback in
+     * DefaultErrorHandler.backoff_time when no strategy applies).
+     */
+    private CodeBlock backoffChainExpr(RequesterSpec.ErrorHandlerSpec eh) {
+        List<RequesterSpec.BackoffStrategySpec> bs = eh == null ? null : eh.getBackoffStrategies();
+        if (bs == null || bs.isEmpty()) {
+            return CodeBlock.of("new $T($T.emptyList())", BACKOFF_STRATEGY_CHAIN, Collections.class);
+        }
+        CodeBlock.Builder list = CodeBlock.builder().add("$T.of(", List.class);
+        boolean first = true;
+        for (RequesterSpec.BackoffStrategySpec strat : bs) {
+            if (!first) list.add(", ");
+            list.add(singleBackoffExpr(strat));
+            first = false;
+        }
+        list.add(")");
+        return CodeBlock.of("new $T($L)", BACKOFF_STRATEGY_CHAIN, list.build());
+    }
+
+    private CodeBlock singleBackoffExpr(RequesterSpec.BackoffStrategySpec s) {
+        String type = s.getType() == null ? "" : s.getType();
+        switch (type) {
+            case "ConstantBackoffStrategy":
+                return CodeBlock.of("new $T($L)",
+                    CONSTANT_BACKOFF, doubleOrZero(s.getBackoffTimeInSeconds()));
+            case "WaitTimeFromHeader":
+            case "WaitTimeFromHeaderBackoffStrategy":
+                return CodeBlock.of("new $T($L, $L, $L)",
+                    WAIT_TIME_FROM_HEADER,
+                    stringLiteralOrNull(s.getHeader()),
+                    stringLiteralOrNull(s.getRegex()),
+                    boxedDoubleOrNull(s.getMaxWaitingTimeInSeconds()));
+            case "WaitUntilTimeFromHeader":
+            case "WaitUntilTimeFromHeaderBackoffStrategy":
+                return CodeBlock.of("new $T($L, $L, $L)",
+                    WAIT_UNTIL_TIME_FROM_HEADER,
+                    stringLiteralOrNull(s.getHeader()),
+                    stringLiteralOrNull(s.getRegex()),
+                    boxedDoubleOrNull(s.getMinWait()));
+            case "ExponentialBackoffStrategy":
+            default:
+                return CodeBlock.of("new $T($L)",
+                    EXPONENTIAL_BACKOFF, boxedDoubleOrNull(s.getFactor()));
+        }
+    }
+
+    private static CodeBlock stringLiteralOrNull(String s) {
+        return s == null ? CodeBlock.of("null") : CodeBlock.of("$S", s);
+    }
+
+    private static CodeBlock boxedIntOrNull(Integer v) {
+        return v == null ? CodeBlock.of("(Integer) null") : CodeBlock.of("$L", v);
+    }
+
+    private static CodeBlock boxedDoubleOrNull(Double v) {
+        return v == null ? CodeBlock.of("(Double) null") : CodeBlock.of("$L", v + "d");
+    }
+
+    private static CodeBlock doubleOrZero(Double v) {
+        return CodeBlock.of("$L", (v == null ? 0.0 : v) + "d");
     }
 
     private MethodSpec buildJinjaCtx() {

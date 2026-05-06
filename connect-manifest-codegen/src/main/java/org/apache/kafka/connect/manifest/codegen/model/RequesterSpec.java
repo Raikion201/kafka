@@ -231,6 +231,69 @@ public class RequesterSpec {
         return urlBase == null ? "" : urlBase;
     }
 
+    /**
+     * Accepts a number or a non-numeric string (Jinja templates such as
+     * {@code "{{ config.backoff_factor }}"}) and yields {@code null} for the latter.
+     * Phase 1 limitation: templated numeric retry settings fall back to defaults — flagged in
+     * the connector docs and tracked for a later phase that wires runtime Jinja into init.
+     */
+    static final class TolerantDoubleDeserializer
+            extends com.fasterxml.jackson.databind.JsonDeserializer<Double> {
+        @Override
+        public Double deserialize(com.fasterxml.jackson.core.JsonParser p,
+                                  com.fasterxml.jackson.databind.DeserializationContext ctxt)
+                throws java.io.IOException {
+            com.fasterxml.jackson.databind.JsonNode n = p.readValueAsTree();
+            if (n == null || n.isNull()) {
+                return null;
+            }
+            if (n.isNumber()) {
+                return n.asDouble();
+            }
+            if (n.isTextual()) {
+                String s = n.asText();
+                if (s == null || s.isEmpty()) {
+                    return null;
+                }
+                try {
+                    return Double.parseDouble(s);
+                } catch (NumberFormatException ignored) {
+                    return null;
+                }
+            }
+            return null;
+        }
+    }
+
+    /** Sibling of {@link TolerantDoubleDeserializer} for {@code Integer}-valued fields. */
+    static final class TolerantIntegerDeserializer
+            extends com.fasterxml.jackson.databind.JsonDeserializer<Integer> {
+        @Override
+        public Integer deserialize(com.fasterxml.jackson.core.JsonParser p,
+                                   com.fasterxml.jackson.databind.DeserializationContext ctxt)
+                throws java.io.IOException {
+            com.fasterxml.jackson.databind.JsonNode n = p.readValueAsTree();
+            if (n == null || n.isNull()) {
+                return null;
+            }
+            if (n.isNumber()) {
+                return n.asInt();
+            }
+            if (n.isTextual()) {
+                String s = n.asText();
+                if (s == null || s.isEmpty()) {
+                    return null;
+                }
+                try {
+                    return Integer.parseInt(s);
+                } catch (NumberFormatException ignored) {
+                    return null;
+                }
+            }
+            return null;
+        }
+    }
+
     /** Models the {@code error_handler} block — handles non-2xx responses. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ErrorHandlerSpec {
@@ -248,9 +311,11 @@ public class RequesterSpec {
         private List<ResponseFilterSpec> responseFilters = Collections.emptyList();
 
         @JsonProperty("max_retries")
+        @JsonDeserialize(using = TolerantIntegerDeserializer.class)
         private Integer maxRetries;
 
         @JsonProperty("max_time")
+        @JsonDeserialize(using = TolerantIntegerDeserializer.class)
         private Integer maxTime;
 
         @JsonProperty("backoff_strategies")
@@ -412,8 +477,10 @@ public class RequesterSpec {
         private String type;
 
         @JsonProperty("backoff_time_in_seconds")
+        @JsonDeserialize(using = TolerantDoubleDeserializer.class)
         private Double backoffTimeInSeconds;
 
+        @JsonDeserialize(using = TolerantDoubleDeserializer.class)
         private Double factor;
 
         private String header;
@@ -421,9 +488,11 @@ public class RequesterSpec {
         private String regex;
 
         @JsonProperty("max_waiting_time_in_seconds")
+        @JsonDeserialize(using = TolerantDoubleDeserializer.class)
         private Double maxWaitingTimeInSeconds;
 
         @JsonProperty("min_wait")
+        @JsonDeserialize(using = TolerantDoubleDeserializer.class)
         private Double minWait;
 
         public String getType() {
