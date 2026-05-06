@@ -123,16 +123,16 @@ If any rule above is in tension with a specific change, raise it explicitly
 before deviating — do not silently skip. These rules cost time up front and
 save much more time at review and in production.
 
-## Coverage baseline (as of 2026-05-06, after Phase 4)
+## Coverage baseline (as of 2026-05-06, after Phase 5)
 
-Of the 550 manifests under `src/test/resources/manifests/`:
+Of the 551 manifests under `src/test/resources/manifests/`:
 
 | Class | Count | % | Meaning |
 |---|---:|---:|---|
-| Works correctly | 465 | 84.5% | Uses only features we implement |
+| Works correctly | 475 | 86.2% | Uses only features we implement |
 | Works but wrong record shape | 0 | 0% | All transforms now implemented |
 | Works until first transient error | 0 | 0% | Retry/backoff now implemented |
-| Broken (uses unimplemented feature) | 72 | 13% | Fails at runtime or silently misses data |
+| Broken (uses unimplemented feature) | 63 | 11.4% | Fails at runtime or silently misses data |
 | Stub (throws on `start()`) | 13 | 2.4% | `GenericDynamicStreamStub` |
 
 Phases implemented so far:
@@ -142,6 +142,8 @@ Phases implemented so far:
 - **Phase 3**: POST/PUT HTTP methods + `request_body_json` / `request_body_data` +
   paginator `inject_into: body_json` / `body_data` → wired
 - **Phase 4**: `DatetimeBasedCursor` with `step:` ISO-8601 window slicing → wired
+- **Phase 5**: `CustomTransformation` + `CustomRecordExtractor` dispatch via
+  `CustomComponentRegistry` → wired
 
 Re-run with `./gradlew :connect-manifest-codegen:test --tests
 ManifestCoverageReport.gradeEndToEndCoverage`; the report file
@@ -153,9 +155,9 @@ ManifestCoverageReport.gradeEndToEndCoverage`; the report file
 |---:|---|---|
 | 26 | `HTTPAPIBudget` rate limiting | 429-storm |
 | 25 | `MovingWindowCallRatePolicy` | same |
-| 23 | `CustomRecordExtractor` (registry exists, not wired) | nothing extracted |
-| 16 | `CustomTransformation` | records unmodified |
 | 14 | `CustomAuthenticator` | auth fails |
+| 12 | `CustomPartitionRouter` | partitioning broken |
+| 8 | `DynamicDeclarativeStream` | stub only |
 
 ### Path to ~93% (under the rule-5 constraints)
 
@@ -163,7 +165,11 @@ ManifestCoverageReport.gradeEndToEndCoverage`; the report file
 2. ~~Phase 2: Transformations pipeline~~ ✓ Done.
 3. ~~Phase 3: POST/PUT + request bodies~~ ✓ Done.
 4. ~~Phase 4: `DatetimeBasedCursor.step` window slicing~~ ✓ Done.
-5. Wire `Custom*` registry into the generated task → unblocks ~40.
+5. ~~Phase 5: `CustomTransformation` + `CustomRecordExtractor` via registry~~ ✓ Done.
+
+Remaining 63 broken manifests need `HTTPAPIBudget`, `CustomAuthenticator`,
+`CustomPartitionRouter`, `AsyncRetriever`, or dynamic-stream features —
+most are out of scope under rule-5 constraints.
 
 After 4–5 plus the `ManifestParser.validate()` $ref-string fix (frees 11
 otherwise-stubbed manifests), the working bucket goes from 432 → ~510 / 549

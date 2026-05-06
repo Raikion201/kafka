@@ -87,9 +87,9 @@ public class ManifestCoverageReport {
         "type: CustomBackoffStrategy",
         "type: CustomPaginationStrategy",
         "type: CustomPartitionRouter",
-        "type: CustomRecordExtractor",
+        // CustomRecordExtractor — now wired via CustomComponentRegistry (Phase 5)
         "type: CustomRecordFilter",
-        "type: CustomTransformation",
+        // CustomTransformation — now wired via TransformationPipelineFactory (Phase 5)
         "type: CustomSchemaLoader",
         "type: CustomSchemaNormalization",
         "type: CustomStateMigration",

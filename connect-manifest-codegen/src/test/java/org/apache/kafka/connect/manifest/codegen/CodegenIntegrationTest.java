@@ -1436,6 +1436,137 @@ public class CodegenIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // PHASE 5 — CustomTransformation + CustomRecordExtractor wiring
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void customComponents_generatedTaskCompiles(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("custom_components_test.yaml");
+        compileTriple(g, tmpDir);
+        String taskSrc = g.task.toString();
+        // TransformationPipeline init must pass originalsStrings() for Custom* support
+        assertTrue(taskSrc.contains("originalsStrings()"),
+            "TransformationPipelineFactory.fromJson must receive originalsStrings()");
+        // CustomRecordExtractor site must reference CustomComponentRegistry + create
+        assertTrue(taskSrc.contains("CustomComponentRegistry"),
+            "Generated task must reference CustomComponentRegistry for custom extractor");
+        assertTrue(taskSrc.contains("CustomRecordExtractor"),
+            "Generated task must reference CustomRecordExtractor interface");
+        assertTrue(taskSrc.contains("test.WrappedItemsExtractor"),
+            "Generated task must embed the extractor class_name literal");
+        assertTrue(taskSrc.contains("test.UpperCaseNameTransformation"),
+            "Transformation class_name must be serialized into the pipeline JSON literal");
+    }
+
+    @Test
+    void customComponents_mockHttp_customTransformationModifiesRecord(@TempDir Path tmpDir) throws Exception {
+        // Register a CustomTransformation that uppercases the "name" field.
+        org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomComponentRegistry
+            .<org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomTransformation>register(
+            "test.UpperCaseNameTransformation",
+            (cfg, params) -> record -> {
+                java.util.Map<String, Object> out = new java.util.LinkedHashMap<>(record);
+                if (out.get("name") instanceof String s) out.put("name", s.toUpperCase(java.util.Locale.ROOT));
+                return out;
+            }
+        );
+
+        GeneratedTriple g = generate("custom_components_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+
+        byte[] body = "{\"items\":[{\"id\":1,\"name\":\"widget\"}]}".getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/api/items", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.getResponseBody().close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            URLClassLoader loader = new URLClassLoader(
+                new URL[]{tmpDir.toUri().toURL()}, getClass().getClassLoader());
+            Class<?> taskClass = loader.loadClass(PKG + "." + g.task.typeSpec.name);
+            SourceTaskContext ctx = Mockito.mock(SourceTaskContext.class);
+            OffsetStorageReader reader = Mockito.mock(OffsetStorageReader.class);
+            Mockito.when(ctx.offsetStorageReader()).thenReturn(reader);
+            Mockito.when(reader.offset(Mockito.any())).thenReturn(null);
+            Object task = taskClass.getDeclaredConstructor().newInstance();
+            taskClass.getMethod("initialize", SourceTaskContext.class).invoke(task, ctx);
+            taskClass.getMethod("start", Map.class).invoke(task,
+                Map.of("server_url", "http://localhost:" + port));
+
+            List<?> records = pollStream(task, "pollItemsTransformed");
+            assertFalse(records.isEmpty(), "Must return at least one record");
+
+            // The "name" field must have been uppercased by CustomTransformation.
+            // SourceRecord value is a JSON string — deserialize it for assertion.
+            org.apache.kafka.connect.source.SourceRecord first =
+                (org.apache.kafka.connect.source.SourceRecord) records.get(0);
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> value = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readValue((String) first.value(), java.util.Map.class);
+            assertEquals("WIDGET", value.get("name"),
+                "CustomTransformation must uppercase the 'name' field");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void customComponents_mockHttp_customRecordExtractorOverridesExtraction(@TempDir Path tmpDir) throws Exception {
+        // Register a CustomRecordExtractor that always returns a fixed synthetic record.
+        org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomComponentRegistry
+            .<org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomRecordExtractor>register(
+            "test.WrappedItemsExtractor",
+            (cfg, params) -> response -> java.util.List.of(
+                java.util.Map.of("id", 999, "source", "custom_extractor")
+            )
+        );
+
+        GeneratedTriple g = generate("custom_components_test.yaml");
+        compileTripleWithOutputDir(g, tmpDir);
+
+        byte[] body = "{\"anything\":\"ignored by custom extractor\"}".getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/api/raw", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.getResponseBody().close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            URLClassLoader loader = new URLClassLoader(
+                new URL[]{tmpDir.toUri().toURL()}, getClass().getClassLoader());
+            Class<?> taskClass = loader.loadClass(PKG + "." + g.task.typeSpec.name);
+            SourceTaskContext ctx = Mockito.mock(SourceTaskContext.class);
+            OffsetStorageReader reader = Mockito.mock(OffsetStorageReader.class);
+            Mockito.when(ctx.offsetStorageReader()).thenReturn(reader);
+            Mockito.when(reader.offset(Mockito.any())).thenReturn(null);
+            Object task = taskClass.getDeclaredConstructor().newInstance();
+            taskClass.getMethod("initialize", SourceTaskContext.class).invoke(task, ctx);
+            taskClass.getMethod("start", Map.class).invoke(task,
+                Map.of("server_url", "http://localhost:" + port));
+
+            List<?> records = pollStream(task, "pollItemsExtracted");
+            assertFalse(records.isEmpty(), "CustomRecordExtractor must produce at least one record");
+
+            // SourceRecord value is a JSON string — deserialize it for assertion.
+            org.apache.kafka.connect.source.SourceRecord first =
+                (org.apache.kafka.connect.source.SourceRecord) records.get(0);
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> value = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readValue((String) first.value(), java.util.Map.class);
+            assertEquals(999, value.get("id"), "Record must come from the custom extractor");
+            assertEquals("custom_extractor", value.get("source"),
+                "CustomRecordExtractor must override normal field_path extraction");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // HELPERS
     // ══════════════════════════════════════════════════════════════════════════
 
