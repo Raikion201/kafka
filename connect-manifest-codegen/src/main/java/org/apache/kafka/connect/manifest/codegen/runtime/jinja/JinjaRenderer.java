@@ -246,14 +246,38 @@ public final class JinjaRenderer {
             String lhs = out.substring(lhsStart, lhsEnd);
             String sep = template.substring(qPos, closeQ + 1); // includes quotes
             out.setLength(lhsStart);
-            // jinjava cannot handle (expr|filter)[0] inside parens — convert to |first filter.
-            if (lhs.endsWith("[0]")) {
-                lhs = lhs.substring(0, lhs.length() - 3) + "|first";
-            }
-            out.append(lhs).append("|split(").append(sep).append(")");
-            i = closeQ + 2; // past the closing ')'
+            i = appendSplitRewrite(out, lhs, sep, template, closeQ + 2);
         }
         return out.toString();
+    }
+
+    /**
+     * Appends {@code lhs|split(sep)} (or {@code lhs|split(sep)|first} if {@code [0]}
+     * follows at {@code nextPos} in the template) to {@code out}, and returns the
+     * updated template cursor position.
+     *
+     * <p>Handles two forms of {@code [0]} that jinjava cannot parse directly:
+     * <ul>
+     *   <li>Case A — {@code [0]} is already at the end of {@code lhs} (from a prior
+     *       iteration that did not consume it).  Replaces it with {@code |first}.</li>
+     *   <li>Case B — {@code [0]} follows the closing {@code )} of {@code .split('sep')}
+     *       in the template.  Emits {@code |first} and skips past {@code [0]}.</li>
+     * </ul>
+     */
+    private static int appendSplitRewrite(StringBuilder out, String lhs, String sep,
+                                          String template, int nextPos) {
+        if (lhs.endsWith("[0]")) {
+            lhs = lhs.substring(0, lhs.length() - 3) + "|first";
+        }
+        if (nextPos + 2 < template.length()
+                && template.charAt(nextPos) == '['
+                && template.charAt(nextPos + 1) == '0'
+                && template.charAt(nextPos + 2) == ']') {
+            out.append(lhs).append("|split(").append(sep).append(")|first");
+            return nextPos + 3;
+        }
+        out.append(lhs).append("|split(").append(sep).append(")");
+        return nextPos;
     }
 
     /**

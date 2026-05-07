@@ -554,4 +554,14 @@ class JinjaRendererTest {
         assertTrue(out.matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}"),
             "gnews split pattern must produce 'YYYY-MM-DD HH:MM:SS': " + out);
     }
+
+    @Test
+    void ouraStyleSplitWithTrailingIndexZero() {
+        // Replicates oura pattern: config['end_datetime'].split('T')[0]
+        // [0] comes immediately after .split('T') — must become |split('T')|first
+        Map<String, Object> c = ctx();
+        c.put("config", Map.of("end_datetime", "2024-03-15T12:00:00Z"));
+        String out = JinjaRenderer.render("{{ config['end_datetime'].split('T')[0] }}", c);
+        assertEquals("2024-03-15", out);
+    }
 }
