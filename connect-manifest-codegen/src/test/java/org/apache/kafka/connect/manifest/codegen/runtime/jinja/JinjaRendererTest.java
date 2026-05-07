@@ -564,4 +564,29 @@ class JinjaRendererTest {
         String out = JinjaRenderer.render("{{ config['end_datetime'].split('T')[0] }}", c);
         assertEquals("2024-03-15", out);
     }
+
+    @Test
+    void tiktokStyleComplexLhsDictGet() {
+        // Replicates tiktok-marketing: (conditional_expr).get('auth_type', "")
+        // credentials not in config → conditional evaluates to {} → .get returns ""
+        Map<String, Object> c = ctx();
+        c.put("config", new HashMap<>());  // no 'credentials' key
+        String out = JinjaRenderer.render(
+            "{{ ((config['credentials']) if 'credentials' in config else ({})).get('auth_type', 'default_type') }}",
+            c);
+        assertEquals("default_type", out);
+    }
+
+    @Test
+    void dictGetSimpleIdentifier() {
+        // Original single-ident case still works after rewrite
+        Map<String, Object> c = ctx();
+        Map<String, Object> params = new HashMap<>();
+        params.put("foo", "bar");
+        c.put("params", params);
+        String out = JinjaRenderer.render("{{ params.get('foo', 'missing') }}", c);
+        assertEquals("bar", out);
+        String outMissing = JinjaRenderer.render("{{ params.get('baz', 'missing') }}", c);
+        assertEquals("missing", outMissing);
+    }
 }

@@ -354,32 +354,91 @@ public final class JinjaRenderer {
      * single-argument, causing "Cannot find method get with 2 parameters".
      * Rewrite to {@code (dict['key'] if 'key' in dict else default)}.</p>
      *
-     * <p>Uses {@link #findMatchingClose} to correctly handle default values
-     * that contain nested parentheses (e.g. function calls, arithmetic).</p>
+     * <p>Handles both simple identifiers ({@code ident.get('k', d)}) and
+     * complex LHS expressions ending in {@code ]} or {@code )} such as
+     * {@code (expr).get('k', d)} — uses backward scanning via
+     * {@link #scanLhsExprEnd} in both cases.</p>
      */
     static String rewriteDictGet(String template) {
         if (!template.contains(".get(")) {
             return template;
         }
-        // Match: ident.get('key', — then use balanced-paren scanner to find default
-        Pattern p = Pattern.compile("(\\w+)\\.get\\((['\"][^'\"]+['\"])\\s*,\\s*");
-        Matcher m = p.matcher(template);
         StringBuilder sb = new StringBuilder();
-        int last = 0;
-        while (m.find(last)) {
-            String obj = m.group(1);
-            String key = m.group(2);
-            int dfltStart = m.end();
-            // findMatchingClose starts at depth=1 (we are inside the get( paren already)
-            int getEnd = findMatchingClose(template, dfltStart);
-            String dflt = template.substring(dfltStart, getEnd - 1).trim();
-            sb.append(template, last, m.start());
-            sb.append("((").append(obj).append("[").append(key).append("]) if ")
-              .append(key).append(" in ").append(obj).append(" else (").append(dflt).append("))");
-            last = getEnd;
+        int pos = 0;
+        while (pos < template.length()) {
+            int dotIdx = template.indexOf(".get(", pos);
+            if (dotIdx < 0) {
+                sb.append(template, pos, template.length());
+                break;
+            }
+            int[] rewrite = tryRewriteDictGetAt(template, dotIdx, pos);
+            if (rewrite == null) {
+                sb.append(template, pos, dotIdx + 1);
+                pos = dotIdx + 1;
+            } else {
+                int objStart = rewrite[0];
+                int getEnd   = rewrite[1];
+                String obj  = template.substring(objStart, dotIdx);
+                String key  = template.substring(rewrite[2], rewrite[3]);
+                String dflt = template.substring(rewrite[4], rewrite[5]).trim();
+                sb.append(template, pos, objStart);
+                sb.append("((").append(obj).append("[").append(key).append("]) if ")
+                  .append(key).append(" in ").append(obj)
+                  .append(" else (").append(dflt).append("))");
+                pos = getEnd;
+            }
         }
-        sb.append(template, last, template.length());
         return sb.toString();
+    }
+
+    /**
+     * Returns {@code [objStart, getEnd, keyFrom, keyTo, dfltFrom, dfltTo]} describing
+     * a {@code obj.get('key', default)} call at {@code dotIdx}, or {@code null} if
+     * this is not a 2-arg dict-get pattern.
+     */
+    private static int[] tryRewriteDictGetAt(String template, int dotIdx, int minObjStart) {
+        if (dotIdx <= minObjStart) {
+            return null;
+        }
+        char prev = template.charAt(dotIdx - 1);
+        if (!Character.isLetterOrDigit(prev) && prev != '_' && prev != ']' && prev != ')') {
+            return null;
+        }
+        int objStart = scanLhsExprEnd(template, dotIdx);
+        if (objStart < minObjStart) {
+            return null;
+        }
+        return parseDictGetArgs(template, dotIdx, objStart);
+    }
+
+    private static int[] parseDictGetArgs(String template, int dotIdx, int objStart) {
+        int kStart = skipSpaces(template, dotIdx + 5); // skip ".get(" then spaces
+        if (kStart >= template.length()) {
+            return null;
+        }
+        char q = template.charAt(kStart);
+        if (q != '\'' && q != '"') {
+            return null;
+        }
+        int kEnd = template.indexOf(q, kStart + 1);
+        if (kEnd < 0) {
+            return null;
+        }
+        // Require comma — 2-arg form only
+        int afterComma = skipSpaces(template, kEnd + 1);
+        if (afterComma >= template.length() || template.charAt(afterComma) != ',') {
+            return null;
+        }
+        int dfltStart = skipSpaces(template, afterComma + 1);
+        int getEnd = findMatchingClose(template, dfltStart);
+        return new int[]{objStart, getEnd, kStart, kEnd + 1, dfltStart, getEnd - 1};
+    }
+
+    private static int skipSpaces(String s, int i) {
+        while (i < s.length() && s.charAt(i) == ' ') {
+            i++;
+        }
+        return i;
     }
 
     /**
