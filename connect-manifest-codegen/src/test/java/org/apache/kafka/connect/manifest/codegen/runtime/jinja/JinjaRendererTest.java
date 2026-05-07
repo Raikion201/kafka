@@ -104,6 +104,41 @@ class JinjaRendererTest {
     }
 
     @Test
+    void nowUtcStrftime_formatsWithPythonPattern() {
+        String out = JinjaRenderer.render("{{ now_utc().strftime('%Y-%m-%d') }}", ctx());
+        assertNotNull(out);
+        // result must be a valid date string (4-digit year, month, day)
+        assertTrue(out.matches("\\d{4}-\\d{2}-\\d{2}"), "strftime must produce a date string: " + out);
+    }
+
+    @Test
+    void nowUtcMinusDuration_strftime() {
+        // (now_utc() - duration('PT23H')).strftime(fmt) — tests arithmetic + method call
+        String out = JinjaRenderer.render(
+            "{{ (now_utc() - duration('PT23H')).strftime('%Y-%m-%dT%H:%M:%S') }}", ctx());
+        assertNotNull(out);
+        assertTrue(out.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"),
+            "arithmetic + strftime must produce a datetime string: " + out);
+    }
+
+    @Test
+    void formatDatetimeAcceptsAirbyteDateTime() {
+        // format_datetime(now_utc() - duration('P1D'), fmt) — AirbyteDateTime as first arg
+        String out = JinjaRenderer.render(
+            "{{ format_datetime(now_utc().minus(duration('P1D')), '%Y-%m-%d') }}", ctx());
+        assertNotNull(out);
+        assertTrue(out.matches("\\d{4}-\\d{2}-\\d{2}"),
+            "format_datetime must accept AirbyteDateTime: " + out);
+    }
+
+    @Test
+    void rewriteNowUtcArithmetic_rewritesMinusToMethodCall() {
+        String original = "{{ (now_utc() - duration('PT23H')).strftime('%Y-%m-%d') }}";
+        String rewritten = JinjaRenderer.rewriteNowUtcArithmetic(original);
+        assertEquals("{{ (now_utc().minus(duration('PT23H'))).strftime('%Y-%m-%d') }}", rewritten);
+    }
+
+    @Test
     void todayUtcIsoDate() {
         String out = JinjaRenderer.render("{{ today_utc() }}", ctx());
         assertNotNull(LocalDate.parse(out));

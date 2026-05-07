@@ -84,8 +84,8 @@ public final class AirbyteJinjaFunctions {
     //  Datetime functions
     // ─────────────────────────────────────────────────────────────────────
 
-    public static String nowUtc() {
-        return ZonedDateTime.now(ZoneOffset.UTC).format(ISO_OUT);
+    public static AirbyteDateTime nowUtc() {
+        return new AirbyteDateTime(ZonedDateTime.now(ZoneOffset.UTC));
     }
 
     public static String todayUtc() {
@@ -180,7 +180,9 @@ public final class AirbyteJinjaFunctions {
             return "";
         }
         ZonedDateTime z;
-        if (dt instanceof ZonedDateTime zd) {
+        if (dt instanceof AirbyteDateTime ad) {
+            z = ad.toZonedDateTime();
+        } else if (dt instanceof ZonedDateTime zd) {
             z = zd;
         } else if (dt instanceof Instant i) {
             z = i.atZone(ZoneOffset.UTC);

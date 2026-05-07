@@ -73,6 +73,22 @@ public final class JinjaRenderer {
         return p.matcher(template).replaceAll("($2)|join($1)");
     }
 
+    /**
+     * Rewrites {@code now_utc() - duration(X)} to {@code now_utc().minus(duration(X))}.
+     *
+     * <p>jinjava does not support the binary {@code -} operator between arbitrary Java objects
+     * (it only handles numeric subtraction).  {@code now_utc()} returns an
+     * {@link AirbyteDateTime} whose {@code minus(TemporalAmount)} method performs the
+     * subtraction.  Converting the infix {@code -} to a method call lets jinjava resolve it
+     * via normal reflection.</p>
+     *
+     * <p>The pattern is safe: {@code now_utc() - duration(X)} has no other meaning in Jinja2.</p>
+     */
+    static String rewriteNowUtcArithmetic(String template) {
+        Pattern p = Pattern.compile("now_utc\\(\\)\\s*-\\s*(duration\\([^)]+\\))");
+        return p.matcher(template).replaceAll("now_utc().minus($1)");
+    }
+
     private JinjaRenderer() {
     }
 
@@ -89,6 +105,9 @@ public final class JinjaRenderer {
         }
         if (template.contains(".join(")) {
             template = rewritePythonJoin(template);
+        }
+        if (template.contains("now_utc() -") || template.contains("now_utc()-")) {
+            template = rewriteNowUtcArithmetic(template);
         }
         RenderResult result = JINJAVA.renderForResult(template, asObjectMap(context));
         if (!result.getErrors().isEmpty()) {
@@ -113,6 +132,9 @@ public final class JinjaRenderer {
         }
         if (template.contains(".join(")) {
             template = rewritePythonJoin(template);
+        }
+        if (template.contains("now_utc() -") || template.contains("now_utc()-")) {
+            template = rewriteNowUtcArithmetic(template);
         }
         return JINJAVA.renderForResult(template, asObjectMap(context)).getOutput();
     }
