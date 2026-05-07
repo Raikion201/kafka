@@ -69,7 +69,13 @@ public final class AirbyteJinjaFunctions {
         register(j, "min", "minOf", Object.class, Object.class);
         register(j, "day_delta", "dayDelta", Object[].class);
         register(j, "duration", "duration", Object.class);
+        // format_datetime is registered under "format_datetime2" / "format_datetime3" (distinct names)
+        // so jinjava's function map (namespace+name keyed) can hold both without collision.
+        // JinjaRenderer.rewriteFormatDatetime() rewrites manifests' format_datetime(a,b[,c])
+        // to format_datetime2/3 before jinjava sees the template.
         register(j, "format_datetime", "formatDatetime", Object[].class);
+        register(j, "format_datetime2", "formatDatetime2", Object.class, Object.class);
+        register(j, "format_datetime3", "formatDatetime3", Object.class, Object.class, Object.class);
         register(j, "sanitize_url", "sanitizeUrl", Object.class);
         register(j, "camel_case_to_snake_case", "camelCaseToSnakeCase", Object.class);
         register(j, "generate_uuid", "generateUuid");
@@ -165,17 +171,29 @@ public final class AirbyteJinjaFunctions {
 
     /**
      * {@code format_datetime(dt, format[, input_format])}. {@code dt} may be a
-     * string, an {@link Instant}, or a {@link ZonedDateTime}. Registered with
-     * {@code Object[].class} so jinjava can invoke either the 2-arg or 3-arg
-     * form from manifests.
+     * string, an {@link Instant}, or a {@link ZonedDateTime}. The varargs form
+     * is kept for backwards compat; dedicated 2-arg and 3-arg variants
+     * ({@link #formatDatetime2} / {@link #formatDatetime3}) avoid a jinjava
+     * varargs-resolution bug that fires when an argument is a method-chain result.
      */
     public static String formatDatetime(Object... args) {
         if (args == null || args.length < 2) {
             return "";
         }
-        Object dt = args[0];
-        Object format = args[1];
-        Object inputFormat = args.length >= 3 ? args[2] : null;
+        return formatDatetimeImpl(args[0], args[1], args.length >= 3 ? args[2] : null);
+    }
+
+    /** 2-arg overload — bypasses jinjava varargs resolution for method-chain args. */
+    public static String formatDatetime2(Object dt, Object format) {
+        return formatDatetimeImpl(dt, format, null);
+    }
+
+    /** 3-arg overload — bypasses jinjava varargs resolution for method-chain args. */
+    public static String formatDatetime3(Object dt, Object format, Object inputFormat) {
+        return formatDatetimeImpl(dt, format, inputFormat);
+    }
+
+    static String formatDatetimeImpl(Object dt, Object format, Object inputFormat) {
         if (dt == null || format == null) {
             return "";
         }
@@ -324,8 +342,13 @@ public final class AirbyteJinjaFunctions {
 
     /**
      * Parse a string into a {@link ZonedDateTime}, accepting:
-     * full ISO-8601 with offset, ISO without offset (assumed UTC), and
-     * date-only (assumed UTC midnight).
+     * full ISO-8601 with offset, compact offset ({@code +HHMM} without colon),
+     * ISO without offset (assumed UTC), and date-only (assumed UTC midnight).
+     *
+     * <p>The compact {@code +HHMM} form is produced by Java's {@code Z} DateTimeFormatter
+     * pattern (which {@link org.apache.kafka.connect.manifest.codegen.runtime.DatetimeWindowHelper}
+     * uses for strftime {@code %z} and unquoted literal {@code Z} characters).
+     * Standard Java parsers require {@code +HH:MM} — this method normalises the input first.</p>
      */
     static ZonedDateTime parseToZdt(String s) {
         String trimmed = s.trim();
@@ -336,6 +359,12 @@ public final class AirbyteJinjaFunctions {
         }
         try {
             return OffsetDateTime.parse(trimmed).toZonedDateTime();
+        } catch (DateTimeParseException ignored) {
+            // try compact +HHMM form (no colon), e.g. "2024-01-15T10:30:45+0000"
+        }
+        try {
+            return OffsetDateTime.parse(trimmed,
+                DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssZ")).toZonedDateTime();
         } catch (DateTimeParseException ignored) {
             // try local
         }

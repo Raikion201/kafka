@@ -56,6 +56,7 @@ public final class AirbyteJinjaFilters {
         jinjava.getGlobalContext().registerFilter(new StringFilter());
         jinjava.getGlobalContext().registerFilter(new FloatFilter());
         jinjava.getGlobalContext().registerFilter(new IntFilter());
+        jinjava.getGlobalContext().registerFilter(new FormatDatetimeFilter());
     }
 
     private static String asString(Object value) {
@@ -282,6 +283,35 @@ public final class AirbyteJinjaFilters {
                     return 0L;
                 }
             }
+        }
+    }
+
+    /**
+     * {@code dt | format_datetime_filter(fmt[, input_fmt])} — filter-form of
+     * Airbyte's {@code format_datetime(dt, fmt[, input_fmt])} function.
+     *
+     * <p>jinjava/JUEL cannot invoke registered EL functions when the first
+     * argument is a {@link String} produced by a method-chain expression
+     * (e.g. {@code now_utc().strftime(...)}).  Registering {@code format_datetime}
+     * as a filter bypasses JUEL's function-call invocation path entirely —
+     * the pipe operator evaluates the left-hand side as a standalone expression
+     * and jinjava passes its result to the filter via direct Java invocation.
+     * {@link com.hubspot.jinjava.interpret.JinjaRenderer#rewriteFormatDatetime}
+     * pre-processes all {@code format_datetime(dt, ...)} calls into
+     * {@code (dt) | format_datetime_filter(...)} before jinjava sees the
+     * template.</p>
+     */
+    public static final class FormatDatetimeFilter implements Filter {
+        @Override
+        public String getName() {
+            return "format_datetime_filter";
+        }
+
+        @Override
+        public Object filter(Object var, JinjavaInterpreter interpreter, String... args) {
+            Object fmt = args.length > 0 ? args[0] : null;
+            Object inputFmt = args.length > 1 ? args[1] : null;
+            return AirbyteJinjaFunctions.formatDatetimeImpl(var, fmt, inputFmt);
         }
     }
 }

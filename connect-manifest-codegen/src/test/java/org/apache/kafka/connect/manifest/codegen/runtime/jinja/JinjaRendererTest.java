@@ -406,4 +406,97 @@ class JinjaRendererTest {
     void rewritePythonJoin_noJoin_unchanged() {
         assertEquals("{{ config['key'] }}", JinjaRenderer.rewritePythonJoin("{{ config['key'] }}"));
     }
+
+    @Test
+    void nowUtcMinusStrftime() {
+        // Verify the sub-expression works in isolation
+        String tpl = "{{ (now_utc().minus(duration('P730D'))).strftime('%Y-%m-%dT%H:%M:%SZ') }}";
+        String out = JinjaRenderer.render(tpl, Map.of());
+        assertNotNull(out);
+        assertTrue(!out.isEmpty());
+    }
+
+    @Test
+    void formatDatetimeWithMaxTwoStrings() {
+        String tpl = "{{ format_datetime(max('2022-01-01T00:00:00Z', '2020-01-01T00:00:00Z'), '%Y-%m-%dT%H:%M:%SZ') }}";
+        String out = JinjaRenderer.render(tpl, Map.of());
+        assertEquals("2022-01-01T00:00:00Z", out);
+    }
+
+    @Test
+    void maxOfStringAndNowUtcStrftime() {
+        String tpl = "{{ max('2022-01-01T00:00:00Z', (now_utc().minus(duration('P730D'))).strftime('%Y-%m-%dT%H:%M:%SZ')) }}";
+        String out = JinjaRenderer.render(tpl, Map.of());
+        assertNotNull(out);
+        assertTrue(!out.isEmpty());
+    }
+
+    @Test
+    void formatDatetimeOfNowUtcStrftime() {
+        // format_datetime with a single method-chain arg (not nested in max)
+        String tpl = "{{ format_datetime(now_utc().strftime('%Y-%m-%dT%H:%M:%SZ'), '%Y-%m-%dT%H:%M:%SZ') }}";
+        String out = JinjaRenderer.render(tpl, Map.of());
+        assertNotNull(out);
+        assertTrue(!out.isEmpty());
+    }
+
+    @Test
+    void formatDatetimeWithMaxStringAndNowUtc() {
+        String tpl = "{{ format_datetime(max('2022-01-01T00:00:00Z', (now_utc().minus(duration('P730D'))).strftime('%Y-%m-%dT%H:%M:%SZ')), '%Y-%m-%dT%H:%M:%SZ') }}";
+        String out = JinjaRenderer.render(tpl, Map.of());
+        assertNotNull(out);
+        assertTrue(!out.isEmpty());
+    }
+
+    @Test
+    void formatDatetimeWithMaxNowUtcComplexTemplate() {
+        String tpl = "{{ format_datetime( max(((config['replication_start_date']) if 'replication_start_date' in config else ((now_utc()).minus(duration('P730D'))).strftime('%Y-%m-%dT%H:%M:%SZ') ), (now_utc().minus(duration('P730D'))).strftime('%Y-%m-%dT%H:%M:%SZ')), '%Y-%m-%dT%H:%M:%SZ') }}";
+        Map<String, Object> c = ctx();
+        c.put("replication_start_date", "2022-01-01T00:00:00Z");
+        String out = JinjaRenderer.render(tpl, c);
+        assertNotNull(out);
+        assertTrue(!out.isEmpty());
+    }
+
+    // ── rewriteFormatDatetime ─────────────────────────────────────────────────
+
+    @Test
+    void rewriteFormatDatetime_twoArgs() {
+        assertEquals("{{ (ts) | format_datetime_filter('%Y-%m-%d') }}",
+            JinjaRenderer.rewriteFormatDatetime("{{ format_datetime(ts, '%Y-%m-%d') }}"));
+    }
+
+    @Test
+    void rewriteFormatDatetime_threeArgs() {
+        assertEquals("{{ ('15-06-2024') | format_datetime_filter('%Y/%m/%d', '%d-%m-%Y') }}",
+            JinjaRenderer.rewriteFormatDatetime("{{ format_datetime('15-06-2024', '%Y/%m/%d', '%d-%m-%Y') }}"));
+    }
+
+    @Test
+    void rewriteFormatDatetime_nestedParens() {
+        assertEquals("{{ (max('a', 'b')) | format_datetime_filter('%Y') }}",
+            JinjaRenderer.rewriteFormatDatetime("{{ format_datetime(max('a', 'b'), '%Y') }}"));
+    }
+
+    @Test
+    void rewriteFormatDatetime_doesNotTouchFilterForm() {
+        // format_datetime_filter( does not match the marker format_datetime( so it's left alone
+        String in = "{{ (ts) | format_datetime_filter('%Y') }}";
+        assertEquals(in, JinjaRenderer.rewriteFormatDatetime(in));
+    }
+
+    // ── rewriteElseFunctionCall ───────────────────────────────────────────────
+
+    @Test
+    void rewriteElseFunctionCall_wrapsElseClause() {
+        String in = "{{ X if cond else day_delta(-7, '%Y-%m-%d') }}";
+        String out = JinjaRenderer.rewriteElseFunctionCall(in);
+        assertEquals("{{ X if cond else (day_delta(-7, '%Y-%m-%d')) }}", out);
+    }
+
+    @Test
+    void rewriteElseFunctionCall_noMatchOnElseIf() {
+        String in = "{% if a %}x{% elif b %}y{% else %}z{% endif %}";
+        assertEquals(in, JinjaRenderer.rewriteElseFunctionCall(in));
+    }
 }

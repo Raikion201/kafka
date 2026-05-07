@@ -91,6 +91,116 @@ public final class JinjaRenderer {
     }
 
     /**
+     * Rewrites {@code format_datetime(dt, fmt[, inputFmt])} to filter form:
+     * {@code (dt) | format_datetime_filter(fmt[, inputFmt])}.
+     *
+     * <p>jinjava/JUEL cannot invoke registered EL functions when the first
+     * argument is a {@link String} produced by a method-chain expression
+     * (e.g. {@code now_utc().strftime(...)}).  Converting to a Jinja filter avoids
+     * JUEL's function-call invocation path: the pipe operator evaluates the left-hand
+     * expression as a standalone expression, then jinjava passes its result to the
+     * filter via direct Java invocation, bypassing JUEL entirely.</p>
+     *
+     * <p>The marker {@code "format_datetime("} never matches
+     * {@code "format_datetime_filter("} because the marker ends with {@code '('}
+     * and the filter name inserts {@code "_filter"} before the {@code '('}.</p>
+     */
+    static String rewriteFormatDatetime(String template) {
+        StringBuilder out = new StringBuilder();
+        int i = 0;
+        String marker = "format_datetime(";
+        while (i < template.length()) {
+            int idx = template.indexOf(marker, i);
+            if (idx < 0) {
+                out.append(template, i, template.length());
+                break;
+            }
+            out.append(template, i, idx);
+            int argsStart = idx + marker.length();
+            int argsEnd = findMatchingClose(template, argsStart);
+            // Split at top-level commas: args[0] = dt, args[1..] = format args
+            java.util.List<String> args = splitTopLevelArgs(template, argsStart, argsEnd - 1);
+            out.append("(").append(args.get(0)).append(") | format_datetime_filter(");
+            for (int a = 1; a < args.size(); a++) {
+                if (a > 1) {
+                    out.append(", ");
+                }
+                out.append(args.get(a));
+            }
+            out.append(")");
+            i = argsEnd;
+        }
+        return out.toString();
+    }
+
+    /**
+     * Splits {@code s[start..end]} at top-level commas (depth 1),
+     * respecting nested parens/brackets and single/double-quoted strings.
+     */
+    private static java.util.List<String> splitTopLevelArgs(String s, int start, int end) {
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        int depth = 0;
+        boolean inSQ = false;
+        boolean inDQ = false;
+        int segStart = start;
+        for (int i = start; i < end; i++) {
+            char c = s.charAt(i);
+            if (inSQ) {
+                if (c == '\'') {
+                    inSQ = false;
+                }
+            } else if (inDQ) {
+                if (c == '"') {
+                    inDQ = false;
+                }
+            } else if (c == '\'') {
+                inSQ = true;
+            } else if (c == '"') {
+                inDQ = true;
+            } else if (c == '(' || c == '[') {
+                depth++;
+            } else if (c == ')' || c == ']') {
+                depth--;
+            } else if (c == ',' && depth == 0) {
+                parts.add(s.substring(segStart, i).trim());
+                segStart = i + 1;
+            }
+        }
+        parts.add(s.substring(segStart, end).trim());
+        return parts;
+    }
+
+    /** Return the index just past the matching ')' for the '(' that opened at {@code start - 1}. */
+    private static int findMatchingClose(String s, int start) {
+        int depth = 1;
+        boolean inSQ = false;
+        boolean inDQ = false;
+        int i = start;
+        while (i < s.length() && depth > 0) {
+            char c = s.charAt(i);
+            if (inSQ) {
+                if (c == '\'') {
+                    inSQ = false;
+                }
+            } else if (inDQ) {
+                if (c == '"') {
+                    inDQ = false;
+                }
+            } else if (c == '\'') {
+                inSQ = true;
+            } else if (c == '"') {
+                inDQ = true;
+            } else if (c == '(' || c == '[') {
+                depth++;
+            } else if (c == ')' || c == ']') {
+                depth--;
+            }
+            i++;
+        }
+        return i;
+    }
+
+    /**
      * Rewrites Python-style {@code dict.get('key', default)} to valid Jinja2.
      *
      * <p>Python dicts have a 2-arg {@code get(key, default)} method. jinjava
@@ -208,8 +318,16 @@ public final class JinjaRenderer {
         RenderResult result = JINJAVA.renderForResult(template, asObjectMap(context));
         if (!result.getErrors().isEmpty()) {
             TemplateError first = result.getErrors().get(0);
+            Exception cause = first.getException();
+            String detail = first.getMessage();
+            if (cause != null) {
+                detail += " | cause: " + cause.getClass().getSimpleName() + ": " + cause.getMessage();
+                if (cause.getCause() != null) {
+                    detail += " | root: " + cause.getCause().getClass().getSimpleName() + ": " + cause.getCause().getMessage();
+                }
+            }
             throw new ConnectException(
-                "Jinja render failed for template '" + template + "': " + first.getMessage());
+                "Jinja render failed for template '" + template + "': " + detail);
         }
         return result.getOutput();
     }
@@ -236,6 +354,9 @@ public final class JinjaRenderer {
         }
         if (template.contains("now_utc() -") || template.contains("now_utc()-")) {
             template = rewriteNowUtcArithmetic(template);
+        }
+        if (template.contains("format_datetime(")) {
+            template = rewriteFormatDatetime(template);
         }
         if (template.contains(".get(")) {
             template = rewriteDictGet(template);
