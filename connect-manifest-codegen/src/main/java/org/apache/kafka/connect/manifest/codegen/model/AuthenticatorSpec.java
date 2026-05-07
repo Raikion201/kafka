@@ -477,6 +477,9 @@ public class AuthenticatorSpec {
         @JsonProperty("path")
         private String path;
 
+        @JsonProperty("http_method")
+        private String httpMethod = "POST";
+
         @JsonProperty("authenticator")
         private AuthenticatorSpec authenticator;
 
@@ -497,6 +500,14 @@ public class AuthenticatorSpec {
 
         public void setPath(String path) {
             this.path = path;
+        }
+
+        public String getHttpMethod() {
+            return httpMethod == null ? "POST" : httpMethod.toUpperCase(java.util.Locale.ROOT);
+        }
+
+        public void setHttpMethod(String httpMethod) {
+            this.httpMethod = httpMethod;
         }
 
         public AuthenticatorSpec getAuthenticator() {

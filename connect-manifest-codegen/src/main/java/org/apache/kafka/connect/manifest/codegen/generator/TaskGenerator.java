@@ -1061,7 +1061,7 @@ public class TaskGenerator {
             body.addStatement("$T jwtToken = buildJwt()", String.class);
         }
         StringBuilder reqFmt = new StringBuilder(
-            "$T request = $T.newBuilder()\n        .uri($T.create(urlBuilder.toString()))");
+            "$T request = $T.newBuilder()\n        .uri($T.create(urlBuilder.toString().trim().replace(\" \", \"%20\")))");
         List<Object> reqArgs = new ArrayList<>();
         reqArgs.add(HTTP_REQUEST);
         reqArgs.add(HTTP_REQUEST);
@@ -1918,7 +1918,7 @@ public class TaskGenerator {
         }
 
         StringBuilder fmt = new StringBuilder(
-            "$T request = $T.newBuilder()\n        .uri($T.create($L))");
+            "$T request = $T.newBuilder()\n        .uri($T.create(($L).trim().replace(\" \", \"%20\")))");
         List<Object> args = new ArrayList<>();
         args.add(HTTP_REQUEST);
         args.add(HTTP_REQUEST);
@@ -2120,10 +2120,13 @@ public class TaskGenerator {
 
         // Build the request
         ClassName bodyPublishers = ClassName.get("java.net.http", "HttpRequest.BodyPublishers");
+        boolean loginIsGet = "GET".equals(login.getHttpMethod());
         StringBuilder reqBuilder = new StringBuilder(
             "$T loginReq = $T.newBuilder()\n"
-                + "        .uri($T.create(" + loginUrlExpr + "))\n"
-                + "        .header(\"Content-Type\", \"application/json\")\n");
+                + "        .uri($T.create((" + loginUrlExpr + ").trim().replace(\" \", \"%20\")))\n");
+        if (!loginIsGet) {
+            reqBuilder.append("        .header(\"Content-Type\", \"application/json\")\n");
+        }
 
         List<Object> reqArgs = new ArrayList<>();
         reqArgs.add(HTTP_REQUEST);
@@ -2142,8 +2145,12 @@ public class TaskGenerator {
             reqArgs.add(passExpr);
             reqArgs.add(ClassName.get("java.nio.charset", "StandardCharsets"));
         }
-        reqBuilder.append("        .POST($T.ofString(loginBody))\n        .build()");
-        reqArgs.add(bodyPublishers);
+        if (loginIsGet) {
+            reqBuilder.append("        .GET()\n        .build()");
+        } else {
+            reqBuilder.append("        .POST($T.ofString(loginBody))\n        .build()");
+            reqArgs.add(bodyPublishers);
+        }
 
         body.addStatement(reqBuilder.toString(), reqArgs.toArray());
         body.addStatement(
