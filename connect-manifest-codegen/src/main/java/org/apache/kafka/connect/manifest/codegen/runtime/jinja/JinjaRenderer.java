@@ -156,6 +156,40 @@ public final class JinjaRenderer {
         return p.matcher(template).replaceAll("day_delta($1, $2)");
     }
 
+    /**
+     * Wraps bare function calls after {@code else} in ternary expressions in parentheses.
+     *
+     * <p>jinjava misparses {@code X if COND else func(args)} — it treats the preceding
+     * identifier (e.g. "config") as a namespace prefix for the function name.
+     * Wrapping the else clause: {@code X if COND else (func(args))} disambiguates.</p>
+     */
+    static String rewriteElseFunctionCall(String template) {
+        // Match: "else <word>(" but not inside a nested "else if"
+        Pattern p = Pattern.compile("\\belse\\s+((?!if\\b)[a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(");
+        Matcher m = p.matcher(template);
+        StringBuilder sb = new StringBuilder();
+        int lastEnd = 0;
+        while (m.find(lastEnd)) {
+            sb.append(template, lastEnd, m.start());
+            // Find the matching closing ')' using a depth counter
+            int depth = 1;
+            int i = m.end();
+            while (i < template.length() && depth > 0) {
+                char c = template.charAt(i);
+                if (c == '(') depth++;
+                else if (c == ')') depth--;
+                i++;
+            }
+            // Wrap: "else funcName(args)" → "else (funcName(args))"
+            sb.append("else (").append(m.group(1)).append("(");
+            sb.append(template, m.end(), i); // args + closing ')'
+            sb.append(")");
+            lastEnd = i;
+        }
+        sb.append(template, lastEnd, template.length());
+        return sb.toString();
+    }
+
     private JinjaRenderer() {
     }
 
@@ -211,6 +245,9 @@ public final class JinjaRenderer {
         }
         if (template.contains("day_delta(") && template.contains("format=")) {
             template = rewriteDayDeltaKeyword(template);
+        }
+        if (template.contains("else ")) {
+            template = rewriteElseFunctionCall(template);
         }
         return template;
     }
