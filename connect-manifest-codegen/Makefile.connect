@@ -1,0 +1,67 @@
+## Usage:
+##   make -f Makefile.connect          # status + 3 sample messages per connector
+##   make -f Makefile.connect status   # running list only
+##   make -f Makefile.connect sample   # samples only
+
+CONNECT  ?= http://localhost:18083
+BROKER   ?= my-cluster-broker-0
+NS       ?= kafka
+MSGS     ?= 3
+
+.PHONY: all status sample
+
+all: status sample
+
+define PY_STATUS
+import json, urllib.request, sys
+data = json.loads(urllib.request.urlopen("$(CONNECT)/connectors?expand=status", timeout=10).read())
+running = [n for n,i in sorted(data.items()) if (i.get("status",{}).get("tasks") or [{}])[0].get("state") == "RUNNING"]
+print("=" * 55)
+print(f"  RUNNING: {len(running)}  /  TOTAL: {len(data)}")
+print("=" * 55)
+[print(f"  OK  {n}") for n in running]
+endef
+export PY_STATUS
+
+define PY_SAMPLE
+import json, subprocess, sys, urllib.request
+CONNECT = "$(CONNECT)"; POD = "$(BROKER)"; NS = "$(NS)"; N = $(MSGS)
+
+def api(p):
+    return json.loads(urllib.request.urlopen(CONNECT + p, timeout=10).read())
+
+def consume(topic):
+    cmd = ["kubectl","exec","-n",NS,POD,"--","bin/kafka-console-consumer.sh",
+           "--bootstrap-server","localhost:9092","--topic",topic,
+           "--from-beginning","--max-messages",str(N),"--timeout-ms","5000"]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    return [l for l in r.stdout.splitlines() if l.strip()][:N]
+
+def fmt(s):
+    try: s = json.dumps(json.loads(s), ensure_ascii=False, separators=(",",":"))
+    except: pass
+    return s[:180] + ("…" if len(s) > 180 else "")
+
+data = api("/connectors?expand=status")
+running = [n for n,i in sorted(data.items()) if (i.get("status",{}).get("tasks") or [{}])[0].get("state") == "RUNNING"]
+print(f"\n{'='*55}")
+print(f"  {len(running)} running connectors — {N} messages each")
+print(f"{'='*55}\n")
+for name in running:
+    topics = list(api(f"/connectors/{name}/topics").values())[0].get("topics",[])
+    print(f"[ {name} ]")
+    if not topics:
+        print("  (no topics yet)\n"); continue
+    for topic in topics:
+        print(f"  topic: {topic}")
+        msgs = consume(topic)
+        [print(f"  {i+1}. {fmt(m)}") for i,m in enumerate(msgs)] if msgs else print("  (no messages yet)")
+    print()
+endef
+export PY_SAMPLE
+
+status:
+	@python3 -c "$$PY_STATUS"
+
+sample:
+	@python3 -c "$$PY_SAMPLE"
