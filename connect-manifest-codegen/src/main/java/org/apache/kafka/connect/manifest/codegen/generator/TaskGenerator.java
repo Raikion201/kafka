@@ -2003,7 +2003,8 @@ public class TaskGenerator {
         String clientIdExpr     = interpolateTemplate(auth.getClientId());
         String clientSecretExpr = interpolateTemplate(auth.getClientSecret());
         String refreshTokenExpr = interpolateTemplate(auth.getRefreshToken());
-        String endpoint = auth.getTokenRefreshEndpoint() != null ? auth.getTokenRefreshEndpoint() : "";
+        String endpoint = auth.getTokenRefreshEndpoint() != null
+            ? interpolateTemplate(auth.getTokenRefreshEndpoint()) : "";
 
         CodeBlock.Builder body = CodeBlock.builder();
         body.beginControlFlow("if (cachedToken != null && $T.currentTimeMillis() < tokenExpiryMs)", System.class);
@@ -2033,7 +2034,7 @@ public class TaskGenerator {
         body.beginControlFlow("try");
         body.addStatement(
             "$T tokenRequest = $T.newBuilder()\n"
-                + "        .uri($T.create($S))\n"
+                + "        .uri($T.create($L))\n"
                 + "        .header(\"Content-Type\", \"application/x-www-form-urlencoded\")\n"
                 + "        .POST($T.ofString(reqBody))\n"
                 + "        .build()",
