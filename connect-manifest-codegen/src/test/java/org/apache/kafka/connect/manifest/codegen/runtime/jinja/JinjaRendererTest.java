@@ -304,4 +304,37 @@ class JinjaRendererTest {
         String out = JinjaRenderer.render("{{ format_datetime(ts, '%Y-%m-%dT%H:%M:%S') }}", c);
         assertEquals("2024-01-02T03:04:05", out);
     }
+
+    // ── Python-style str.join() pre-processor ─────────────────────────────────
+
+    @Test
+    void rewritePythonJoin_singleQuoteSeparator() {
+        assertEquals("(tags)|join(',')", JinjaRenderer.rewritePythonJoin("','.join(tags)"));
+    }
+
+    @Test
+    void rewritePythonJoin_doubleQuoteSeparator() {
+        assertEquals("(tags)|join(\",\")", JinjaRenderer.rewritePythonJoin("\",\".join(tags)"));
+    }
+
+    @Test
+    void rewritePythonJoin_insideJinjaBlock() {
+        Map<String, Object> c = ctx();
+        c.put("tags", java.util.List.of("a", "b", "c"));
+        String out = JinjaRenderer.render("{{ ','.join(tags) }}", c);
+        assertEquals("a,b,c", out);
+    }
+
+    @Test
+    void rewritePythonJoin_spaceSeparatorInsideTemplate() {
+        Map<String, Object> c = ctx();
+        c.put("words", java.util.List.of("hello", "world"));
+        String out = JinjaRenderer.render("{{ ' '.join(words) }}", c);
+        assertEquals("hello world", out);
+    }
+
+    @Test
+    void rewritePythonJoin_noJoin_unchanged() {
+        assertEquals("{{ config['key'] }}", JinjaRenderer.rewritePythonJoin("{{ config['key'] }}"));
+    }
 }
