@@ -2106,31 +2106,79 @@ public class TaskGenerator {
         // Resolve the login URL — may be a mixed template like "{{ config["host"] }}/api/oauth/v1"
         String loginUrlExpr = interpolateTemplate(login.getUrlBase() + "/" + login.getPath());
 
-        // Build JSON body string from requestBodyJson
+        // Determine body style: request_body_json → JSON, request_body_data → form-encoded, else empty
+        boolean hasBodyJson = login.getRequestBodyJson() != null && !login.getRequestBodyJson().isEmpty();
+        boolean hasBodyData = login.getRequestBodyData() != null && !login.getRequestBodyData().isEmpty();
+        boolean hasQueryParams = login.getRequestParameters() != null && !login.getRequestParameters().isEmpty();
+
         CodeBlock.Builder body = CodeBlock.builder();
-        body.addStatement("$T<$T, $T> bodyMap = new $T<>()", Map.class, String.class, String.class,
-            ClassName.get("java.util", "LinkedHashMap"));
-        if (login.getRequestBodyJson() != null) {
+
+        // Build query-param suffix for request_parameters
+        if (hasQueryParams) {
+            body.addStatement("$T<$T, $T> qpMap = new $T<>()", Map.class, String.class, String.class,
+                ClassName.get("java.util", "LinkedHashMap"));
+            for (Map.Entry<String, String> e : login.getRequestParameters().entrySet()) {
+                body.addStatement("qpMap.put($S, $L)", e.getKey(), interpolateTemplate(e.getValue()));
+            }
+            body.addStatement("$T qpBuilder = new $T()", StringBuilder.class, StringBuilder.class);
+            body.addStatement(
+                "qpMap.forEach((k, v) -> qpBuilder.append(qpBuilder.length() == 0 ? '?' : '&').append(k).append('=').append(v))");
+        }
+
+        // Build body string
+        if (hasBodyJson) {
+            body.addStatement("$T<$T, $T> bodyMap = new $T<>()", Map.class, String.class, String.class,
+                ClassName.get("java.util", "LinkedHashMap"));
             for (Map.Entry<String, String> e : login.getRequestBodyJson().entrySet()) {
                 body.addStatement("bodyMap.put($S, $L)", e.getKey(), interpolateTemplate(e.getValue()));
             }
+            body.addStatement("$T loginBody = MAPPER.writeValueAsString(bodyMap)", String.class);
+        } else if (hasBodyData) {
+            body.addStatement("$T<$T, $T> formMap = new $T<>()", Map.class, String.class, String.class,
+                ClassName.get("java.util", "LinkedHashMap"));
+            for (Map.Entry<String, String> e : login.getRequestBodyData().entrySet()) {
+                body.addStatement("formMap.put($S, $L)", e.getKey(), interpolateTemplate(e.getValue()));
+            }
+            body.addStatement("$T loginFormSb = new $T()", StringBuilder.class, StringBuilder.class);
+            body.addStatement(
+                "formMap.forEach((k, v) -> loginFormSb.append(loginFormSb.length() == 0 ? \"\" : \"&\").append(k).append('=').append(v))");
+            body.addStatement("$T loginBody = loginFormSb.toString()", String.class);
+        } else {
+            body.addStatement("$T loginBody = \"\"", String.class);
         }
-        body.addStatement("$T loginBody = MAPPER.writeValueAsString(bodyMap)", String.class);
 
         // Build the request
         ClassName bodyPublishers = ClassName.get("java.net.http", "HttpRequest.BodyPublishers");
         boolean loginIsGet = "GET".equals(login.getHttpMethod());
+        String uriExpr = hasQueryParams
+            ? "((" + loginUrlExpr + ") + qpBuilder.toString()).trim().replace(\" \", \"%20\")"
+            : "(" + loginUrlExpr + ").trim().replace(\" \", \"%20\")";
         StringBuilder reqBuilder = new StringBuilder(
             "$T loginReq = $T.newBuilder()\n"
-                + "        .uri($T.create((" + loginUrlExpr + ").trim().replace(\" \", \"%20\")))\n");
+                + "        .uri($T.create(" + uriExpr + "))\n");
         if (!loginIsGet) {
-            reqBuilder.append("        .header(\"Content-Type\", \"application/json\")\n");
+            if (hasBodyData) {
+                reqBuilder.append("        .header(\"Content-Type\", \"application/x-www-form-urlencoded\")\n");
+            } else {
+                reqBuilder.append("        .header(\"Content-Type\", \"application/json\")\n");
+            }
         }
 
         List<Object> reqArgs = new ArrayList<>();
         reqArgs.add(HTTP_REQUEST);
         reqArgs.add(HTTP_REQUEST);
         reqArgs.add(URI_CLASS);
+
+        // Emit custom request_headers from login_requester
+        if (login.getRequestHeaders() != null) {
+            for (Map.Entry<String, String> e : login.getRequestHeaders().entrySet()) {
+                if (e.getValue() != null && !e.getValue().isEmpty()) {
+                    reqBuilder.append("        .header($S, $S)\n");
+                    reqArgs.add(e.getKey());
+                    reqArgs.add(e.getValue());
+                }
+            }
+        }
 
         // Add auth headers for the inner login_requester authenticator
         AuthenticatorSpec innerAuth = login.getAuthenticator();
@@ -2169,6 +2217,11 @@ public class TaskGenerator {
         body.addStatement(
             "$T<$T> loginResp = httpClient.send(loginReq, $T.BodyHandlers.ofString())",
             HTTP_RESPONSE, String.class, HTTP_RESPONSE);
+        body.beginControlFlow("if (loginResp.statusCode() < 200 || loginResp.statusCode() >= 300)");
+        body.addStatement(
+            "throw new $T(\"Session token login failed: HTTP \" + loginResp.statusCode() + \" \" + loginResp.body().substring(0, Math.min(200, loginResp.body().length())))",
+            CONNECT_EXCEPTION);
+        body.endControlFlow();
         body.addStatement(
             "$T loginJson = MAPPER.readValue(loginResp.body(), $T.class)", Object.class, Object.class);
 
@@ -2184,7 +2237,9 @@ public class TaskGenerator {
             body.endControlFlow();
         }
         body.beginControlFlow("if (tokenStep == null)");
-        body.addStatement("throw new $T(\"Session token not found in login response\")", CONNECT_EXCEPTION);
+        body.addStatement(
+            "throw new $T(\"Session token not found at path $L in login response: \" + loginResp.body().substring(0, Math.min(200, loginResp.body().length())))",
+            CONNECT_EXCEPTION, String.join(".", tokenPath));
         body.endControlFlow();
         body.addStatement("cachedSessionToken = $T.valueOf(tokenStep)", String.class);
 

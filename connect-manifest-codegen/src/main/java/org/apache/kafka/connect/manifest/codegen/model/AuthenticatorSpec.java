@@ -490,6 +490,18 @@ public class AuthenticatorSpec {
         @JsonProperty("request_body_json")
         private Map<String, String> requestBodyJson;
 
+        /** Form-encoded POST body (application/x-www-form-urlencoded). */
+        @JsonProperty("request_body_data")
+        private Map<String, String> requestBodyData;
+
+        /** URL query parameters to append to the login URL. */
+        @JsonProperty("request_parameters")
+        private Map<String, String> requestParameters;
+
+        /** Extra HTTP request headers for the login request. */
+        @JsonProperty("request_headers")
+        private Map<String, String> requestHeaders;
+
         public String getUrlBase() {
             if (urlBase != null) {
                 return urlBase;
@@ -544,6 +556,30 @@ public class AuthenticatorSpec {
 
         public void setRequestBodyJson(Map<String, String> requestBodyJson) {
             this.requestBodyJson = requestBodyJson;
+        }
+
+        public Map<String, String> getRequestBodyData() {
+            return requestBodyData;
+        }
+
+        public void setRequestBodyData(Map<String, String> requestBodyData) {
+            this.requestBodyData = requestBodyData;
+        }
+
+        public Map<String, String> getRequestParameters() {
+            return requestParameters;
+        }
+
+        public void setRequestParameters(Map<String, String> requestParameters) {
+            this.requestParameters = requestParameters;
+        }
+
+        public Map<String, String> getRequestHeaders() {
+            return requestHeaders;
+        }
+
+        public void setRequestHeaders(Map<String, String> requestHeaders) {
+            this.requestHeaders = requestHeaders;
         }
     }
 }
