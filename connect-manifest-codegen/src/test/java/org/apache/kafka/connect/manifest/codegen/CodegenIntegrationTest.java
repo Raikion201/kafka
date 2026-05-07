@@ -1567,6 +1567,74 @@ public class CodegenIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // BUG FIX B2 — start_datetime.datetime_format → cursor format conversion
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void startFmtMismatch_generatedCodeContainsFormatConversion(@TempDir Path tmpDir) throws Exception {
+        GeneratedTriple g = generate("start_fmt_mismatch_test.yaml");
+        compileTriple(g, tmpDir);
+        String taskSrc = g.task.toString();
+        // Must parse start date using startDt.getDatetimeFormat() ("%Y-%m-%d")
+        // and reformat to cursor format ("%Y-%m-%dT%H:%M:%S").
+        assertTrue(taskSrc.contains("DatetimeWindowHelper.parseDate"),
+            "cursor init must call parseDate to convert from start_datetime format");
+        assertTrue(taskSrc.contains("DatetimeWindowHelper.formatDate"),
+            "cursor init must call formatDate to reformat to cursor format");
+    }
+
+    @Test
+    void startFmtMismatch_mockHttp_cursorConvertedToDatetimeFormat(@TempDir Path tmpDir) throws Exception {
+        // start_date config value is "%Y-%m-%d" (date-only) but cursor format is "%Y-%m-%dT%H:%M:%S".
+        // Without the fix, parseDate("2020-01-01", "%Y-%m-%dT%H:%M:%S") throws DateTimeParseException.
+        com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer.create(
+            new java.net.InetSocketAddress(0), 0);
+        java.util.concurrent.atomic.AtomicReference<String> capturedStart = new java.util.concurrent.atomic.AtomicReference<>();
+
+        server.createContext("/api/items", exchange -> {
+            String query = exchange.getRequestURI().getQuery();
+            if (query != null) {
+                for (String part : query.split("&")) {
+                    if (part.startsWith("start=")) capturedStart.set(
+                        java.net.URLDecoder.decode(part.substring(6), StandardCharsets.UTF_8));
+                }
+            }
+            byte[] body = "{\"data\":[{\"id\":1,\"updated_at\":\"2020-01-01T10:00:00\"}]}".getBytes();
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.getResponseBody().close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            GeneratedTriple g = generate("start_fmt_mismatch_test.yaml");
+            compileTripleWithOutputDir(g, tmpDir);
+
+            URLClassLoader loader = new URLClassLoader(new URL[]{tmpDir.toUri().toURL()}, getClass().getClassLoader());
+            Class<?> taskClass = loader.loadClass(PKG + ".StartFmtMismatchTestSourceTask");
+            SourceTaskContext ctx = Mockito.mock(SourceTaskContext.class);
+            OffsetStorageReader reader = Mockito.mock(OffsetStorageReader.class);
+            Mockito.when(ctx.offsetStorageReader()).thenReturn(reader);
+            Mockito.when(reader.offset(Mockito.any())).thenReturn(null);
+            Object task = taskClass.getDeclaredConstructor().newInstance();
+            taskClass.getMethod("initialize", SourceTaskContext.class).invoke(task, ctx);
+            taskClass.getMethod("start", Map.class).invoke(task,
+                Map.of("server_url", "http://localhost:" + port,
+                       "start_date", "2020-01-01"));
+
+            // Must not throw DateTimeParseException; must produce records.
+            List<?> records = pollStream(task, "pollItems");
+            assertFalse(records.isEmpty(), "Must produce records when start_datetime format differs from cursor format");
+            // The start query param must be in cursor format (%Y-%m-%dT%H:%M:%S), not date-only
+            assertNotNull(capturedStart.get(), "start query param must be sent");
+            assertEquals("2020-01-01T00:00:00", capturedStart.get(),
+                "Date-only start_date must be converted to cursor datetime format before injection");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // HELPERS
     // ══════════════════════════════════════════════════════════════════════════
 

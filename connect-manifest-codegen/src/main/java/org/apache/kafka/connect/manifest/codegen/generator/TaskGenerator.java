@@ -1180,7 +1180,19 @@ public class TaskGenerator {
         b.nextControlFlow("else");
         IncrementalSyncSpec.DatetimeSpec startDt = sync.getStartDatetime();
         if (startDt != null && startDt.getDatetime() != null) {
-            b.addStatement("$L = $L", cursorVar, interpolateTemplate(startDt.getDatetime()));
+            String startFmt = startDt.getDatetimeFormat();
+            String cursorFmt = sync.getDatetimeFormat();
+            if (startFmt != null && !startFmt.equals(cursorFmt)) {
+                // start_datetime uses a different format than the cursor (e.g. date-only vs datetime).
+                // Parse with the start_datetime format, then reformat to the cursor format so all
+                // downstream DatetimeWindowHelper calls use a consistent format string.
+                b.addStatement(
+                    "$L = $T.formatDate($T.parseDate($L, $S), $S)",
+                    cursorVar, DATETIME_WINDOW_HELPER, DATETIME_WINDOW_HELPER,
+                    interpolateTemplate(startDt.getDatetime()), startFmt, cursorFmt);
+            } else {
+                b.addStatement("$L = $L", cursorVar, interpolateTemplate(startDt.getDatetime()));
+            }
         } else {
             b.addStatement("$L = $S", cursorVar, "0");
         }

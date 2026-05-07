@@ -95,9 +95,9 @@ public final class DatetimeWindowHelper {
         return formatDate(advanced, pythonFmt);
     }
 
-    // ── package-private helpers ────────────────────────────────────────────────
+    // ── public helpers (called by generated connector tasks) ──────────────────
 
-    static ZonedDateTime parseDate(String value, String pythonFmt) {
+    public static ZonedDateTime parseDate(String value, String pythonFmt) {
         if (pythonFmt != null && pythonFmt.equals("%s")) {
             try {
                 return Instant.ofEpochSecond(Long.parseLong(value.trim())).atZone(ZoneOffset.UTC);
@@ -119,7 +119,7 @@ public final class DatetimeWindowHelper {
         }
     }
 
-    static String formatDate(ZonedDateTime dt, String pythonFmt) {
+    public static String formatDate(ZonedDateTime dt, String pythonFmt) {
         if (pythonFmt != null && pythonFmt.equals("%s")) {
             return String.valueOf(dt.toEpochSecond());
         }
@@ -132,7 +132,7 @@ public final class DatetimeWindowHelper {
      * Combined forms (e.g. {@code P1DT6H}) are parsed as {@link Duration} by converting
      * days to hours.
      */
-    static TemporalAmount parseDuration(String iso8601) {
+    public static TemporalAmount parseDuration(String iso8601) {
         if (iso8601 == null || iso8601.isEmpty()) {
             throw new IllegalArgumentException("Duration string must not be empty");
         }

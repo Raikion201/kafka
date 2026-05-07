@@ -1,0 +1,58 @@
+version: "0.79.1"
+type: DeclarativeSource
+
+check:
+  type: CheckStream
+  stream_names:
+    - items
+
+streams:
+  - type: DeclarativeStream
+    name: items
+    primary_key:
+      - id
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: "{{ config['server_url'] }}"
+        path: /api/items
+        http_method: GET
+        authenticator:
+          type: NoAuth
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - data
+    incremental_sync:
+      type: DatetimeBasedCursor
+      cursor_field: updated_at
+      cursor_datetime_formats:
+        - "%Y-%m-%dT%H:%M:%S"
+      datetime_format: "%Y-%m-%dT%H:%M:%S"
+      start_datetime:
+        type: MinMaxDatetime
+        datetime: "{{ config['start_date'] }}"
+        datetime_format: "%Y-%m-%d"
+      start_time_option:
+        type: RequestOption
+        field_name: start
+        inject_into: request_parameter
+      step: P1D
+      cursor_granularity: PT1S
+
+spec:
+  type: Spec
+  connection_specification:
+    type: object
+    required:
+      - server_url
+      - start_date
+    properties:
+      server_url:
+        type: string
+      start_date:
+        type: string
+        format: date
