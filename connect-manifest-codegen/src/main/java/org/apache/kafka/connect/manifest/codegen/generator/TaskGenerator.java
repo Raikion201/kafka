@@ -2696,14 +2696,21 @@ public class TaskGenerator {
         ClassName linkedHashMap = ClassName.get("java.util", "LinkedHashMap");
         ParameterizedTypeName mapStringObject = ParameterizedTypeName.get(
             mapClass, ClassName.get(String.class), ClassName.get(Object.class));
+        ClassName jsonConfigParser = ClassName.get(
+            "org.apache.kafka.connect.manifest.codegen.runtime", "JsonConfigParser");
         return MethodSpec.methodBuilder("jinjaCtx")
             .addModifiers(Modifier.PRIVATE)
             .returns(mapStringObject)
             .addStatement("$T ctx = new $T<>()", mapStringObject, linkedHashMap)
             .beginControlFlow("if (configValues != null)")
-            .addStatement("ctx.put($S, configValues)", "config")
+            .addStatement("ctx.put($S, $T.parseObjectValues(configValues))", "config", jsonConfigParser)
             .nextControlFlow("else if (config != null)")
-            .addStatement("ctx.put($S, config.originalsStrings())", "config")
+            .addStatement("@$T($S) $T<$T, $T> _rawStrings = ($T<$T, $T>) ($T<?, ?>) config.originalsStrings()",
+                ClassName.get("java.lang", "SuppressWarnings"), "unchecked",
+                mapClass, ClassName.get(String.class), ClassName.get(Object.class),
+                mapClass, ClassName.get(String.class), ClassName.get(Object.class),
+                mapClass)
+            .addStatement("ctx.put($S, $T.parseObjectValues(_rawStrings))", "config", jsonConfigParser)
             .endControlFlow()
             .addStatement("return ctx")
             .build();

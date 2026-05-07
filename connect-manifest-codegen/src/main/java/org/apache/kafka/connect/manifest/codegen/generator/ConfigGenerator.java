@@ -211,6 +211,11 @@ public class ConfigGenerator {
         }
 
         boolean hasDefault() {
+            // Object/array defaults are schema definitions, not concrete values;
+            // exclude them so null is used in the ConfigDef and callers supply a proper JSON string.
+            if (defaultValue instanceof Map || defaultValue instanceof java.util.Collection) {
+                return false;
+            }
             return defaultValue != null;
         }
 
