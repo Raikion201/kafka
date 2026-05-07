@@ -474,6 +474,10 @@ public class AuthenticatorSpec {
         @JsonProperty("url_base")
         private String urlBase;
 
+        /** Alternate full-URL field (some manifests use "url" instead of "url_base" + "path"). */
+        @JsonProperty("url")
+        private String url;
+
         @JsonProperty("path")
         private String path;
 
@@ -487,15 +491,31 @@ public class AuthenticatorSpec {
         private Map<String, String> requestBodyJson;
 
         public String getUrlBase() {
-            return urlBase;
+            if (urlBase != null) {
+                return urlBase;
+            }
+            return url != null ? url : "";
         }
 
         public void setUrlBase(String urlBase) {
             this.urlBase = urlBase;
         }
 
+        public String getUrl() {
+            return url;
+        }
+
+        public void setUrl(String url) {
+            this.url = url;
+        }
+
+        /** True when a full URL was provided via "url" field (path should be treated as empty). */
+        public boolean hasFullUrl() {
+            return url != null && urlBase == null;
+        }
+
         public String getPath() {
-            return path == null ? "" : path;
+            return (path == null || hasFullUrl()) ? "" : path;
         }
 
         public void setPath(String path) {

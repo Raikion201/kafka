@@ -97,9 +97,13 @@ public final class DatetimeWindowHelper {
 
     // ── public helpers (called by generated connector tasks) ──────────────────
 
+    /** Epoch used when start_datetime config key is absent/empty (mirrors Airbyte CDK default). */
+    private static final ZonedDateTime EPOCH_FALLBACK =
+        ZonedDateTime.of(2000, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+
     public static ZonedDateTime parseDate(String value, String pythonFmt) {
         if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException("parseDate: value must not be empty (format=" + pythonFmt + ")");
+            return EPOCH_FALLBACK;
         }
         if ("%s".equals(pythonFmt)) {
             return parseEpochSeconds(value.trim());

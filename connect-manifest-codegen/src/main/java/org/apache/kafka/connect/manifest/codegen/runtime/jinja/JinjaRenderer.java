@@ -25,6 +25,7 @@ import com.hubspot.jinjava.interpret.TemplateError;
 
 import java.util.Collections;
 import java.util.Map;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -89,6 +90,72 @@ public final class JinjaRenderer {
         return p.matcher(template).replaceAll("now_utc().minus($1)");
     }
 
+    /**
+     * Rewrites Python-style {@code dict.get('key', default)} to valid Jinja2.
+     *
+     * <p>Python dicts have a 2-arg {@code get(key, default)} method. jinjava
+     * resolves it against Java's {@link java.util.Map#get(Object)} which is
+     * single-argument, causing "Cannot find method get with 2 parameters".
+     * Rewrite to {@code (dict['key'] if 'key' in dict else default)}.</p>
+     */
+    static String rewriteDictGet(String template) {
+        // Match: ident.get('key', anything-up-to-closing-paren)
+        // We limit default capture to avoid mismatched parens — handle common literals.
+        Pattern p = Pattern.compile(
+            "(\\w+)\\.get\\((['\"][^'\"]+['\"])\\s*,\\s*((?:['\"][^'\"]*['\"]|\\{\\}|\\[\\]|-?[\\d.]+|[^)]+?))\\)");
+        Matcher m = p.matcher(template);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String obj = m.group(1);
+            String key = m.group(2);
+            String dflt = m.group(3).trim();
+            m.appendReplacement(sb, Matcher.quoteReplacement(
+                "((" + obj + "[" + key + "]) if " + key + " in " + obj + " else (" + dflt + "))"));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * Rewrites Python-style chained comparisons {@code a <= b <= c} to
+     * valid Jinja2 {@code a <= b and b <= c}.
+     *
+     * <p>Python supports chained comparisons; Jinja2 / jinjava do not —
+     * the parser raises a syntax error after the second operator.</p>
+     */
+    static String rewriteChainedComparisons(String template) {
+        // Match: number <=|>=|<|> expr <=|>=|<|> number (within {% %} or {{ }})
+        Pattern p = Pattern.compile(
+            "(-?\\d[\\d.]*(?:[eE][+-]?\\d+)?)" // left numeric literal
+            + "\\s*(<=|>=|<|>)\\s*"              // first operator
+            + "([^<>={}%]+?)"                    // middle expression (no braces/operators)
+            + "\\s*(<=|>=|<|>)\\s*"              // second operator
+            + "(-?\\d[\\d.]*(?:[eE][+-]?\\d+)?)"); // right numeric literal
+        Matcher m = p.matcher(template);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String left  = m.group(1);
+            String op1   = m.group(2);
+            String mid   = m.group(3).trim();
+            String op2   = m.group(4);
+            String right = m.group(5);
+            m.appendReplacement(sb, Matcher.quoteReplacement(
+                left + " " + op1 + " " + mid + " and " + mid + " " + op2 + " " + right));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * Rewrites {@code day_delta(n, format='...')} keyword arg to positional
+     * {@code day_delta(n, '...')} since jinjava does not support named args
+     * for ELFunctionDefinition varargs methods.
+     */
+    static String rewriteDayDeltaKeyword(String template) {
+        Pattern p = Pattern.compile("day_delta\\(([^,)]+),\\s*format=(['\"][^'\"]+['\"])\\)");
+        return p.matcher(template).replaceAll("day_delta($1, $2)");
+    }
+
     private JinjaRenderer() {
     }
 
@@ -103,12 +170,7 @@ public final class JinjaRenderer {
         if (!hasJinjaSyntax(template)) {
             return template;
         }
-        if (template.contains(".join(")) {
-            template = rewritePythonJoin(template);
-        }
-        if (template.contains("now_utc() -") || template.contains("now_utc()-")) {
-            template = rewriteNowUtcArithmetic(template);
-        }
+        template = preprocess(template);
         RenderResult result = JINJAVA.renderForResult(template, asObjectMap(context));
         if (!result.getErrors().isEmpty()) {
             TemplateError first = result.getErrors().get(0);
@@ -130,13 +192,27 @@ public final class JinjaRenderer {
         if (!hasJinjaSyntax(template)) {
             return template;
         }
+        template = preprocess(template);
+        return JINJAVA.renderForResult(template, asObjectMap(context)).getOutput();
+    }
+
+    static String preprocess(String template) {
         if (template.contains(".join(")) {
             template = rewritePythonJoin(template);
         }
         if (template.contains("now_utc() -") || template.contains("now_utc()-")) {
             template = rewriteNowUtcArithmetic(template);
         }
-        return JINJAVA.renderForResult(template, asObjectMap(context)).getOutput();
+        if (template.contains(".get(")) {
+            template = rewriteDictGet(template);
+        }
+        if (template.contains("<=") || template.contains(">=")) {
+            template = rewriteChainedComparisons(template);
+        }
+        if (template.contains("day_delta(") && template.contains("format=")) {
+            template = rewriteDayDeltaKeyword(template);
+        }
+        return template;
     }
 
     /**
