@@ -54,6 +54,8 @@ public final class AirbyteJinjaFilters {
         jinjava.getGlobalContext().registerFilter(new Base64DecodeFilter());
         jinjava.getGlobalContext().registerFilter(new Base64BinasciiDecodeFilter());
         jinjava.getGlobalContext().registerFilter(new StringFilter());
+        jinjava.getGlobalContext().registerFilter(new FloatFilter());
+        jinjava.getGlobalContext().registerFilter(new IntFilter());
     }
 
     private static String asString(Object value) {
@@ -223,6 +225,63 @@ public final class AirbyteJinjaFilters {
         @Override
         public Object filter(Object var, JinjavaInterpreter interpreter, String... args) {
             return asString(var);
+        }
+    }
+
+    /**
+     * {@code value | float}. Converts the value to a double.
+     * Mirrors Python's {@code float()} built-in filter used in Airbyte manifests
+     * for patterns like {@code config['lat']|float <= 90.0}.
+     */
+    public static final class FloatFilter implements Filter {
+        @Override
+        public String getName() {
+            return "float";
+        }
+
+        @Override
+        public Object filter(Object var, JinjavaInterpreter interpreter, String... args) {
+            if (var == null) {
+                return 0.0;
+            }
+            if (var instanceof Number n) {
+                return n.doubleValue();
+            }
+            try {
+                return Double.parseDouble(asString(var));
+            } catch (NumberFormatException e) {
+                return 0.0;
+            }
+        }
+    }
+
+    /**
+     * {@code value | int}. Converts the value to a long integer.
+     * Mirrors Python's {@code int()} built-in filter used in Airbyte manifests.
+     */
+    public static final class IntFilter implements Filter {
+        @Override
+        public String getName() {
+            return "int";
+        }
+
+        @Override
+        public Object filter(Object var, JinjavaInterpreter interpreter, String... args) {
+            if (var == null) {
+                return 0L;
+            }
+            if (var instanceof Number n) {
+                return n.longValue();
+            }
+            try {
+                return Long.parseLong(asString(var).trim());
+            } catch (NumberFormatException e) {
+                try {
+                    return (long) Double.parseDouble(asString(var).trim());
+                } catch (NumberFormatException ex) {
+                    return 0L;
+                }
+            }
         }
     }
 }

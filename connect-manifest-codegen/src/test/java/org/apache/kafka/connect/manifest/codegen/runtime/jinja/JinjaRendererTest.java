@@ -340,6 +340,40 @@ class JinjaRendererTest {
         assertEquals("2024-01-02T03:04:05", out);
     }
 
+    // ── |float and |int filters ───────────────────────────────────────────────
+
+    @Test
+    void floatFilter_fromString() {
+        Map<String, Object> c = ctx();
+        c.put("lat", "37.7749");
+        String out = JinjaRenderer.render("{{ lat|float }}", c);
+        assertEquals("37.7749", out);
+    }
+
+    @Test
+    void floatFilter_comparison() {
+        Map<String, Object> c = ctx();
+        c.put("lat", "45.0");
+        String out = JinjaRenderer.render("{% if lat|float <= 90.0 %}yes{% else %}no{% endif %}", c);
+        assertEquals("yes", out);
+    }
+
+    @Test
+    void intFilter_fromString() {
+        Map<String, Object> c = ctx();
+        c.put("page", "42");
+        String out = JinjaRenderer.render("{{ page|int }}", c);
+        assertEquals("42", out);
+    }
+
+    @Test
+    void intFilter_fromFloat() {
+        Map<String, Object> c = ctx();
+        c.put("val", 3.9);
+        String out = JinjaRenderer.render("{{ val|int }}", c);
+        assertEquals("3", out);
+    }
+
     // ── Python-style str.join() pre-processor ─────────────────────────────────
 
     @Test
