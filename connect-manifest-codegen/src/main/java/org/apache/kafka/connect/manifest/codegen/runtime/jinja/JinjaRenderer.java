@@ -294,7 +294,7 @@ public final class JinjaRenderer {
                 i = scanBackPair(s, i, ']', '[');
             } else if (c == ')') {
                 i = scanBackPair(s, i, ')', '(');
-            } else if (Character.isLetterOrDigit(c) || c == '_' || c == '.' || c == '|' || c == ' ') {
+            } else if (Character.isLetterOrDigit(c) || c == '_' || c == '.' || c == '|') {
                 i--;
             } else {
                 break;

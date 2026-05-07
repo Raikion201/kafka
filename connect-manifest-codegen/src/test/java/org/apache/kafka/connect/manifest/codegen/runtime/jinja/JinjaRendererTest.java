@@ -578,6 +578,18 @@ class JinjaRendererTest {
     }
 
     @Test
+    void tiktokStyleDictGetAfterIfKeyword() {
+        // Regression: scanLhsExprEnd must NOT scan through spaces, so "sandbox-ads" if config.get(...)
+        // rewrites config.get() correctly — not (" if config).get()"
+        Map<String, Object> c = ctx();
+        c.put("config", new HashMap<>());  // no 'credentials' key → sandbox-api resolves to "business-api"
+        String out = JinjaRenderer.render(
+            "{{ 'sandbox-ads' if config.get('credentials', {}).get('auth_type', '') == 'sandbox_access_token' else 'business-api' }}",
+            c);
+        assertEquals("business-api", out);
+    }
+
+    @Test
     void dictGetSimpleIdentifier() {
         // Original single-ident case still works after rewrite
         Map<String, Object> c = ctx();
