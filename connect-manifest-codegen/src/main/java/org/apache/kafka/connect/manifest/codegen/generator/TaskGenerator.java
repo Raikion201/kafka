@@ -2104,8 +2104,7 @@ public class TaskGenerator {
         }
 
         // Resolve the login URL — may be a mixed template like "{{ config["host"] }}/api/oauth/v1"
-        String urlBase = login.getUrlBase() == null ? "" : login.getUrlBase();
-        String loginUrlExpr = interpolateTemplate(urlBase + "/" + login.getPath());
+        String loginUrlExpr = interpolateTemplate(login.getUrlBase() + "/" + login.getPath());
 
         // Build JSON body string from requestBodyJson
         CodeBlock.Builder body = CodeBlock.builder();
