@@ -24,6 +24,7 @@ import org.apache.kafka.connect.manifest.codegen.model.KeyTransformationSpec;
 import org.apache.kafka.connect.manifest.codegen.model.TransformationSpec;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomComponentRegistry;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomTransformation;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.generic.GenericCustomComponentsRegistrar;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -42,6 +43,12 @@ public final class TransformationPipelineFactory {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final TypeReference<List<TransformationSpec>> SPEC_LIST_TYPE =
         new TypeReference<List<TransformationSpec>>() { };
+
+    static {
+        // Eagerly register all source_declarative_manifest.components.* transforms so that
+        // CustomComponentRegistry.create() succeeds for every connector that uses them.
+        GenericCustomComponentsRegistrar.register();
+    }
 
     private TransformationPipelineFactory() {
     }
