@@ -2133,7 +2133,7 @@ public class TaskGenerator {
         reqArgs.add(HTTP_REQUEST);
         reqArgs.add(URI_CLASS);
 
-        // Add Basic auth header if the inner authenticator is BasicHttp
+        // Add auth headers for the inner login_requester authenticator
         AuthenticatorSpec innerAuth = login.getAuthenticator();
         if (innerAuth != null && innerAuth.isBasicHttp()) {
             String userExpr = interpolateTemplate(innerAuth.getUsername());
@@ -2144,6 +2144,20 @@ public class TaskGenerator {
             reqArgs.add(userExpr);
             reqArgs.add(passExpr);
             reqArgs.add(ClassName.get("java.nio.charset", "StandardCharsets"));
+        } else if (innerAuth != null && innerAuth.isApiKey()) {
+            String tokenExpr = interpolateTemplate(innerAuth.getApiToken() != null
+                ? innerAuth.getApiToken() : "");
+            AuthenticatorSpec.InjectIntoSpec inject = innerAuth.getInjectInto();
+            String headerName = (inject != null && inject.getFieldName() != null)
+                ? inject.getFieldName() : (innerAuth.getHeader() != null ? innerAuth.getHeader() : "x-api-key");
+            reqBuilder.append("        .header($S, $L)\n");
+            reqArgs.add(headerName);
+            reqArgs.add(tokenExpr);
+        } else if (innerAuth != null && innerAuth.isBearer()) {
+            String tokenExpr = interpolateTemplate(innerAuth.getApiToken() != null
+                ? innerAuth.getApiToken() : "");
+            reqBuilder.append("        .header(\"Authorization\", \"Bearer \" + $L)\n");
+            reqArgs.add(tokenExpr);
         }
         if (loginIsGet) {
             reqBuilder.append("        .GET()\n        .build()");
