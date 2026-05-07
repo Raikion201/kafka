@@ -144,7 +144,10 @@ public class ManifestCodegenCli {
         }
         Path serviceFile = outputDir.resolve(CONNECTOR_SERVICE_FILE);
         try {
-            Files.createDirectories(serviceFile.getParent());
+            Path serviceDir = serviceFile.toAbsolutePath().getParent();
+            if (serviceDir != null) {
+                Files.createDirectories(serviceDir);
+            }
             Files.writeString(serviceFile,
                 String.join(System.lineSeparator(), connectorFqcns) + System.lineSeparator(),
                 StandardCharsets.UTF_8);

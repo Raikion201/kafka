@@ -188,4 +188,15 @@ class DatetimeWindowHelperTest {
         String formatted = DatetimeWindowHelper.formatDate(parsed, EPOCH_FMT);
         assertEquals(input, formatted);
     }
+
+    @Test
+    void parseDate_epochFormat_dateStringFallback() {
+        // Manifests like delighted/intercom use cursor_datetime_formats: ["%s"] but the
+        // initial config value is a human-readable date.  parseDate must not throw.
+        ZonedDateTime result = DatetimeWindowHelper.parseDate("2020-01-01", EPOCH_FMT);
+        assertNotNull(result);
+        assertEquals(2020, result.getYear());
+        assertEquals(1, result.getMonthValue());
+        assertEquals(1, result.getDayOfMonth());
+    }
 }

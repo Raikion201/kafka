@@ -99,8 +99,12 @@ public final class DatetimeWindowHelper {
 
     static ZonedDateTime parseDate(String value, String pythonFmt) {
         if (pythonFmt != null && pythonFmt.equals("%s")) {
-            // Epoch seconds
-            return Instant.ofEpochSecond(Long.parseLong(value.trim())).atZone(ZoneOffset.UTC);
+            try {
+                return Instant.ofEpochSecond(Long.parseLong(value.trim())).atZone(ZoneOffset.UTC);
+            } catch (NumberFormatException e) {
+                // Initial config value is a human-readable date string — parse as ISO date
+                return parseIsoFallback(value.trim());
+            }
         }
         DateTimeFormatter fmt = toJavaFormatter(pythonFmt);
         // Try full ZonedDateTime first, then LocalDateTime (assume UTC), then LocalDate (midnight UTC)
@@ -205,6 +209,19 @@ public final class DatetimeWindowHelper {
     }
 
     // ── private ────────────────────────────────────────────────────────────────
+
+    /** Parses a human-readable date/datetime string using common ISO formats. */
+    private static ZonedDateTime parseIsoFallback(String value) {
+        try {
+            return ZonedDateTime.parse(value);
+        } catch (Exception e1) {
+            try {
+                return LocalDateTime.parse(value).atZone(ZoneOffset.UTC);
+            } catch (Exception e2) {
+                return LocalDate.parse(value).atStartOfDay(ZoneOffset.UTC);
+            }
+        }
+    }
 
     /** Handles sub-second durations like {@code PT0.000001S} that {@link Duration#parse} rejects. */
     private static TemporalAmount parseMicroDuration(String iso8601) {
