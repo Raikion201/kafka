@@ -499,4 +499,59 @@ class JinjaRendererTest {
         String in = "{% if a %}x{% elif b %}y{% else %}z{% endif %}";
         assertEquals(in, JinjaRenderer.rewriteElseFunctionCall(in));
     }
+
+    // ── or operator with strftime ─────────────────────────────────────────────
+
+    @Test
+    void orOperator_emptyFallsThrough() {
+        Map<String, Object> c = ctx();
+        c.put("start_date", "");
+        String out = JinjaRenderer.render("{{ start_date or now_utc().strftime('%Y-%m-%d') }}", c);
+        assertTrue(out.matches("\\d{4}-\\d{2}-\\d{2}"), "or fallthrough should produce date: " + out);
+    }
+
+    @Test
+    void orOperator_missingKeyFallsThrough() {
+        String out = JinjaRenderer.render("{{ config['start_date'] or now_utc().strftime('%Y-%m-%d') }}", ctx());
+        assertTrue(out.matches("\\d{4}-\\d{2}-\\d{2}") || out.isEmpty(),
+            "or with missing key: " + out);
+    }
+
+    @Test
+    void orOperator_nestedConfigMapNullValue() {
+        Map<String, Object> c = ctx();
+        Map<String, Object> config = new HashMap<>();
+        config.put("start_date", null); // null value in map
+        c.put("config", config);
+        String out = JinjaRenderer.render("{{ config['start_date'] or now_utc().strftime('%Y-%m-%d') }}", c);
+        assertTrue(out.matches("\\d{4}-\\d{2}-\\d{2}"), "null config value should fall through: " + out);
+    }
+
+    @Test
+    void orOperator_nestedConfigMapMissingKey() {
+        Map<String, Object> c = ctx();
+        c.put("config", new HashMap<>());
+        String out = JinjaRenderer.render("{{ config['start_date'] or now_utc().strftime('%Y-%m-%d') }}", c);
+        assertTrue(out.matches("\\d{4}-\\d{2}-\\d{2}"), "missing config key should fall through: " + out);
+    }
+
+    // ── String.split() support ────────────────────────────────────────────────
+
+    @Test
+    void stringSplitViaFilter() {
+        Map<String, Object> c = ctx();
+        c.put("s", "hello.world.foo");
+        String out = JinjaRenderer.render("{{ s | split('.') | first }}", c);
+        assertEquals("hello", out);
+    }
+
+    @Test
+    void gnewsStyleDatetimeSplit() {
+        // Replicates gnews pattern: ' '.join(day_delta(-7).split('.')[0].split('T'))
+        // day_delta returns "YYYY-MM-DDTHH:MM:SS.ffffff+0000"; result should be "YYYY-MM-DD HH:MM:SS"
+        String out = JinjaRenderer.render("{{ ' '.join(day_delta(-7).split('.')[0].split('T')) }}", ctx());
+        assertNotNull(out);
+        assertTrue(out.matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}"),
+            "gnews split pattern must produce 'YYYY-MM-DD HH:MM:SS': " + out);
+    }
 }

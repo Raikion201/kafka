@@ -68,10 +68,27 @@ public final class JinjaRenderer {
      * Python idiom, so there is no risk of false positives.</p>
      */
     static String rewritePythonJoin(String template) {
-        // Match: single- or double-quoted separator literal followed by .join(expr)
-        // Group 1: quoted separator, Group 2: join argument (up to closing paren, non-nested)
-        Pattern p = Pattern.compile("(['\"][^'\"]*['\"])\\.join\\(([^)]+)\\)");
-        return p.matcher(template).replaceAll("($2)|join($1)");
+        if (!template.contains(".join(")) {
+            return template;
+        }
+        // Match: single- or double-quoted separator literal followed by .join(
+        // then use balanced-paren scanner to find the matching ')' so nested calls
+        // like ' '.join(day_delta(-7).split('.')[0].split('T')) are handled correctly.
+        Pattern p = Pattern.compile("(['\"][^'\"]*['\"])\\.join\\(");
+        Matcher m = p.matcher(template);
+        StringBuilder sb = new StringBuilder();
+        int last = 0;
+        while (m.find(last)) {
+            sb.append(template, last, m.start());
+            String sep = m.group(1);
+            int argsStart = m.end(); // index just past the opening '('
+            int argsEnd = findMatchingClose(template, argsStart); // index just past the matching ')'
+            String joinArg = template.substring(argsStart, argsEnd - 1).trim();
+            sb.append("(").append(joinArg).append(")|join(").append(sep).append(")");
+            last = argsEnd;
+        }
+        sb.append(template, last, template.length());
+        return sb.toString();
     }
 
     /**
@@ -86,6 +103,9 @@ public final class JinjaRenderer {
      * <p>The pattern is safe: {@code now_utc() - duration(X)} has no other meaning in Jinja2.</p>
      */
     static String rewriteNowUtcArithmetic(String template) {
+        if (!template.contains("now_utc()")) {
+            return template;
+        }
         Pattern p = Pattern.compile("now_utc\\(\\)\\s*-\\s*(duration\\([^)]+\\))");
         return p.matcher(template).replaceAll("now_utc().minus($1)");
     }
@@ -106,9 +126,12 @@ public final class JinjaRenderer {
      * and the filter name inserts {@code "_filter"} before the {@code '('}.</p>
      */
     static String rewriteFormatDatetime(String template) {
+        String marker = "format_datetime(";
+        if (!template.contains(marker)) {
+            return template;
+        }
         StringBuilder out = new StringBuilder();
         int i = 0;
-        String marker = "format_datetime(";
         while (i < template.length()) {
             int idx = template.indexOf(marker, i);
             if (idx < 0) {
@@ -170,6 +193,105 @@ public final class JinjaRenderer {
         return parts;
     }
 
+    /**
+     * Rewrites Python-style {@code expr.split('sep')} to jinjava filter form
+     * {@code expr|split('sep')}.
+     *
+     * <p>jinjava dispatches {@code str.split("sep")} as a Java method call
+     * {@code String.split(String)} which treats the separator as a regex, causing
+     * incorrect splits for characters like {@code '.'} that are regex metacharacters.
+     * jinjava's built-in {@code split} filter does literal splitting instead.</p>
+     *
+     * <p>Processes left-to-right: for each {@code .split('sep')} occurrence, scans
+     * backwards in the already-built output to identify the full LHS expression
+     * (balanced-paren/bracket-aware, pipe-aware), then replaces with
+     * {@code (lhs)|split('sep')} so the result is a jinjava filter chain.</p>
+     */
+    static String rewriteStrSplit(String template) {
+        String marker = ".split(";
+        if (!template.contains(marker)) {
+            return template;
+        }
+        StringBuilder out = new StringBuilder();
+        int i = 0;
+        while (i < template.length()) {
+            int idx = template.indexOf(marker, i);
+            if (idx < 0) {
+                out.append(template, i, template.length());
+                break;
+            }
+            int qPos = idx + marker.length();
+            if (qPos >= template.length()) {
+                out.append(template, i, template.length());
+                break;
+            }
+            char q = template.charAt(qPos);
+            if (q != '\'' && q != '"') {
+                // Not a quoted string separator — pass through
+                out.append(template, i, idx + 1);
+                i = idx + 1;
+                continue;
+            }
+            int closeQ = template.indexOf(q, qPos + 1);
+            if (closeQ < 0 || closeQ + 1 >= template.length() || template.charAt(closeQ + 1) != ')') {
+                out.append(template, i, idx + 1);
+                i = idx + 1;
+                continue;
+            }
+            // Append template up to (not including) the '.' of '.split('
+            out.append(template, i, idx);
+            // Scan backward in 'out' to find the start of the LHS expression
+            int lhsEnd = out.length();
+            int lhsStart = scanLhsExprEnd(out, lhsEnd);
+            String lhs = out.substring(lhsStart, lhsEnd);
+            String sep = template.substring(qPos, closeQ + 1); // includes quotes
+            out.setLength(lhsStart);
+            // jinjava cannot handle (expr|filter)[0] inside parens — convert to |first filter.
+            if (lhs.endsWith("[0]")) {
+                lhs = lhs.substring(0, lhs.length() - 3) + "|first";
+            }
+            out.append(lhs).append("|split(").append(sep).append(")");
+            i = closeQ + 2; // past the closing ')'
+        }
+        return out.toString();
+    }
+
+    /**
+     * Scans backward from {@code end} in {@code s} to find the start of the
+     * expression that ends at {@code end}. Handles balanced {@code ()}, {@code []},
+     * identifier chars, periods, and pipe-filter chains. Stops at unmatched
+     * {@code (} or any other non-expression delimiter.
+     */
+    private static int scanLhsExprEnd(CharSequence s, int end) {
+        int i = end - 1;
+        while (i >= 0) {
+            char c = s.charAt(i);
+            if (c == ']') {
+                i = scanBackPair(s, i, ']', '[');
+            } else if (c == ')') {
+                i = scanBackPair(s, i, ')', '(');
+            } else if (Character.isLetterOrDigit(c) || c == '_' || c == '.' || c == '|' || c == ' ') {
+                i--;
+            } else {
+                break;
+            }
+        }
+        return i + 1;
+    }
+
+    /** Scans backward from {@code i} through a matching pair (e.g. {@code ']'} to {@code '['}). */
+    private static int scanBackPair(CharSequence s, int i, char close, char open) {
+        int depth = 1;
+        i--;
+        while (i >= 0 && depth > 0) {
+            char cc = s.charAt(i);
+            if (cc == close) depth++;
+            else if (cc == open) depth--;
+            i--;
+        }
+        return i;
+    }
+
     /** Return the index just past the matching ')' for the '(' that opened at {@code start - 1}. */
     private static int findMatchingClose(String s, int start) {
         int depth = 1;
@@ -207,22 +329,32 @@ public final class JinjaRenderer {
      * resolves it against Java's {@link java.util.Map#get(Object)} which is
      * single-argument, causing "Cannot find method get with 2 parameters".
      * Rewrite to {@code (dict['key'] if 'key' in dict else default)}.</p>
+     *
+     * <p>Uses {@link #findMatchingClose} to correctly handle default values
+     * that contain nested parentheses (e.g. function calls, arithmetic).</p>
      */
     static String rewriteDictGet(String template) {
-        // Match: ident.get('key', anything-up-to-closing-paren)
-        // We limit default capture to avoid mismatched parens — handle common literals.
-        Pattern p = Pattern.compile(
-            "(\\w+)\\.get\\((['\"][^'\"]+['\"])\\s*,\\s*((?:['\"][^'\"]*['\"]|\\{\\}|\\[\\]|-?[\\d.]+|[^)]+?))\\)");
+        if (!template.contains(".get(")) {
+            return template;
+        }
+        // Match: ident.get('key', — then use balanced-paren scanner to find default
+        Pattern p = Pattern.compile("(\\w+)\\.get\\((['\"][^'\"]+['\"])\\s*,\\s*");
         Matcher m = p.matcher(template);
-        StringBuffer sb = new StringBuffer();
-        while (m.find()) {
+        StringBuilder sb = new StringBuilder();
+        int last = 0;
+        while (m.find(last)) {
             String obj = m.group(1);
             String key = m.group(2);
-            String dflt = m.group(3).trim();
-            m.appendReplacement(sb, Matcher.quoteReplacement(
-                "((" + obj + "[" + key + "]) if " + key + " in " + obj + " else (" + dflt + "))"));
+            int dfltStart = m.end();
+            // findMatchingClose starts at depth=1 (we are inside the get( paren already)
+            int getEnd = findMatchingClose(template, dfltStart);
+            String dflt = template.substring(dfltStart, getEnd - 1).trim();
+            sb.append(template, last, m.start());
+            sb.append("((").append(obj).append("[").append(key).append("]) if ")
+              .append(key).append(" in ").append(obj).append(" else (").append(dflt).append("))");
+            last = getEnd;
         }
-        m.appendTail(sb);
+        sb.append(template, last, template.length());
         return sb.toString();
     }
 
@@ -234,6 +366,9 @@ public final class JinjaRenderer {
      * the parser raises a syntax error after the second operator.</p>
      */
     static String rewriteChainedComparisons(String template) {
+        if (!template.contains("<=") && !template.contains(">=")) {
+            return template;
+        }
         // Match: number <=|>=|<|> expr <=|>=|<|> number (within {% %} or {{ }})
         Pattern p = Pattern.compile(
             "(-?\\d[\\d.]*(?:[eE][+-]?\\d+)?)" // left numeric literal
@@ -262,6 +397,9 @@ public final class JinjaRenderer {
      * for ELFunctionDefinition varargs methods.
      */
     static String rewriteDayDeltaKeyword(String template) {
+        if (!template.contains("day_delta(") || !template.contains("format=")) {
+            return template;
+        }
         Pattern p = Pattern.compile("day_delta\\(([^,)]+),\\s*format=(['\"][^'\"]+['\"])\\)");
         return p.matcher(template).replaceAll("day_delta($1, $2)");
     }
@@ -274,6 +412,9 @@ public final class JinjaRenderer {
      * Wrapping the else clause: {@code X if COND else (func(args))} disambiguates.</p>
      */
     static String rewriteElseFunctionCall(String template) {
+        if (!template.contains("else ")) {
+            return template;
+        }
         // Match: "else <word>(" but not inside a nested "else if"
         Pattern p = Pattern.compile("\\belse\\s+((?!if\\b)[a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(");
         Matcher m = p.matcher(template);
@@ -348,28 +489,17 @@ public final class JinjaRenderer {
         return JINJAVA.renderForResult(template, asObjectMap(context)).getOutput();
     }
 
+    // Each rewrite function handles its own "nothing to do" early-return, so
+    // preprocess can call them unconditionally — no NPath explosion from guards.
     static String preprocess(String template) {
-        if (template.contains(".join(")) {
-            template = rewritePythonJoin(template);
-        }
-        if (template.contains("now_utc() -") || template.contains("now_utc()-")) {
-            template = rewriteNowUtcArithmetic(template);
-        }
-        if (template.contains("format_datetime(")) {
-            template = rewriteFormatDatetime(template);
-        }
-        if (template.contains(".get(")) {
-            template = rewriteDictGet(template);
-        }
-        if (template.contains("<=") || template.contains(">=")) {
-            template = rewriteChainedComparisons(template);
-        }
-        if (template.contains("day_delta(") && template.contains("format=")) {
-            template = rewriteDayDeltaKeyword(template);
-        }
-        if (template.contains("else ")) {
-            template = rewriteElseFunctionCall(template);
-        }
+        template = rewritePythonJoin(template);
+        template = rewriteStrSplit(template);
+        template = rewriteNowUtcArithmetic(template);
+        template = rewriteFormatDatetime(template);
+        template = rewriteDictGet(template);
+        template = rewriteChainedComparisons(template);
+        template = rewriteDayDeltaKeyword(template);
+        template = rewriteElseFunctionCall(template);
         return template;
     }
 
