@@ -98,16 +98,36 @@ public final class DatetimeWindowHelper {
     // ── public helpers (called by generated connector tasks) ──────────────────
 
     public static ZonedDateTime parseDate(String value, String pythonFmt) {
-        if (pythonFmt != null && pythonFmt.equals("%s")) {
-            try {
-                return Instant.ofEpochSecond(Long.parseLong(value.trim())).atZone(ZoneOffset.UTC);
-            } catch (NumberFormatException e) {
-                // Initial config value is a human-readable date string — parse as ISO date
-                return parseIsoFallback(value.trim());
-            }
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("parseDate: value must not be empty (format=" + pythonFmt + ")");
         }
-        DateTimeFormatter fmt = toJavaFormatter(pythonFmt);
-        // Try full ZonedDateTime first, then LocalDateTime (assume UTC), then LocalDate (midnight UTC)
+        if ("%s".equals(pythonFmt)) {
+            return parseEpochSeconds(value.trim());
+        }
+        if ("%ms".equals(pythonFmt)) {
+            return parseEpochMillis(value.trim());
+        }
+        return tryParseWithFormatter(value, toJavaFormatter(pythonFmt));
+    }
+
+    private static ZonedDateTime parseEpochSeconds(String value) {
+        try {
+            return Instant.ofEpochSecond(Long.parseLong(value)).atZone(ZoneOffset.UTC);
+        } catch (NumberFormatException e) {
+            return parseIsoFallback(value);
+        }
+    }
+
+    private static ZonedDateTime parseEpochMillis(String value) {
+        try {
+            return Instant.ofEpochMilli(Long.parseLong(value)).atZone(ZoneOffset.UTC);
+        } catch (NumberFormatException e) {
+            return parseIsoFallback(value);
+        }
+    }
+
+    // Tries ZonedDateTime → LocalDateTime → LocalDate → ISO fallback.
+    private static ZonedDateTime tryParseWithFormatter(String value, DateTimeFormatter fmt) {
         try {
             return ZonedDateTime.parse(value, fmt);
         } catch (Exception e1) {
@@ -117,8 +137,6 @@ public final class DatetimeWindowHelper {
                 try {
                     return LocalDate.parse(value, fmt).atStartOfDay(ZoneOffset.UTC);
                 } catch (Exception e3) {
-                    // Value is a date-only string but format expects time (or vice-versa) —
-                    // fall back to ISO parsing so start_datetime configs always work.
                     return parseIsoFallback(value.trim());
                 }
             }
@@ -128,6 +146,9 @@ public final class DatetimeWindowHelper {
     public static String formatDate(ZonedDateTime dt, String pythonFmt) {
         if (pythonFmt != null && pythonFmt.equals("%s")) {
             return String.valueOf(dt.toEpochSecond());
+        }
+        if (pythonFmt != null && pythonFmt.equals("%ms")) {
+            return String.valueOf(dt.toInstant().toEpochMilli());
         }
         return dt.format(toJavaFormatter(pythonFmt));
     }

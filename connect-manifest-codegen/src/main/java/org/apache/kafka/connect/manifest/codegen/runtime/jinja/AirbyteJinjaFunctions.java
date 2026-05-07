@@ -197,7 +197,14 @@ public final class AirbyteJinjaFunctions {
         } else {
             z = parseToZdt(dt.toString());
         }
-        return z.format(toJavaFormat(format.toString()));
+        String fmt = format.toString();
+        if ("%s".equals(fmt)) {
+            return String.valueOf(z.toEpochSecond());
+        }
+        if ("%ms".equals(fmt)) {
+            return String.valueOf(z.toInstant().toEpochMilli());
+        }
+        return z.format(toJavaFormat(fmt));
     }
 
     // ─────────────────────────────────────────────────────────────────────
