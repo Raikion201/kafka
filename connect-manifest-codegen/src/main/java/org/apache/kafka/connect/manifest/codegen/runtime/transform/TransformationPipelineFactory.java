@@ -24,7 +24,10 @@ import org.apache.kafka.connect.manifest.codegen.model.KeyTransformationSpec;
 import org.apache.kafka.connect.manifest.codegen.model.TransformationSpec;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomComponentRegistry;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomTransformation;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.asana.AsanaRegistrar;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.generic.GenericCustomComponentsRegistrar;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.jinaai.JinaAiRegistrar;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.mixpanel.MixpanelRegistrar;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -45,9 +48,12 @@ public final class TransformationPipelineFactory {
         new TypeReference<List<TransformationSpec>>() { };
 
     static {
-        // Eagerly register all source_declarative_manifest.components.* transforms so that
+        // Eagerly register all connector-specific custom components so that
         // CustomComponentRegistry.create() succeeds for every connector that uses them.
         GenericCustomComponentsRegistrar.register();
+        AsanaRegistrar.register();
+        JinaAiRegistrar.register();
+        MixpanelRegistrar.register();
     }
 
     private TransformationPipelineFactory() {

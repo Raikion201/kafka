@@ -98,5 +98,13 @@ public final class GenericCustomComponentsRegistrar {
         CustomComponentRegistry.register(
             SDM + "CampaignsDetailedTransformation",
             CampaignsDetailedTransformation::new);
+
+        CustomComponentRegistry.register(
+            SDM + "ContentOwnerRequester",
+            ContentOwnerRequester::new);
+
+        CustomComponentRegistry.register(
+            SDM + "JobRequester",
+            JobRequester::new);
     }
 }

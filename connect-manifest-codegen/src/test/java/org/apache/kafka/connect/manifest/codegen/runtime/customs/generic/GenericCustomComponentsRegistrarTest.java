@@ -18,7 +18,11 @@ package org.apache.kafka.connect.manifest.codegen.runtime.customs.generic;
 
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomComponentRegistry;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomRecordExtractor;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomRequester;
 import org.apache.kafka.connect.manifest.codegen.runtime.customs.CustomTransformation;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.asana.AsanaRegistrar;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.jinaai.JinaAiRegistrar;
+import org.apache.kafka.connect.manifest.codegen.runtime.customs.mixpanel.MixpanelRegistrar;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,6 +48,9 @@ class GenericCustomComponentsRegistrarTest {
     @BeforeEach
     void register() {
         GenericCustomComponentsRegistrar.register();
+        AsanaRegistrar.register();
+        JinaAiRegistrar.register();
+        MixpanelRegistrar.register();
     }
 
     // ── registry resolution ─────────────────────────────────────────────────
@@ -63,6 +70,22 @@ class GenericCustomComponentsRegistrarTest {
         assertTransform(SDM + "AddFieldsFromEndpointTransformation");
         assertTransform(SDM + "InstagramMediaChildrenTransformation");
         assertTransform(SDM + "CampaignsDetailedTransformation");
+        // B6.T3 — HTTP requester stubs
+        assertRequester(SDM + "ContentOwnerRequester");
+        assertRequester(SDM + "JobRequester");
+        assertRequester("source_asana.components.AsanaHttpRequester");
+        assertRequester("source_jina_ai_reader.components.JinaAiHttpRequester");
+        assertRequester("source_mixpanel.components.MixpanelHttpRequester");
+        assertRequester("source_mixpanel.components.AnnotationsHttpRequester");
+        assertRequester("source_mixpanel.components.FunnelsHttpRequester");
+        assertRequester("source_mixpanel.components.EngagesHttpRequester");
+        assertRequester("source_mixpanel.components.ExportHttpRequester");
+        assertExtractor("source_mixpanel.components.EngagePropertiesDpathExtractor");
+        assertExtractor("source_mixpanel.components.ExportDpathExtractor");
+        assertExtractor("source_mixpanel.components.FunnelsDpathExtractor");
+        assertExtractor("source_mixpanel.components.RevenueDpathExtractor");
+        assertTransform("source_mixpanel.components.EngageTransformation");
+        assertTransform("source_mixpanel.components.PropertiesTransformation");
     }
 
     @Test
@@ -427,6 +450,27 @@ class GenericCustomComponentsRegistrarTest {
         assertTrue(!out.containsKey("properties"));
     }
 
+    // ── HTTP requester stubs return empty iterator ──────────────────────────
+
+    @Test
+    void httpRequesterStubs_sendReturnsEmpty() {
+        String[] classes = {
+            SDM + "ContentOwnerRequester",
+            SDM + "JobRequester",
+            "source_asana.components.AsanaHttpRequester",
+            "source_jina_ai_reader.components.JinaAiHttpRequester",
+            "source_mixpanel.components.MixpanelHttpRequester",
+            "source_mixpanel.components.FunnelsHttpRequester"
+        };
+        for (String cls : classes) {
+            CustomRequester r = CustomComponentRegistry.create(
+                cls, CustomRequester.class, Map.of(), Map.of());
+            assertNotNull(r, cls + " must resolve");
+            assertTrue(!r.send(Map.of(), Map.of()).hasNext(),
+                cls + " send() must return empty iterator");
+        }
+    }
+
     // ── stub transforms pass records through ────────────────────────────────
 
     @Test
@@ -490,6 +534,12 @@ class GenericCustomComponentsRegistrarTest {
         CustomRecordExtractor e = CustomComponentRegistry.create(
             className, CustomRecordExtractor.class, Map.of(), Map.of());
         assertNotNull(e, className + " must resolve to a CustomRecordExtractor");
+    }
+
+    private static void assertRequester(String className) {
+        CustomRequester r = CustomComponentRegistry.create(
+            className, CustomRequester.class, Map.of(), Map.of());
+        assertNotNull(r, className + " must resolve to a CustomRequester");
     }
 
     private static CustomTransformation resolveTransform(String className) {
