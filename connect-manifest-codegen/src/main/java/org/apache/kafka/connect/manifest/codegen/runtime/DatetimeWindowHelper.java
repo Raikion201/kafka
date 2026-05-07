@@ -114,7 +114,13 @@ public final class DatetimeWindowHelper {
             try {
                 return LocalDateTime.parse(value, fmt).atZone(ZoneOffset.UTC);
             } catch (Exception e2) {
-                return LocalDate.parse(value, fmt).atStartOfDay(ZoneOffset.UTC);
+                try {
+                    return LocalDate.parse(value, fmt).atStartOfDay(ZoneOffset.UTC);
+                } catch (Exception e3) {
+                    // Value is a date-only string but format expects time (or vice-versa) —
+                    // fall back to ISO parsing so start_datetime configs always work.
+                    return parseIsoFallback(value.trim());
+                }
             }
         }
     }
