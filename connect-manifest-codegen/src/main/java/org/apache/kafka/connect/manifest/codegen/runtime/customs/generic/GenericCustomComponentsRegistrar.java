@@ -78,5 +78,25 @@ public final class GenericCustomComponentsRegistrar {
         CustomComponentRegistry.register(
             SDM + "ObjectDpathExtractor",
             ObjectDpathExtractor::new);
+
+        CustomComponentRegistry.register(
+            SDM + "NotionPropertiesTransformation",
+            NotionPropertiesTransformation::new);
+
+        CustomComponentRegistry.register(
+            SDM + "BingAdsCampaignsRecordTransformer",
+            BingAdsCampaignsRecordTransformer::new);
+
+        CustomComponentRegistry.register(
+            SDM + "AddFieldsFromEndpointTransformation",
+            AddFieldsFromEndpointTransformation::new);
+
+        CustomComponentRegistry.register(
+            SDM + "InstagramMediaChildrenTransformation",
+            InstagramMediaChildrenTransformation::new);
+
+        CustomComponentRegistry.register(
+            SDM + "CampaignsDetailedTransformation",
+            CampaignsDetailedTransformation::new);
     }
 }

@@ -58,6 +58,11 @@ class GenericCustomComponentsRegistrarTest {
         assertTransform(SDM + "DateTimeTransformer");
         assertTransform(SDM + "ListAddFields");
         assertExtractor(SDM + "ObjectDpathExtractor");
+        assertTransform(SDM + "NotionPropertiesTransformation");
+        assertTransform(SDM + "BingAdsCampaignsRecordTransformer");
+        assertTransform(SDM + "AddFieldsFromEndpointTransformation");
+        assertTransform(SDM + "InstagramMediaChildrenTransformation");
+        assertTransform(SDM + "CampaignsDetailedTransformation");
     }
 
     @Test
@@ -385,6 +390,93 @@ class GenericCustomComponentsRegistrarTest {
         JsonNode response = MAPPER.readTree("{\"data\": {}}");
 
         assertTrue(extractor.extract(response).isEmpty());
+    }
+
+    // ── NotionPropertiesTransformation ──────────────────────────────────────
+
+    @Test
+    void notionPropertiesTransformation_convertsMapToList() {
+        Map<String, Object> record = new LinkedHashMap<>();
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("Title", Map.of("type", "title"));
+        props.put("Status", Map.of("type", "select"));
+        record.put("properties", props);
+        record.put("id", "page-1");
+
+        CustomTransformation t = resolveTransform(SDM + "NotionPropertiesTransformation");
+        Map<String, Object> out = t.transform(record);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> list = (List<Map<String, Object>>) out.get("properties");
+        assertNotNull(list);
+        assertEquals(2, list.size());
+        assertEquals("Title", list.get(0).get("name"));
+        assertEquals("Status", list.get(1).get("name"));
+        assertEquals("page-1", out.get("id"));
+    }
+
+    @Test
+    void notionPropertiesTransformation_noProperties_unchanged() {
+        Map<String, Object> record = new HashMap<>();
+        record.put("id", "page-2");
+
+        CustomTransformation t = resolveTransform(SDM + "NotionPropertiesTransformation");
+        Map<String, Object> out = t.transform(record);
+
+        assertEquals("page-2", out.get("id"));
+        assertTrue(!out.containsKey("properties"));
+    }
+
+    // ── stub transforms pass records through ────────────────────────────────
+
+    @Test
+    void bingAdsCampaignsRecordTransformer_isIdentity() {
+        Map<String, Object> record = new HashMap<>();
+        record.put("id", 42);
+        record.put("name", "Test Campaign");
+
+        CustomTransformation t = resolveTransform(SDM + "BingAdsCampaignsRecordTransformer");
+        Map<String, Object> out = t.transform(record);
+
+        assertNotNull(out);
+        assertEquals(42, out.get("id"));
+        assertEquals("Test Campaign", out.get("name"));
+    }
+
+    @Test
+    void addFieldsFromEndpointTransformation_isIdentity() {
+        Map<String, Object> record = new HashMap<>();
+        record.put("id", "hs-1");
+
+        CustomTransformation t = resolveTransform(SDM + "AddFieldsFromEndpointTransformation");
+        Map<String, Object> out = t.transform(record);
+
+        assertNotNull(out);
+        assertEquals("hs-1", out.get("id"));
+    }
+
+    @Test
+    void instagramMediaChildrenTransformation_isIdentity() {
+        Map<String, Object> record = new HashMap<>();
+        record.put("id", "ig-1");
+
+        CustomTransformation t = resolveTransform(SDM + "InstagramMediaChildrenTransformation");
+        Map<String, Object> out = t.transform(record);
+
+        assertNotNull(out);
+        assertEquals("ig-1", out.get("id"));
+    }
+
+    @Test
+    void campaignsDetailedTransformation_isIdentity() {
+        Map<String, Object> record = new HashMap<>();
+        record.put("id", "klaviyo-campaign-1");
+
+        CustomTransformation t = resolveTransform(SDM + "CampaignsDetailedTransformation");
+        Map<String, Object> out = t.transform(record);
+
+        assertNotNull(out);
+        assertEquals("klaviyo-campaign-1", out.get("id"));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
