@@ -440,7 +440,8 @@ public class TaskGenerator {
             .addModifiers(Modifier.PUBLIC)
             .addParameter(mapStringString, "props")
             .addStatement("this.config = new $T(props)", configClass)
-            .addStatement("this.httpClient = $T.newHttpClient()", HTTP_CLIENT);
+            .addStatement("this.httpClient = $T.newBuilder().followRedirects($T.Redirect.NORMAL).build()",
+                HTTP_CLIENT, HTTP_CLIENT);
 
         // Config-time transforms — applied once before any other initialization reads config.
         m.addStatement("this.configTransformer = $T.fromJson($S)",
