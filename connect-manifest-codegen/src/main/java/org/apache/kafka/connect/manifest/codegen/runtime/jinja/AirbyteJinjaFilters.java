@@ -57,6 +57,7 @@ public final class AirbyteJinjaFilters {
         jinjava.getGlobalContext().registerFilter(new FloatFilter());
         jinjava.getGlobalContext().registerFilter(new IntFilter());
         jinjava.getGlobalContext().registerFilter(new FormatDatetimeFilter());
+        jinjava.getGlobalContext().registerFilter(new PysliceFilter());
     }
 
     private static String asString(Object value) {
@@ -312,6 +313,50 @@ public final class AirbyteJinjaFilters {
             Object fmt = args.length > 0 ? args[0] : null;
             Object inputFmt = args.length > 1 ? args[1] : null;
             return AirbyteJinjaFunctions.formatDatetimeImpl(var, fmt, inputFmt);
+        }
+    }
+
+    /**
+     * {@code value | pyslice(start[, end])} — Python-style string slice.
+     *
+     * <p>Accepts negative indices the same way Python does.
+     * {@code "hello" | pyslice(-2)} → {@code "lo"} (last 2 chars).
+     * {@code "hello" | pyslice(0, -2)} → {@code "hel"} (all but last 2).</p>
+     *
+     * <p>Used by the {@code rewritePythonSlice} preprocessor which converts
+     * {@code expr[start:end]} to {@code expr | pyslice(start, end)}.</p>
+     */
+    public static final class PysliceFilter implements Filter {
+        @Override
+        public String getName() {
+            return "pyslice";
+        }
+
+        @Override
+        public Object filter(Object var, JinjavaInterpreter interpreter, String... args) {
+            String s = asString(var);
+            int len = s.length();
+            int start = args.length > 0 ? parseIndex(args[0]) : 0;
+            Integer end = args.length > 1 ? parseIndex(args[1]) : null;
+            int startIdx = toJavaIdx(start, len);
+            int endIdx = end == null ? len : toJavaIdx(end, len);
+            if (startIdx >= endIdx) {
+                return "";
+            }
+            return s.substring(startIdx, endIdx);
+        }
+
+        private static int parseIndex(String s) {
+            try {
+                return Integer.parseInt(s.trim());
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+
+        private static int toJavaIdx(int i, int len) {
+            int idx = i < 0 ? len + i : i;
+            return Math.max(0, Math.min(idx, len));
         }
     }
 }

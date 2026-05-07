@@ -524,6 +524,33 @@ public final class JinjaRenderer {
         return sb.toString();
     }
 
+    /**
+     * Rewrites Python-style string slices to {@code | pyslice(start[, end])}.
+     *
+     * <p>Handles the two forms used by manifests:
+     * <ul>
+     *   <li>{@code expr[:-N]} → {@code expr|pyslice(0,-N)} (all but last N chars)</li>
+     *   <li>{@code expr[-N:]} → {@code expr|pyslice(-N)} (last N chars)</li>
+     * </ul>
+     * Both forms require the LHS to be a dotted-word expression (e.g.
+     * {@code stream_slice.start_time}); complex subscripted LHS is not handled
+     * here — those are covered by individual connector fixes.</p>
+     */
+    static String rewritePythonSlice(String template) {
+        if (!template.contains("[:-") && !template.contains("[-")) {
+            return template;
+        }
+        // [:-N] form — all but last N chars
+        template = Pattern.compile("([\\w.]+)\\[:-([0-9]+)\\]")
+            .matcher(template)
+            .replaceAll(mr -> mr.group(1) + "|pyslice(0,-" + mr.group(2) + ")");
+        // [-N:] form — last N chars
+        template = Pattern.compile("([\\w.]+)\\[-([0-9]+):\\]")
+            .matcher(template)
+            .replaceAll(mr -> mr.group(1) + "|pyslice(-" + mr.group(2) + ")");
+        return template;
+    }
+
     private JinjaRenderer() {
     }
 
@@ -577,6 +604,7 @@ public final class JinjaRenderer {
     static String preprocess(String template) {
         template = rewritePythonJoin(template);
         template = rewriteStrSplit(template);
+        template = rewritePythonSlice(template);
         template = rewriteNowUtcArithmetic(template);
         template = rewriteFormatDatetime(template);
         template = rewriteDictGet(template);

@@ -589,4 +589,17 @@ class JinjaRendererTest {
         String outMissing = JinjaRenderer.render("{{ params.get('baz', 'missing') }}", c);
         assertEquals("missing", outMissing);
     }
+
+    @Test
+    void quickbooksStylePythonSlice() {
+        // Replicates quickbooks pattern: ts[:-2] + ":" + ts[-2:]
+        // Converts "+0000" (compact offset) to "+00:00" (colon-separated offset)
+        Map<String, Object> c = ctx();
+        Map<String, Object> slice = new HashMap<>();
+        slice.put("start_time", "2024-01-15T10:30:45+0000");
+        c.put("stream_slice", slice);
+        String out = JinjaRenderer.render(
+            "{{ stream_slice.start_time[:-2] + ':' + stream_slice.start_time[-2:] }}", c);
+        assertEquals("2024-01-15T10:30:45+00:00", out);
+    }
 }
