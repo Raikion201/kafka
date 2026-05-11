@@ -280,11 +280,11 @@ register-all:
 # and roll the Connect pod (~4 minutes total).
 deploy:
 	@set -e; \
-	cd "$(CODEGEN_DIR)" && ./gradlew :connect-manifest-codegen:jar -q; \
+	cd "$(CODEGEN_DIR)/.." && ./gradlew :connect-manifest-codegen:jar -q; \
 	pkill -f "http.server $(JAR_PORT)" 2>/dev/null || true; \
 	mkdir -p /tmp/jar-serve-$(JAR_PORT); \
 	cp "$(JAR_FILE)" /tmp/jar-serve-$(JAR_PORT)/; \
-	python3 -m http.server $(JAR_PORT) --directory /tmp/jar-serve-$(JAR_PORT) &>/tmp/jar-server.log &; \
+	python3 -m http.server $(JAR_PORT) --directory /tmp/jar-serve-$(JAR_PORT) >/tmp/jar-server.log 2>&1 & \
 	sleep 1; \
 	SHA=$$(sha512sum "$(JAR_FILE)" | awk '{print $$1}'); \
 	HOST_IP=$$(minikube ssh 'ip route show default' 2>/dev/null | awk '/default/{print $$3}'); \

@@ -106,5 +106,9 @@ public final class GenericCustomComponentsRegistrar {
         CustomComponentRegistry.register(
             SDM + "JobRequester",
             JobRequester::new);
+
+        CustomComponentRegistry.register(
+            SDM + "USCensusRecordExtractor",
+            USCensusRecordExtractor::new);
     }
 }

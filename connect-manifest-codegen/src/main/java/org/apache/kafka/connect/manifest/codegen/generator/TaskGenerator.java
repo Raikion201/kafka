@@ -83,6 +83,8 @@ public class TaskGenerator {
         ClassName.get("com.fasterxml.jackson.databind", "ObjectMapper");
     private static final ClassName HTTP_CLIENT =
         ClassName.get("java.net.http", "HttpClient");
+    private static final ClassName SHARED_HTTP_CLIENT =
+        ClassName.get("org.apache.kafka.connect.manifest.codegen.runtime", "SharedHttpClient");
     private static final ClassName HTTP_REQUEST =
         ClassName.get("java.net.http", "HttpRequest");
     private static final ClassName HTTP_RESPONSE =
@@ -327,7 +329,10 @@ public class TaskGenerator {
                 .build()
         );
         typeBuilder.addField(configClass, "config", Modifier.PRIVATE);
-        typeBuilder.addField(HTTP_CLIENT, "httpClient", Modifier.PRIVATE);
+        typeBuilder.addField(
+            FieldSpec.builder(HTTP_CLIENT, "httpClient", Modifier.PRIVATE, Modifier.STATIC, Modifier.FINAL)
+                .initializer("$T.INSTANCE", SHARED_HTTP_CLIENT)
+                .build());
 
         boolean hasHttpStream = streams.stream().anyMatch(s -> !isCustomDispatch(s));
         if (hasHttpStream) {
@@ -439,9 +444,7 @@ public class TaskGenerator {
             .addAnnotation(Override.class)
             .addModifiers(Modifier.PUBLIC)
             .addParameter(mapStringString, "props")
-            .addStatement("this.config = new $T(props)", configClass)
-            .addStatement("this.httpClient = $T.newBuilder().followRedirects($T.Redirect.NORMAL).build()",
-                HTTP_CLIENT, HTTP_CLIENT);
+            .addStatement("this.config = new $T(props)", configClass);
 
         // Config-time transforms — applied once before any other initialization reads config.
         m.addStatement("this.configTransformer = $T.fromJson($S)",
@@ -2736,13 +2739,6 @@ public class TaskGenerator {
         return MethodSpec.methodBuilder("stop")
             .addAnnotation(Override.class)
             .addModifiers(Modifier.PUBLIC)
-            .beginControlFlow("if (httpClient instanceof $T ac)", AutoCloseable.class)
-            .beginControlFlow("try")
-            .addStatement("ac.close()")
-            .nextControlFlow("catch ($T ignored)", Exception.class)
-            .endControlFlow()
-            .endControlFlow()
-            .addStatement("httpClient = null")
             .build();
     }
 
