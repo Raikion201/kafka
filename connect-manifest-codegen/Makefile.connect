@@ -4,20 +4,15 @@
 ##   make -f Makefile.connect sample      # samples only
 ##   make -f Makefile.connect register    # register credentialed connectors only (safe for 6 GB minikube)
 ##   make -f Makefile.connect register-all # register credentials + all manifest placeholders (needs >6 GB)
-##   make -f Makefile.connect deploy      # build JAR + rebuild local Docker image + restart Connect pod (~30s)
 
-CONNECT      ?= http://localhost:18083
-BROKER       ?= my-cluster-dual-role-0
-NS           ?= kafka
-MSGS         ?= 3
-CREDS_DIR    ?= $(HOME)/.kafka-connect-credentials
-MANIFESTS    ?= $(dir $(abspath $(lastword $(MAKEFILE_LIST))))src/test/resources/manifests
-CONNECT_IMAGE ?= my-connect-local:dev
-KAFKA_ROOT    ?= $(abspath $(dir $(abspath $(lastword $(MAKEFILE_LIST))))/..)
-GRADLE        ?= $(KAFKA_ROOT)/gradlew -p $(KAFKA_ROOT)
-PODSET        ?= my-connect-cluster-connect
+CONNECT   ?= http://localhost:18083
+BROKER    ?= my-cluster-broker-0
+NS        ?= kafka
+MSGS      ?= 3
+CREDS_DIR ?= $(HOME)/.kafka-connect-credentials
+MANIFESTS ?= $(dir $(abspath $(lastword $(MAKEFILE_LIST))))src/test/resources/manifests
 
-.PHONY: all status sample register register-all deploy
+.PHONY: all status sample register register-all
 
 all: status sample
 
@@ -272,19 +267,3 @@ register:
 
 register-all:
 	@python3 -c "$$PY_REGISTER_ALL"
-
-# Fast dev loop: build JAR → rebuild local image in minikube's Docker → restart pod.
-# No Kaniko, no ttl.sh push. Total time: ~30s.
-deploy:
-	@echo "==> Building JAR..."
-	@$(GRADLE) :connect-manifest-codegen:jar -q
-	@echo "==> Building Docker image in minikube..."
-	@eval $$(minikube docker-env) && docker build -q -t $(CONNECT_IMAGE) -f Dockerfile.connect .
-	@echo "==> Patching StrimziPodSet image + pull policy..."
-	@kubectl patch strimzipodset -n $(NS) $(PODSET) --type=json \
-	  -p='[{"op":"replace","path":"/spec/pods/0/spec/containers/0/image","value":"$(CONNECT_IMAGE)"},{"op":"replace","path":"/spec/pods/0/spec/containers/0/imagePullPolicy","value":"Never"}]' 2>/dev/null || true
-	@echo "==> Restarting Connect pod..."
-	@kubectl delete pod -n $(NS) $(PODSET)-0 --grace-period=5 2>/dev/null || true
-	@echo "==> Waiting for pod to be ready..."
-	@until kubectl get pods -n $(NS) $(PODSET)-0 2>/dev/null | grep -q "1/1"; do sleep 2; done
-	@echo "==> Done. Connect pod is running with the new JAR."
