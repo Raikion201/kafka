@@ -4,15 +4,21 @@
 ##   make -f Makefile.connect sample      # samples only
 ##   make -f Makefile.connect register    # register credentialed connectors only (safe for 6 GB minikube)
 ##   make -f Makefile.connect register-all # register credentials + all manifest placeholders (needs >6 GB)
+##   make -f Makefile.connect deploy      # rebuild JAR + trigger Strimzi Kaniko re-build (~4 min)
 
 CONNECT   ?= http://localhost:18083
-BROKER    ?= my-cluster-broker-0
+BROKER    ?= my-cluster-dual-role-0
 NS        ?= kafka
 MSGS      ?= 3
 CREDS_DIR ?= $(HOME)/.kafka-connect-credentials
 MANIFESTS ?= $(dir $(abspath $(lastword $(MAKEFILE_LIST))))src/test/resources/manifests
 
-.PHONY: all status sample register register-all
+CODEGEN_DIR ?= $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+JAR_FILE    ?= $(CODEGEN_DIR)build/libs/connect-manifest-codegen-4.4.0-SNAPSHOT.jar
+JAR_PORT    ?= 8888
+CONNECT_IMG ?= ttl.sh/my-connect-codegen:24h
+
+.PHONY: all status sample register register-all deploy
 
 all: status sample
 
@@ -267,3 +273,33 @@ register:
 
 register-all:
 	@python3 -c "$$PY_REGISTER_ALL"
+
+# ── Strimzi Kaniko re-build ───────────────────────────────────────────────────
+# Builds the JAR, serves it on port JAR_PORT, patches the KafkaConnect CR
+# with the new SHA512, then waits for Strimzi to complete the Kaniko build
+# and roll the Connect pod (~4 minutes total).
+deploy:
+	@set -e; \
+	cd "$(CODEGEN_DIR)" && ./gradlew :connect-manifest-codegen:jar -q; \
+	pkill -f "http.server $(JAR_PORT)" 2>/dev/null || true; \
+	mkdir -p /tmp/jar-serve-$(JAR_PORT); \
+	cp "$(JAR_FILE)" /tmp/jar-serve-$(JAR_PORT)/; \
+	python3 -m http.server $(JAR_PORT) --directory /tmp/jar-serve-$(JAR_PORT) &>/tmp/jar-server.log &; \
+	sleep 1; \
+	SHA=$$(sha512sum "$(JAR_FILE)" | awk '{print $$1}'); \
+	HOST_IP=$$(minikube ssh 'ip route show default' 2>/dev/null | awk '/default/{print $$3}'); \
+	JAR_NAME=$$(basename "$(JAR_FILE)"); \
+	echo "Patching KafkaConnect SHA512: $$SHA"; \
+	kubectl patch kafkaconnect my-connect-cluster -n $(NS) --type=json -p="[ \
+	  {\"op\":\"replace\",\"path\":\"/spec/build/plugins/0/artifacts/0/sha512sum\",\"value\":\"$$SHA\"}, \
+	  {\"op\":\"replace\",\"path\":\"/spec/build/plugins/0/artifacts/0/url\",\"value\":\"http://$$HOST_IP:$(JAR_PORT)/$$JAR_NAME\"} \
+	]"; \
+	echo "Waiting for Strimzi Kaniko build + pod ready (~4 min)..."; \
+	elapsed=0; \
+	until kubectl get kafkaconnect my-connect-cluster -n $(NS) -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q True; do \
+	  sleep 10; elapsed=$$((elapsed+10)); \
+	  if [ $$elapsed -ge 600 ]; then echo "TIMEOUT"; exit 1; fi; \
+	  echo -n "."; \
+	done; \
+	echo " done ($$elapsed s)"; \
+	pkill -f "http.server $(JAR_PORT)" 2>/dev/null || true
