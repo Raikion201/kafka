@@ -1,14 +1,17 @@
 ## Usage:
-##   make -f Makefile.connect          # status + 3 sample messages per connector
-##   make -f Makefile.connect status   # running list only
-##   make -f Makefile.connect sample   # samples only
+##   make -f Makefile.connect             # status + 3 sample messages per connector
+##   make -f Makefile.connect status      # running list only
+##   make -f Makefile.connect sample      # samples only
+##   make -f Makefile.connect register    # register all connectors (credentials + manifests)
 
-CONNECT  ?= http://localhost:18083
-BROKER   ?= my-cluster-broker-0
-NS       ?= kafka
-MSGS     ?= 3
+CONNECT   ?= http://localhost:18083
+BROKER    ?= my-cluster-broker-0
+NS        ?= kafka
+MSGS      ?= 3
+CREDS_DIR ?= $(HOME)/.kafka-connect-credentials
+MANIFESTS ?= $(dir $(abspath $(lastword $(MAKEFILE_LIST))))src/test/resources/manifests
 
-.PHONY: all status sample
+.PHONY: all status sample register
 
 all: status sample
 
@@ -60,8 +63,129 @@ for name in running:
 endef
 export PY_SAMPLE
 
+define PY_REGISTER
+import json, os, re, sys, yaml
+import urllib.request, urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+CONNECT  = "$(CONNECT)"
+CREDS    = "$(CREDS_DIR)"
+MANIFESTS= "$(MANIFESTS)"
+PKG      = "io.kafka.connect.generated"
+
+def post(name, config):
+    body = json.dumps({"name": name, "config": config}).encode()
+    req  = urllib.request.Request(f"{CONNECT}/connectors", data=body,
+                                   headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return name, "created"
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            return name, "exists"
+        return name, f"ERR {e.code} {e.read().decode()[:80]}"
+    except Exception as ex:
+        return name, f"ERR {ex}"
+
+# ── 1. Credential files (real creds, highest priority) ──────────────────────
+cred_names = set()
+tasks = []
+
+if os.path.isdir(CREDS):
+    for fname in sorted(os.listdir(CREDS)):
+        path = os.path.join(CREDS, fname)
+        if fname.endswith(".json"):
+            try:
+                d = json.load(open(path))
+                name   = d.get("name") or fname.replace(".json","")
+                config = d.get("config", d)
+                config.setdefault("tasks.max", "1")
+                config.setdefault("topic.creation.default.replication.factor", "1")
+                config.setdefault("topic.creation.default.partitions", "1")
+                cred_names.add(name)
+                tasks.append((name, config))
+            except Exception as ex:
+                print(f"  SKIP {fname}: {ex}", file=sys.stderr)
+        elif fname.endswith(".properties"):
+            try:
+                props = {}
+                for line in open(path):
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, _, v = line.partition("=")
+                        props[k.strip()] = v.strip()
+                name = props.pop("name", fname.replace(".properties",""))
+                props.pop("topics", None)
+                props.setdefault("tasks.max", "1")
+                props.setdefault("topic.creation.default.replication.factor", "1")
+                props.setdefault("topic.creation.default.partitions", "1")
+                cred_names.add(name)
+                tasks.append((name, props))
+            except Exception as ex:
+                print(f"  SKIP {fname}: {ex}", file=sys.stderr)
+
+# ── 2. Manifest-based placeholders (skip any already covered by creds) ──────
+def to_class(fname):
+    stem = re.sub(r"^source[-_]", "", os.path.splitext(os.path.basename(fname))[0])
+    return "".join(w.capitalize() for w in re.split(r"[-_]", stem))
+
+def to_name(fname):
+    stem = re.sub(r"^source[-_]", "", os.path.splitext(os.path.basename(fname))[0])
+    return stem.replace("_", "-")
+
+def placeholder(spec):
+    props = {}
+    cs = spec.get("spec", {})
+    cs = cs.get("connection_specification", cs.get("connectionSpecification", cs)) if cs else spec.get("connection_specification", {})
+    for key, defn in cs.get("properties", {}).items():
+        t = defn.get("type", "string")
+        if isinstance(t, list): t = t[0]
+        if t == "integer":   props[key] = defn.get("default", 1)
+        elif t == "boolean": props[key] = defn.get("default", False)
+        elif t == "array":   props[key] = json.dumps(defn.get("examples", defn.get("default", [])) or [])
+        elif t == "object":  props[key] = json.dumps(defn.get("default", {}) or {})
+        else:
+            ev = defn.get("enum", [])
+            props[key] = str(ev[0]) if ev else str(defn.get("default", defn.get("examples", [f"placeholder-{key}"])[0] if defn.get("examples") else f"placeholder-{key}"))
+    return props
+
+if os.path.isdir(MANIFESTS):
+    for fname in sorted(os.listdir(MANIFESTS)):
+        if not fname.endswith(".yaml"): continue
+        name = to_name(fname)
+        if name in cred_names: continue
+        try:
+            spec   = yaml.safe_load(open(os.path.join(MANIFESTS, fname)))
+            config = {"connector.class": f"{PKG}.{to_class(fname)}SourceConnector",
+                      "tasks.max": "1",
+                      "topic.creation.default.replication.factor": "1",
+                      "topic.creation.default.partitions": "1"}
+            config.update(placeholder(spec))
+            tasks.append((name, config))
+        except Exception as ex:
+            print(f"  SKIP {fname}: {ex}", file=sys.stderr)
+
+# ── 3. Register in parallel ─────────────────────────────────────────────────
+created = existed = errors = 0
+with ThreadPoolExecutor(max_workers=20) as ex:
+    futs = {ex.submit(post, n, c): n for n, c in tasks}
+    for fut in as_completed(futs):
+        name, result = fut.result()
+        if result == "created":   created += 1
+        elif result == "exists":  existed += 1
+        else:
+            errors += 1
+            print(f"  ERR {name}: {result}", file=sys.stderr)
+
+print(f"Registered: {created}  Already existed: {existed}  Errors: {errors}  Total: {len(tasks)}")
+endef
+export PY_REGISTER
+
 status:
 	@python3 -c "$$PY_STATUS"
 
 sample:
 	@python3 -c "$$PY_SAMPLE"
+
+register:
+	@python3 -c "$$PY_REGISTER"
