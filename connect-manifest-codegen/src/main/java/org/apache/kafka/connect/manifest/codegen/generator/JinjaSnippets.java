@@ -36,9 +36,13 @@ public final class JinjaSnippets {
     public static final Pattern CONFIG_TEMPLATE = Pattern.compile(
         "\\{\\{\\s*config\\[['\"]([^'\"]+)['\"]\\](?:\\s+or\\s+[^}]+)?\\s*\\}\\}");
 
-    /** {@code {{ stream_partition.fieldName }}} references in child-stream URL paths. */
+    /**
+     * {@code {{ stream_partition.fieldName }}} or {@code {{ stream_partition['fieldName'] }}}
+     * references in child-stream URL paths. Both dot and bracket notation are matched.
+     */
     public static final Pattern STREAM_PARTITION_RE =
-        Pattern.compile("\\{\\{\\s*stream_partition\\.(\\w+)\\s*\\}\\}");
+        Pattern.compile(
+            "\\{\\{\\s*stream_partition(?:\\.(\\w+)|\\[\\s*['\"]([^'\"]+)['\"]\\s*\\])\\s*\\}\\}");
 
     /** Any {@code {{ ... }}} block — used to enumerate all Jinja expressions in a string. */
     private static final Pattern ANY_EXPR = Pattern.compile("\\{\\{[^}]*\\}\\}");

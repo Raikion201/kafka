@@ -124,6 +124,15 @@ public class DynamicStreamTaskGeneratorTest {
     }
 
     @Test
+    void allTemplatesRecognized_streamPartitionBracketNotation() {
+        // Gmail and others use bracket notation: stream_partition['label_id']
+        assertTrue(JinjaSnippets.allTemplatesRecognized(
+            java.util.List.of("labels/{{ stream_partition['label_id'] }}")));
+        assertTrue(JinjaSnippets.allTemplatesRecognized(
+            java.util.List.of("messages/{{ stream_partition[\"message_id\"] }}")));
+    }
+
+    @Test
     void allTemplatesRecognized_unknownFilter_returnsFalse() {
         // | upper is not a recognised snippet, so this should return false.
         // (Nested-brace patterns like regex_search cannot be detected by the simple
