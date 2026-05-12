@@ -214,7 +214,7 @@ if os.path.isdir(CREDS):
 def to_class(fname):
     stem = re.sub(r"^source[-_]", "", os.path.splitext(os.path.basename(fname))[0])
     cls = "".join(w.capitalize() for w in re.split(r"[-_]", stem))
-    return "_" + cls if cls and cls[0].isdigit() else cls
+    return "S" + cls if cls and cls[0].isdigit() else cls
 
 def to_name(fname):
     stem = re.sub(r"^source[-_]", "", os.path.splitext(os.path.basename(fname))[0])
