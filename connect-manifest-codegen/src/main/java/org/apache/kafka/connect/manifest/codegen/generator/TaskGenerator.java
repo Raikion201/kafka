@@ -2920,7 +2920,7 @@ public class TaskGenerator {
             }
         }
 
-        body.add(buildListRouterUrlBlock(baseUrl, rawPath, listRouters, paginator, hasPagination));
+        body.add(buildListRouterUrlBlock(baseUrl, rawPath, listRouters, paginator, hasPagination, requester));
 
         body.beginControlFlow("try");
         buildRequestStatement(body, auth, paginator, requester);
@@ -2976,12 +2976,14 @@ public class TaskGenerator {
     /**
      * Builds the URL construction block for a stream with one or more ListPartitionRouters.
      * Substitutes stream_partition.X in the path with the matching loop variable,
-     * and appends query params from request_option.inject_into=request_parameter.
+     * appends query params from request_option.inject_into=request_parameter,
+     * and appends requester request_parameters (e.g. api_token, limit).
      */
     private CodeBlock buildListRouterUrlBlock(
         String baseUrl, String rawPath,
         List<PartitionRouterSpec> listRouters,
-        PaginatorSpec paginator, boolean hasPagination
+        PaginatorSpec paginator, boolean hasPagination,
+        RequesterSpec requester
     ) {
         CodeBlock.Builder b = CodeBlock.builder();
 
@@ -3052,6 +3054,28 @@ public class TaskGenerator {
                 String lv = listLoopVar(lr.getCursorField());
                 b.addStatement("urlBuilder.append($S).append($L)",
                     (firstParam ? "?" : "&") + opt.getFieldName() + "=", lv);
+                firstParam = false;
+            }
+        }
+
+        // Append requester request_parameters (e.g. api_token, limit).
+        // Mirrors buildUrlBlock lines 1306-1325: Jinja templates are interpolated,
+        // literal values are URL-encoded at codegen time.
+        if (requester != null) {
+            for (Map.Entry<String, String> entry : requester.getRequestParameters().entrySet()) {
+                String tmpl = entry.getValue();
+                if (tmpl == null) continue;
+                String sep = firstParam ? "?" : "&";
+                if (tmpl.contains("{{") || tmpl.contains("{%")) {
+                    b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
+                        sep + entry.getKey() + "=",
+                        ClassName.get("java.net", "URLEncoder"),
+                        ClassName.get(String.class), interpolateTemplate(tmpl),
+                        ClassName.get("java.nio.charset", "StandardCharsets"));
+                } else {
+                    String encoded = URLEncoder.encode(tmpl, StandardCharsets.UTF_8);
+                    b.addStatement("urlBuilder.append($S)", sep + entry.getKey() + "=" + encoded);
+                }
                 firstParam = false;
             }
         }

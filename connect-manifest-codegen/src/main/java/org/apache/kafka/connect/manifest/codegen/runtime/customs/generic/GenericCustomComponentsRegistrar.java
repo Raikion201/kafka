@@ -110,5 +110,9 @@ public final class GenericCustomComponentsRegistrar {
         CustomComponentRegistry.register(
             SDM + "USCensusRecordExtractor",
             USCensusRecordExtractor::new);
+
+        CustomComponentRegistry.register(
+            SDM + "NullCheckedDpathExtractor",
+            NullCheckedDpathExtractor::new);
     }
 }
