@@ -121,6 +121,8 @@ if os.path.isdir(CREDS):
                     if line and not line.startswith("#") and "=" in line:
                         k, _, v = line.partition("=")
                         props[k.strip()] = v.strip()
+                if "connector.class" not in props:
+                    continue
                 name = props.pop("name", fname.replace(".properties",""))
                 props.pop("topics", None)
                 props.setdefault("tasks.max", "1")
@@ -197,6 +199,8 @@ if os.path.isdir(CREDS):
                     if line and not line.startswith("#") and "=" in line:
                         k, _, v = line.partition("=")
                         props[k.strip()] = v.strip()
+                if "connector.class" not in props:
+                    continue
                 name = props.pop("name", fname.replace(".properties",""))
                 props.pop("topics", None)
                 props.setdefault("tasks.max", "1")
@@ -209,7 +213,8 @@ if os.path.isdir(CREDS):
 
 def to_class(fname):
     stem = re.sub(r"^source[-_]", "", os.path.splitext(os.path.basename(fname))[0])
-    return "".join(w.capitalize() for w in re.split(r"[-_]", stem))
+    cls = "".join(w.capitalize() for w in re.split(r"[-_]", stem))
+    return "_" + cls if cls and cls[0].isdigit() else cls
 
 def to_name(fname):
     stem = re.sub(r"^source[-_]", "", os.path.splitext(os.path.basename(fname))[0])
@@ -222,7 +227,7 @@ def placeholder(spec):
     for key, defn in cs.get("properties", {}).items():
         t = defn.get("type", "string")
         if isinstance(t, list): t = t[0]
-        if t == "integer":   props[key] = defn.get("default", 1)
+        if t in ("integer", "number"):   props[key] = defn.get("default", 1)
         elif t == "boolean": props[key] = defn.get("default", False)
         elif t == "array":   props[key] = json.dumps(defn.get("examples", defn.get("default", [])) or [])
         elif t == "object":  props[key] = json.dumps(defn.get("default", {}) or {})
