@@ -1507,8 +1507,14 @@ public class TaskGenerator {
             b.addStatement(
                 "urlBuilder.append($S + $L)", "&" + paginator.sizeParamName() + "=", paginator.pageSize());
         } else if (paginator.isOffsetIncrement()) {
+            // Airbyte CDK default: inject_on_first_request=false — skip the offset param on
+            // the first request (offset==0) so APIs that reject explicit ?start=0 still work.
+            b.beginControlFlow("if (offset > 0)");
             b.addStatement("urlBuilder.append($S + offset)", sep + paginator.pageParamName() + "=");
             b.addStatement("urlBuilder.append($S + pageLimit)", "&" + paginator.sizeParamName() + "=");
+            b.nextControlFlow("else");
+            b.addStatement("urlBuilder.append($S + pageLimit)", sep + paginator.sizeParamName() + "=");
+            b.endControlFlow();
         }
     }
 

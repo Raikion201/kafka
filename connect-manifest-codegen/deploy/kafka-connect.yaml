@@ -1,0 +1,32 @@
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: my-connect-cluster
+  annotations:
+    strimzi.io/use-connector-resources: "false"
+spec:
+  version: 4.2.0
+  replicas: 1
+  bootstrapServers: my-cluster-kafka-bootstrap:9093
+  groupId: my-connect-group
+  configStorageTopic: my-connect-configs
+  statusStorageTopic: my-connect-status
+  offsetStorageTopic: my-connect-offsets
+  tls:
+    trustedCertificates:
+      - secretName: my-cluster-cluster-ca-cert
+        pattern: "*.crt"
+  config:
+    config.storage.replication.factor: -1
+    offset.storage.replication.factor: -1
+    status.storage.replication.factor: -1
+  build:
+    output:
+      type: docker
+      image: ttl.sh/my-connect-codegen:24h
+    plugins:
+      - name: connect-manifest-codegen
+        artifacts:
+          - type: jar
+            url: http://192.168.49.1:8888/connect-manifest-codegen-4.4.0-SNAPSHOT.jar
+            sha512sum: 859936943aa7a36266b8340d00444e9ef76c943a68e2b8df1dd62cf54c15146b771a8b9f0e7f92f99c6b91b437f2a3f0227444007a6c1d0d7a5c596380b7b115

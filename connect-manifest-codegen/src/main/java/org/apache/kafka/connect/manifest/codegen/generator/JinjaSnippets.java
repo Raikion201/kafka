@@ -37,12 +37,14 @@ public final class JinjaSnippets {
         "\\{\\{\\s*config\\[['\"]([^'\"]+)['\"]\\](?:\\s+or\\s+[^}]+)?\\s*\\}\\}");
 
     /**
-     * {@code {{ stream_partition.fieldName }}} or {@code {{ stream_partition['fieldName'] }}}
+     * {@code {{ stream_partition.fieldName }}}, {@code {{ stream_partition['fieldName'] }}},
+     * {@code {{ stream_slice.fieldName }}}, or {@code {{ stream_slice['fieldName'] }}}
      * references in child-stream URL paths. Both dot and bracket notation are matched.
+     * {@code stream_slice} is an Airbyte CDK alias for the same partition-key value.
      */
     public static final Pattern STREAM_PARTITION_RE =
         Pattern.compile(
-            "\\{\\{\\s*stream_partition(?:\\.(\\w+)|\\[\\s*['\"]([^'\"]+)['\"]\\s*\\])\\s*\\}\\}");
+            "\\{\\{\\s*(?:stream_partition|stream_slice)(?:\\.(\\w+)|\\[\\s*['\"]([^'\"]+)['\"]\\s*\\])\\s*\\}\\}");
 
     /** Any {@code {{ ... }}} block — used to enumerate all Jinja expressions in a string. */
     private static final Pattern ANY_EXPR = Pattern.compile("\\{\\{[^}]*\\}\\}");
