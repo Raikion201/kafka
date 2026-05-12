@@ -177,6 +177,20 @@ public class TaskGeneratorTest {
         assertTrue(src.contains("secret="), "Must include 'secret=' in query string");
     }
 
+    @Test
+    void apptivo_literalRequestParamsAreEmitted() throws Exception {
+        // apptivo has request_parameters: { a: getAll, accessKey: "{{ config['access_key'] }}" }
+        // The literal "a=getAll" was previously dropped by the codegen — only templated
+        // values made it into the URL. Airbyte's InterpolatedRequestOptionsProvider passes
+        // both literal and templated values through the same pipeline, so both must appear.
+        JavaFile file = generator.generate(load("source-apptivo.yaml"), PKG);
+        String src = file.toString();
+        assertTrue(src.contains("a=getAll"),
+            "Literal request_parameters 'a: getAll' must appear in URL; got: " + src);
+        assertTrue(src.contains("accessKey="),
+            "Templated request_parameters 'accessKey' must appear in URL");
+    }
+
     // ── stream name constant ──────────────────────────────────────────────────
 
     @Test

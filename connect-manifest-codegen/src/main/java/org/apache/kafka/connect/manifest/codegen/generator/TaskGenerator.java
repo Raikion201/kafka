@@ -36,6 +36,8 @@ import com.squareup.javapoet.MethodSpec;
 import com.squareup.javapoet.ParameterizedTypeName;
 import com.squareup.javapoet.TypeSpec;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -1023,24 +1025,26 @@ public class TaskGenerator {
         boolean firstParam = !(baseUrl + pathPrefix).contains("?");
         Pattern listPat = Pattern.compile("config\\['" + listCycleField + "'\\]\\.split");
         for (Map.Entry<String, String> entry : requestParams.entrySet()) {
+            String tmpl = entry.getValue();
+            if (tmpl == null) continue;
             String sep = firstParam ? "?" : "&";
-            if (listPat.matcher(entry.getValue()).find()) {
+            if (listPat.matcher(tmpl).find()) {
                 body.addStatement(
                     "urlBuilder.append($S + $T.encode(_item, $T.UTF_8))",
                     sep + entry.getKey() + "=",
                     ClassName.get("java.net", "URLEncoder"),
                     ClassName.get("java.nio.charset", "StandardCharsets"));
+            } else if (tmpl.contains("{{") || tmpl.contains("{%")) {
+                body.addStatement(
+                    "urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
+                    sep + entry.getKey() + "=",
+                    ClassName.get("java.net", "URLEncoder"),
+                    ClassName.get(String.class), interpolateTemplate(tmpl),
+                    ClassName.get("java.nio.charset", "StandardCharsets"));
             } else {
-                String tmpl = entry.getValue();
-                if (tmpl != null && (tmpl.contains("{{") || tmpl.contains("{%"))) {
-                    body.addStatement(
-                        "urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
-                        sep + entry.getKey() + "=",
-                        ClassName.get("java.net", "URLEncoder"),
-                        ClassName.get(String.class), interpolateTemplate(tmpl),
-                        ClassName.get("java.nio.charset", "StandardCharsets"));
-                }
-                // skip params with empty / unresolvable values
+                // Literal value — URL-encode at codegen time and emit as a constant.
+                String encoded = URLEncoder.encode(tmpl, StandardCharsets.UTF_8);
+                body.addStatement("urlBuilder.append($S)", sep + entry.getKey() + "=" + encoded);
             }
             firstParam = false;
         }
@@ -1302,15 +1306,21 @@ public class TaskGenerator {
         for (Map.Entry<String, String> entry : requestParams.entrySet()) {
             String tmpl = entry.getValue();
             if (tmpl == null) continue;
+            paramKeys.add(entry.getKey());
+            boolean firstOfGroup = paramKeys.size() == 1;
+            String sep = (pathHasQuery || !firstOfGroup) ? "&" : "?";
             if (tmpl.contains("{{") || tmpl.contains("{%")) {
-                paramKeys.add(entry.getKey());
-                boolean firstOfGroup = paramKeys.size() == 1;
-                String sep = (pathHasQuery || !firstOfGroup) ? "&" : "?";
                 b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
                     sep + entry.getKey() + "=",
                     ClassName.get("java.net", "URLEncoder"),
                     ClassName.get(String.class), interpolateTemplate(tmpl),
                     ClassName.get("java.nio.charset", "StandardCharsets"));
+            } else {
+                // Literal value — URL-encode at codegen time, emit as a string constant.
+                // Mirrors Airbyte's InterpolatedRequestOptionsProvider, which passes literal
+                // and templated values through the same interpolation pipeline.
+                String encoded = URLEncoder.encode(tmpl, StandardCharsets.UTF_8);
+                b.addStatement("urlBuilder.append($S)", sep + entry.getKey() + "=" + encoded);
             }
         }
 
