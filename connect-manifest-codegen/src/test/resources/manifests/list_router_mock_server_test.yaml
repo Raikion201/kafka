@@ -1,0 +1,56 @@
+version: "3.10.0"
+type: DeclarativeSource
+
+streams:
+  - type: DeclarativeStream
+    name: items
+    primary_key:
+      - id
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: "{{ config['server_url'] }}"
+        path: /items
+        http_method: GET
+        authenticator:
+          type: ApiKeyAuthenticator
+          api_token: "{{ config['api_key'] }}"
+          inject_into:
+            type: RequestOption
+            field_name: X-API-Key
+            inject_into: header
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - results
+      partition_router:
+        type: ListPartitionRouter
+        values:
+          - electronics
+          - clothing
+        cursor_field: category
+        request_option:
+          type: RequestOption
+          field_name: category
+          inject_into: request_parameter
+
+spec:
+  type: Spec
+  connection_specification:
+    $schema: "http://json-schema.org/draft-07/schema#"
+    title: Mock Test Source Spec
+    type: object
+    required:
+      - server_url
+      - api_key
+    properties:
+      server_url:
+        type: string
+        title: Mock Server URL
+      api_key:
+        type: string
+        title: API Key
+        airbyte_secret: true

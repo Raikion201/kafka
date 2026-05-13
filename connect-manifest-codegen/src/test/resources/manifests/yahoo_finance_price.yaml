@@ -1,0 +1,84 @@
+version: 5.10.3
+
+type: DeclarativeSource
+
+definitions:
+  streams:
+    price:
+      type: DeclarativeStream
+      name: price
+      retriever:
+        type: SimpleRetriever
+        requester:
+          $ref: "#/definitions/base_requester"
+          path: >-
+            {% if (next_page_token['next_page_token'] or 0) <
+            config['tickers'].split(',')|length %}/v8/finance/chart/{{
+            config['tickers'].split(',')[next_page_token['next_page_token'] or
+            0].strip() }}{% endif %}
+          http_method: GET
+          request_parameters:
+            range: "{{ config['range'] }}"
+            symbol: >-
+              {% if (next_page_token['next_page_token'] or 0) <
+              config['tickers'].split(',')|length %}{{
+              config['tickers'].split(',')[next_page_token['next_page_token'] or
+              0].strip() }}{% else %} finish {% endif %}
+            interval: "{{ config['interval'] }}"
+          request_headers:
+            Accept: application/json
+            User-Agent: Mozilla/5.0 (X11; Linux x86_64)
+          error_handler:
+            type: CompositeErrorHandler
+            error_handlers:
+              - type: DefaultErrorHandler
+                response_filters:
+                  - type: HttpResponseFilter
+                    action: SUCCESS
+                    http_codes:
+                      - 403
+        record_selector:
+          type: RecordSelector
+          extractor:
+            type: DpathExtractor
+            field_path: []
+        paginator:
+          type: DefaultPaginator
+          pagination_strategy:
+            type: PageIncrement
+            start_from_page: 0
+  base_requester:
+    type: HttpRequester
+    url_base: https://query1.finance.yahoo.com
+
+streams:
+  - $ref: "#/definitions/streams/price"
+
+spec:
+  type: Spec
+  connection_specification:
+    type: object
+    $schema: http://json-schema.org/draft-07/schema#
+    required:
+      - tickers
+    properties:
+      tickers:
+        type: string
+        description: >-
+          Comma-separated stock ticker symbols to fetch, e.g. AAPL,MSFT,GOOGL.
+          Whitespace around commas is allowed.
+        order: 0
+        title: Tickers
+      interval:
+        type: string
+        description: "Price data interval: 1m, 5m, 15m, 30m, 1h, 1d, 5d, 1wk, 1mo, 3mo."
+        order: 1
+        title: Interval
+        default: 1d
+      range:
+        type: string
+        description: "Price data range: 1d, 5d, 7d, 1mo, 3mo, 6mo, 1y, 2y, 5y, ytd, max."
+        order: 2
+        title: Range
+        default: 1mo
+    additionalProperties: true

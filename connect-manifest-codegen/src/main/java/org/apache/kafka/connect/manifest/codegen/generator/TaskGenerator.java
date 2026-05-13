@@ -2914,6 +2914,17 @@ public class TaskGenerator {
         return "_lp_" + (cursorField != null ? cursorField : "partition").replaceAll("[^a-zA-Z0-9]", "_");
     }
 
+    /** Returns the loop variable for the router whose cursorField matches {@code field}, or null. */
+    private static String findLoopVarForField(List<PartitionRouterSpec> routers, String field) {
+        if (field == null || routers == null) return null;
+        for (PartitionRouterSpec lr : routers) {
+            if (field.equals(lr.getCursorField())) {
+                return listLoopVar(lr.getCursorField());
+            }
+        }
+        return null;
+    }
+
     /**
      * Generates a poll method that wraps the normal fetch in nested for-loops, one per
      * ListPartitionRouter, emitting one set of records per Cartesian combination of values.
@@ -3132,11 +3143,27 @@ public class TaskGenerator {
         // Append requester request_parameters (e.g. api_token, limit).
         // Mirrors buildUrlBlock lines 1306-1325: Jinja templates are interpolated,
         // literal values are URL-encoded at codegen time.
+        // Special case: {{ stream_partition.field }} / {{ stream_slice.field }} references
+        // must resolve to the loop variable, not a runtime render() call.
         if (requester != null) {
             for (Map.Entry<String, String> entry : requester.getRequestParameters().entrySet()) {
                 String tmpl = entry.getValue();
                 if (tmpl == null) continue;
                 String sep = firstParam ? "?" : "&";
+                Matcher spMatch = STREAM_PARTITION_RE.matcher(tmpl.trim());
+                if (spMatch.matches()) {
+                    String field = spMatch.group(1) != null ? spMatch.group(1) : spMatch.group(2);
+                    String lv = findLoopVarForField(listRouters, field);
+                    if (lv != null) {
+                        b.addStatement("urlBuilder.append($S).append($T.encode($L, $T.UTF_8))",
+                            sep + entry.getKey() + "=",
+                            ClassName.get("java.net", "URLEncoder"),
+                            lv,
+                            ClassName.get("java.nio.charset", "StandardCharsets"));
+                        firstParam = false;
+                        continue;
+                    }
+                }
                 if (tmpl.contains("{{") || tmpl.contains("{%")) {
                     b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
                         sep + entry.getKey() + "=",

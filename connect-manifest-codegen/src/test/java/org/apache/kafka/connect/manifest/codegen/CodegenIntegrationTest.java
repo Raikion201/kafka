@@ -486,8 +486,12 @@ public class CodegenIntegrationTest {
     @Test
     void delighted_generatedTask_usesEpochSecondsForUntil() throws Exception {
         String taskSrc = generate("delighted.yaml").task.toString();
-        assertTrue(taskSrc.contains("currentTimeMillis() / 1000"),
-            "Delighted task must use epoch seconds (currentTimeMillis / 1000) for 'until' — not ISO-8601");
+        // Phase-4 window-slicing: _windowEnd is computed by DatetimeWindowHelper.computeWindowEnd
+        // with format "%s", so it is an epoch-seconds string. The 'until' param gets _windowEnd.
+        assertTrue(taskSrc.contains("_windowEnd"),
+            "Delighted task must use _windowEnd (epoch seconds via DatetimeWindowHelper) for 'until'");
+        assertTrue(taskSrc.contains("\"until=\"") || taskSrc.contains("until="),
+            "Delighted task must append 'until' query parameter");
     }
 
     @Test
@@ -500,9 +504,9 @@ public class CodegenIntegrationTest {
     @Test
     void delighted_generatedTask_advancesCursorFromRecord() throws Exception {
         String taskSrc = generate("delighted.yaml").task.toString();
-        // The cursor update block compares record field value against current cursor
-        assertTrue(taskSrc.contains("compareTo"),
-            "Delighted task must advance cursor using lexicographic compareTo on record values");
+        // Phase-4 window-slicing: cursor is advanced past the window end via advanceCursor()
+        assertTrue(taskSrc.contains("advanceCursor"),
+            "Delighted task must advance cursor via DatetimeWindowHelper.advanceCursor (window-slicing)");
     }
 
     // ══════════════════════════════════════════════════════════════════════════

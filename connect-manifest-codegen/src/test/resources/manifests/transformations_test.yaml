@@ -1,0 +1,169 @@
+version: "3.10.0"
+type: DeclarativeSource
+
+config_transformations:
+  - type: ConfigAddFields
+    fields:
+      - type: AddedFieldDefinition
+        path:
+          - api_version
+        value: "v2"
+  - type: ConfigRemapField
+    field_path:
+      - server_region
+    map:
+      us: "us-east-1"
+      eu: "eu-west-1"
+
+streams:
+  # Stream 1: AddFields (static + Jinja-from-record) + RemoveFields
+  - type: DeclarativeStream
+    name: add_remove
+    primary_key:
+      - id
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: "{{ config['server_url'] }}"
+        path: /records
+        http_method: GET
+        authenticator:
+          type: NoAuth
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - results
+    transformations:
+      - type: AddFields
+        fields:
+          - type: AddedFieldDefinition
+            path:
+              - source
+            value: "static_value"
+      - type: RemoveFields
+        field_pointers:
+          - - sensitive
+
+  # Stream 2: RecordFilter — keeps only records with odd id
+  - type: DeclarativeStream
+    name: filtered
+    primary_key:
+      - id
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: "{{ config['server_url'] }}"
+        path: /records
+        http_method: GET
+        authenticator:
+          type: NoAuth
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - results
+        record_filter:
+          type: RecordFilter
+          condition: "{{ record['id'] % 2 != 0 }}"
+
+  # Stream 3: KeysToSnakeCase → KeysToLower → KeysReplace
+  - type: DeclarativeStream
+    name: key_rewrite
+    primary_key:
+      - id
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: "{{ config['server_url'] }}"
+        path: /records
+        http_method: GET
+        authenticator:
+          type: NoAuth
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - results
+    transformations:
+      - type: KeysToSnakeCase
+      - type: KeysToLower
+      - type: KeysReplace
+        old: "_bar"
+        new: "_baz"
+
+  # Stream 4: FlattenFields (dot-notation keys)
+  - type: DeclarativeStream
+    name: flatten
+    primary_key:
+      - id
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: "{{ config['server_url'] }}"
+        path: /records
+        http_method: GET
+        authenticator:
+          type: NoAuth
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - results
+    transformations:
+      - type: FlattenFields
+        flatten_lists: false
+
+  # Stream 5: DpathFlattenFields with KeyTransformation prefix
+  - type: DeclarativeStream
+    name: dpath_flat
+    primary_key:
+      - id
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: "{{ config['server_url'] }}"
+        path: /records
+        http_method: GET
+        authenticator:
+          type: NoAuth
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - results
+    transformations:
+      - type: DpathFlattenFields
+        field_path:
+          - props
+        delete_origin_value: true
+        replace_record: false
+        key_transformation:
+          type: KeyTransformation
+          prefix: "props_"
+
+spec:
+  type: Spec
+  connection_specification:
+    $schema: "http://json-schema.org/draft-07/schema#"
+    title: Transformations Test Source Spec
+    type: object
+    required:
+      - server_url
+    properties:
+      server_url:
+        type: string
+        title: Mock Server URL
+      server_region:
+        type: string
+        title: Server Region

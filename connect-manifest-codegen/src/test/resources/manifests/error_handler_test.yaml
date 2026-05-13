@@ -1,0 +1,52 @@
+version: "3.10.0"
+type: DeclarativeSource
+
+streams:
+  - type: DeclarativeStream
+    name: items
+    primary_key:
+      - id
+    retriever:
+      type: SimpleRetriever
+      requester:
+        type: HttpRequester
+        url_base: "{{ config['server_url'] }}"
+        path: /items
+        http_method: GET
+        authenticator:
+          type: NoAuth
+        error_handler:
+          type: DefaultErrorHandler
+          max_retries: 4
+          response_filters:
+            - type: HttpResponseFilter
+              http_codes: [401]
+              action: IGNORE
+              error_message: "Paid plan required"
+            - type: HttpResponseFilter
+              http_codes: [418]
+              action: FAIL
+              failure_type: config_error
+              error_message: "Server refuses to brew"
+          backoff_strategies:
+            - type: ConstantBackoffStrategy
+              backoff_time_in_seconds: 0.05
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - results
+
+spec:
+  type: Spec
+  connection_specification:
+    $schema: "http://json-schema.org/draft-07/schema#"
+    title: Error Handler Test Source Spec
+    type: object
+    required:
+      - server_url
+    properties:
+      server_url:
+        type: string
+        title: Mock Server URL
