@@ -73,17 +73,17 @@ only 5 are shared across multiple connectors.
 
 ---
 
-## Bucket 3: Cannot Be Built Yet (9 connectors)
+## Bucket 3: Cannot Be Built (9 connectors)
 
-These connectors require features that need a new generator code path. They are **not
-impossible** — they are **not yet built**.
+These connectors require features that are either architecturally blocked or have
+implementation cost completely disproportionate to the number of connectors they unlock.
 
 | Feature | Connectors | Gap |
 |---------|----------:|-----|
 | **AsyncRetriever** | ~4 | 3-phase poll (submit → poll status → download); needs state-machine `poll()` generator |
 | **GraphQL** | ~3 | POST body queries, 200-always errors, `pageInfo` pagination; needs new HTTP model |
-| **SOAP** | ~1 | HTTP POST with XML body — buildable as `CustomSoapRequester` using `java.net.http.HttpClient` + JDK `javax.xml`; not impossible, just not yet built |
-| **gRPC** | ~1 | HTTP/2 + protobuf binary encoding; gRPC Java SDK banned by rule 5; hand-crafting protobuf wire format is unrealistic — **actually blocked** |
+| **SOAP** | ~1 | HTTP POST + XML, but: per-vendor namespaces, WS-Security auth, XPath response parsing, SOAP fault error model — ~1 connector, ROI terrible; **not worth building** |
+| **gRPC** | ~1 | HTTP/2 + protobuf binary encoding; gRPC Java SDK banned by rule 5; hand-crafting protobuf wire format is unrealistic; **blocked** |
 
 ### What "new codegen path" means
 
