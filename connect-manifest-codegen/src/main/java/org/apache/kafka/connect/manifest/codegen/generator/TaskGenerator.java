@@ -311,6 +311,7 @@ public class TaskGenerator {
         typeBuilder.addMethod(buildStop());
         typeBuilder.addMethod(buildJinjaCtx());
         typeBuilder.addMethod(buildJinjaCtxWithRecord());
+        typeBuilder.addMethod(buildJinjaCtxForStream());
 
         return JavaFile.builder(pkgName, typeBuilder.build())
             .skipJavaLangImports(true)
@@ -1039,7 +1040,7 @@ public class TaskGenerator {
                     "urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
                     sep + entry.getKey() + "=",
                     ClassName.get("java.net", "URLEncoder"),
-                    ClassName.get(String.class), interpolateTemplate(tmpl),
+                    ClassName.get(String.class), interpolateTemplateWithStream(tmpl),
                     ClassName.get("java.nio.charset", "StandardCharsets"));
             } else {
                 // Literal value — URL-encode at codegen time and emit as a constant.
@@ -1334,7 +1335,7 @@ public class TaskGenerator {
                 b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
                     sep + entry.getKey() + "=",
                     ClassName.get("java.net", "URLEncoder"),
-                    ClassName.get(String.class), interpolateTemplate(tmpl),
+                    ClassName.get(String.class), interpolateTemplateWithStream(tmpl),
                     ClassName.get("java.nio.charset", "StandardCharsets"));
             } else {
                 // Literal value — URL-encode at codegen time, emit as a string constant.
@@ -2790,6 +2791,24 @@ public class TaskGenerator {
             .build();
     }
 
+    private MethodSpec buildJinjaCtxForStream() {
+        ClassName mapClass = ClassName.get("java.util", "Map");
+        ClassName linkedHashMap = ClassName.get("java.util", "LinkedHashMap");
+        ParameterizedTypeName mapStringObject = ParameterizedTypeName.get(
+            mapClass, ClassName.get(String.class), ClassName.get(Object.class));
+        return MethodSpec.methodBuilder("jinjaCtxForStream")
+            .addModifiers(Modifier.PRIVATE)
+            .returns(mapStringObject)
+            .addParameter(String.class, "streamName")
+            .addStatement("$T ctx = jinjaCtx()", mapStringObject)
+            .addStatement("$T<$T, $T> params = new $T<>()",
+                mapClass, ClassName.get(String.class), ClassName.get(Object.class), linkedHashMap)
+            .addStatement("params.put($S, streamName)", "name")
+            .addStatement("ctx.put($S, params)", "parameters")
+            .addStatement("return ctx")
+            .build();
+    }
+
     private MethodSpec buildStop() {
         return MethodSpec.methodBuilder("stop")
             .addAnnotation(Override.class)
@@ -2807,6 +2826,19 @@ public class TaskGenerator {
      */
     private String interpolateTemplate(String template) {
         return JinjaSnippets.interpolateTemplate(template, currentSpecPropKeys);
+    }
+
+    /**
+     * Like {@link #interpolateTemplate} but generates {@code render("...", jinjaCtxForStream(streamName))}
+     * so that Jinja templates referencing {@code parameters['name']} resolve to the current stream's name.
+     * Used for request_parameters where Airbyte CDK injects {@code parameters.name = stream.name}.
+     */
+    private String interpolateTemplateWithStream(String template) {
+        if (template == null || template.isEmpty()) return "\"\"";
+        if (!template.contains("{{") && !template.contains("{%")) {
+            return "\"" + JinjaSnippets.escapeJavaString(template) + "\"";
+        }
+        return "render(\"" + JinjaSnippets.escapeJavaString(template) + "\", jinjaCtxForStream(streamName))";
     }
 
     /** Returns the header name for an ApiKeyAuthenticator (inject_into.field_name or legacy header field). */
@@ -3109,7 +3141,7 @@ public class TaskGenerator {
                     b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
                         sep + entry.getKey() + "=",
                         ClassName.get("java.net", "URLEncoder"),
-                        ClassName.get(String.class), interpolateTemplate(tmpl),
+                        ClassName.get(String.class), interpolateTemplateWithStream(tmpl),
                         ClassName.get("java.nio.charset", "StandardCharsets"));
                 } else {
                     String encoded = URLEncoder.encode(tmpl, StandardCharsets.UTF_8);
