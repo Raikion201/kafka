@@ -17,7 +17,7 @@ approach.
 
 | Bucket | Count | Description |
 |--------|------:|-------------|
-| **Works** | **455** | Uses only features we implement; generates, compiles, and polls correctly |
+| **Works** | **455** | Pure declarative manifests — standard REST HTTP, built-in auth/paginator/cursor, no custom Python classes; everything the manifest describes maps directly to a Java equivalent we already implement |
 | **Needs custom ports** | **59** | Manifest references Python `custom_components` class names that must be ported to Java |
 | **Cannot be built** | **9** | Uses GraphQL, AsyncRetriever, or non-HTTP transport — requires a new codegen path |
 | **Total declarative** | **523** | All Airbyte manifests in our corpus |
@@ -26,7 +26,13 @@ approach.
 
 ## Bucket 1: Works (455 connectors)
 
-These connectors use only standard Airbyte CDK declarative features:
+These connectors are **fully declarative** — their YAML manifest contains no
+`type: Custom*` components and no Python-specific logic. Everything they need
+(HTTP calls, auth, pagination, cursors, transformations) is expressed as
+configuration that Airbyte's CDK interprets generically, and that we can
+map 1:1 to a Java implementation. No Python code needs to be read or ported.
+
+Standard Airbyte CDK features used by this bucket:
 
 - `SimpleRetriever` with `HttpRequester`
 - `CursorPaginator`, `PageIncrement`, `OffsetIncrement`, `CursorPagination`
