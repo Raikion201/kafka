@@ -78,7 +78,14 @@ public final class DefaultRetryPolicy implements RetryPolicy {
             return ErrorResolution.SUCCESS;
         }
 
-        return DefaultErrorMapping.resolve(code).orElseGet(() -> DefaultErrorMapping.fallback(code));
+        ErrorResolution base = DefaultErrorMapping.resolve(code).orElseGet(() -> DefaultErrorMapping.fallback(code));
+        String body = response.body();
+        if (body != null && !body.isEmpty()) {
+            String snippet = body.length() > 300 ? body.substring(0, 300) : body;
+            return new ErrorResolution(base.action(), base.failureType(),
+                base.errorMessage() + " | Response: " + snippet);
+        }
+        return base;
     }
 
     @Override

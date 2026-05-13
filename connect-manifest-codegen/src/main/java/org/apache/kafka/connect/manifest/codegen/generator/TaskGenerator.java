@@ -1077,8 +1077,13 @@ public class TaskGenerator {
             .anyMatch(k -> k.equalsIgnoreCase("Content-Type"));
         boolean lcHasExplicitUa = requestHeaders.keySet().stream()
             .anyMatch(k -> k.equalsIgnoreCase("User-Agent"));
+        boolean lcHasExplicitAccept = requestHeaders.keySet().stream()
+            .anyMatch(k -> k.equalsIgnoreCase("Accept"));
         if (!lcHasExplicitUa) {
             reqFmt.append("\n        .header(\"User-Agent\", \"kafka-connect-airbyte/1.0\")");
+        }
+        if (!lcHasExplicitAccept) {
+            reqFmt.append("\n        .header(\"Accept\", \"application/json\")");
         }
         if (lcBodyVar != null && !lcHasExplicitCt) {
             if (lcJsonBody) {
@@ -1975,8 +1980,13 @@ public class TaskGenerator {
             .anyMatch(k -> k.equalsIgnoreCase("Content-Type"));
         boolean hasExplicitUserAgent = reqHeaders.keySet().stream()
             .anyMatch(k -> k.equalsIgnoreCase("User-Agent"));
+        boolean hasExplicitAccept = reqHeaders.keySet().stream()
+            .anyMatch(k -> k.equalsIgnoreCase("Accept"));
         if (!hasExplicitUserAgent) {
             fmt.append("\n        .header(\"User-Agent\", \"kafka-connect-airbyte/1.0\")");
+        }
+        if (!hasExplicitAccept) {
+            fmt.append("\n        .header(\"Accept\", \"application/json\")");
         }
         if (bodyVar != null && !hasExplicitContentType) {
             if (jsonBody) {
@@ -3385,8 +3395,13 @@ public class TaskGenerator {
             .anyMatch(k -> k.equalsIgnoreCase("Content-Type"));
         boolean egHasExplicitUa = egHeaders.keySet().stream()
             .anyMatch(k -> k.equalsIgnoreCase("User-Agent"));
+        boolean egHasExplicitAccept = egHeaders.keySet().stream()
+            .anyMatch(k -> k.equalsIgnoreCase("Accept"));
         if (!egHasExplicitUa) {
             fmt.append("\n        .header(\"User-Agent\", \"kafka-connect-airbyte/1.0\")");
+        }
+        if (!egHasExplicitAccept) {
+            fmt.append("\n        .header(\"Accept\", \"application/json\")");
         }
         if (bodyVar != null && !egHasExplicitCt) {
             if (jsonBody) {
