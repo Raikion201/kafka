@@ -82,7 +82,8 @@ impossible** — they are **not yet built**.
 |---------|----------:|-----|
 | **AsyncRetriever** | ~4 | 3-phase poll (submit → poll status → download); needs state-machine `poll()` generator |
 | **GraphQL** | ~3 | POST body queries, 200-always errors, `pageInfo` pagination; needs new HTTP model |
-| **Non-HTTP transport** (SOAP, gRPC) | ~2 | Vendor protocol doesn't map to `HttpClient`; needs protocol-specific requester |
+| **SOAP** | ~1 | HTTP POST with XML body — buildable as `CustomSoapRequester` using `java.net.http.HttpClient` + JDK `javax.xml`; not impossible, just not yet built |
+| **gRPC** | ~1 | HTTP/2 + protobuf binary encoding; gRPC Java SDK banned by rule 5; hand-crafting protobuf wire format is unrealistic — **actually blocked** |
 
 ### What "new codegen path" means
 
