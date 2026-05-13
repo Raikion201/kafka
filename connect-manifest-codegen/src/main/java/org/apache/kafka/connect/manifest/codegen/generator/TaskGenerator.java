@@ -1075,6 +1075,11 @@ public class TaskGenerator {
         reqArgs.add(URI_CLASS);
         boolean lcHasExplicitCt = requestHeaders.keySet().stream()
             .anyMatch(k -> k.equalsIgnoreCase("Content-Type"));
+        boolean lcHasExplicitUa = requestHeaders.keySet().stream()
+            .anyMatch(k -> k.equalsIgnoreCase("User-Agent"));
+        if (!lcHasExplicitUa) {
+            reqFmt.append("\n        .header(\"User-Agent\", \"kafka-connect-airbyte/1.0\")");
+        }
         if (lcBodyVar != null && !lcHasExplicitCt) {
             if (lcJsonBody) {
                 reqFmt.append("\n        .header(\"Content-Type\", \"application/json\")");
@@ -1968,6 +1973,11 @@ public class TaskGenerator {
             ? requester.getRequestHeaders() : Collections.emptyMap();
         boolean hasExplicitContentType = reqHeaders.keySet().stream()
             .anyMatch(k -> k.equalsIgnoreCase("Content-Type"));
+        boolean hasExplicitUserAgent = reqHeaders.keySet().stream()
+            .anyMatch(k -> k.equalsIgnoreCase("User-Agent"));
+        if (!hasExplicitUserAgent) {
+            fmt.append("\n        .header(\"User-Agent\", \"kafka-connect-airbyte/1.0\")");
+        }
         if (bodyVar != null && !hasExplicitContentType) {
             if (jsonBody) {
                 fmt.append("\n        .header(\"Content-Type\", \"application/json\")");
@@ -3373,6 +3383,11 @@ public class TaskGenerator {
         Map<String, String> egHeaders = requester != null ? requester.getRequestHeaders() : Collections.emptyMap();
         boolean egHasExplicitCt = egHeaders.keySet().stream()
             .anyMatch(k -> k.equalsIgnoreCase("Content-Type"));
+        boolean egHasExplicitUa = egHeaders.keySet().stream()
+            .anyMatch(k -> k.equalsIgnoreCase("User-Agent"));
+        if (!egHasExplicitUa) {
+            fmt.append("\n        .header(\"User-Agent\", \"kafka-connect-airbyte/1.0\")");
+        }
         if (bodyVar != null && !egHasExplicitCt) {
             if (jsonBody) {
                 fmt.append("\n        .header(\"Content-Type\", \"application/json\")");
