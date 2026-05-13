@@ -819,13 +819,13 @@ public class TaskGenerator {
             // For the first page, build the URL from base + path.
             if (noPartitionVar) {
                 b.addStatement("$T url = (nextCursor != null) ? nextCursor : $S",
-                    String.class, baseUrl + rawPath);
+                    String.class, joinUrl(baseUrl, rawPath));
             } else {
                 String before = rawPath.substring(0, m.start());
                 String after  = rawPath.substring(m.end());
                 b.addStatement(
                     "$T _baseUrl = $S + $T.encode(_partitionKey, $T.UTF_8) + $S",
-                    String.class, baseUrl + before,
+                    String.class, joinUrl(baseUrl, before),
                     ClassName.get("java.net", "URLEncoder"),
                     ClassName.get("java.nio.charset", "StandardCharsets"),
                     after);
@@ -837,20 +837,20 @@ public class TaskGenerator {
         // Standard urlBuilder path.
         if (noPartitionVar) {
             b.addStatement("$T urlBuilder = new $T($S)",
-                StringBuilder.class, StringBuilder.class, baseUrl + rawPath);
+                StringBuilder.class, StringBuilder.class, joinUrl(baseUrl, rawPath));
         } else {
             String before = rawPath.substring(0, m.start());
             String after  = rawPath.substring(m.end());
             b.addStatement(
                 "$T urlBuilder = new $T($S + $T.encode(_partitionKey, $T.UTF_8) + $S)",
                 StringBuilder.class, StringBuilder.class,
-                baseUrl + before,
+                joinUrl(baseUrl, before),
                 ClassName.get("java.net", "URLEncoder"),
                 ClassName.get("java.nio.charset", "StandardCharsets"),
                 after);
         }
         if (hasPagination && paginator != null) {
-            appendPaginationParams(b, paginator, !(baseUrl + rawPath).contains("?"),
+            appendPaginationParams(b, paginator, !joinUrl(baseUrl, rawPath).contains("?"),
                 isBodyInjectedJson(paginator) || isBodyInjectedData(paginator));
         }
         return b.build();
@@ -903,7 +903,7 @@ public class TaskGenerator {
         body.addStatement("$T nextCursor = null", String.class);
 
         body.beginControlFlow("do");
-        body.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class, baseUrl + path);
+        body.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class, joinUrl(baseUrl, path));
 
         // Append cursor pagination token if present (not RequestPath).
         if (parentPaginator != null && parentPaginator.isCursor()
@@ -1017,12 +1017,12 @@ public class TaskGenerator {
         // Build URL: baseUrl + literal path prefix + URL-encoded current item
         body.addStatement(
             "$T urlBuilder = new $T($S + $T.encode(_item, $T.UTF_8))",
-            StringBuilder.class, StringBuilder.class, baseUrl + pathPrefix,
+            StringBuilder.class, StringBuilder.class, joinUrl(baseUrl, pathPrefix),
             ClassName.get("java.net", "URLEncoder"),
             ClassName.get("java.nio.charset", "StandardCharsets"));
 
         // Request parameters: list-cycle ones use _item; normal config templates use getter
-        boolean firstParam = !(baseUrl + pathPrefix).contains("?");
+        boolean firstParam = !joinUrl(baseUrl, pathPrefix).contains("?");
         Pattern listPat = Pattern.compile("config\\['" + listCycleField + "'\\]\\.split");
         for (Map.Entry<String, String> entry : requestParams.entrySet()) {
             String tmpl = entry.getValue();
@@ -1286,7 +1286,18 @@ public class TaskGenerator {
         CodeBlock.Builder b = CodeBlock.builder();
 
         if (isRequestPath(paginator)) {
-            String initialUrl = baseUrl + path;
+            String initialUrl = joinUrl(baseUrl, path);
+            // Append literal request_parameters to the first-page URL; cursor pages carry them already.
+            boolean hasQ = initialUrl.contains("?");
+            StringBuilder init = new StringBuilder(initialUrl);
+            for (Map.Entry<String, String> entry : requestParams.entrySet()) {
+                String tmpl = entry.getValue();
+                if (tmpl == null || tmpl.contains("{{") || tmpl.contains("{%")) continue;
+                String encoded = URLEncoder.encode(tmpl, StandardCharsets.UTF_8);
+                init.append(hasQ ? "&" : "?").append(entry.getKey()).append("=").append(encoded);
+                hasQ = true;
+            }
+            initialUrl = init.toString();
             if (!initialUrl.contains("{{") && !initialUrl.contains("{%")) {
                 b.addStatement("url = (nextCursor != null) ? nextCursor : $S", initialUrl);
             } else {
@@ -1300,7 +1311,7 @@ public class TaskGenerator {
 
         // Track whether the URL already has a '?' — paths like "/top-headlines?country=us"
         // already contain a query string, so subsequent params must use '&' not '?'.
-        boolean pathHasQuery = (baseUrl + path).contains("?");
+        boolean pathHasQuery = joinUrl(baseUrl, path).contains("?");
 
         List<String> paramKeys = new ArrayList<>();
         for (Map.Entry<String, String> entry : requestParams.entrySet()) {
@@ -1354,7 +1365,7 @@ public class TaskGenerator {
      * {@code JinjaRenderer.render(...)} at runtime — same path used for auth headers and cursors.
      */
     private void addInitialUrlStatement(CodeBlock.Builder b, String baseUrl, String path) {
-        String combined = baseUrl + path;
+        String combined = joinUrl(baseUrl, path);
         if (!combined.contains("{{") && !combined.contains("{%")) {
             b.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class,
                 combined);
@@ -1373,6 +1384,14 @@ public class TaskGenerator {
      *
      * @return the new value of {@code needsPlus} after appending this segment
      */
+    // Joins base URL and path, preventing double slash when base ends with '/' and path starts with '/'.
+    private static String joinUrl(String base, String path) {
+        if (base.endsWith("/") && path.startsWith("/")) {
+            return base + path.substring(1);
+        }
+        return base + path;
+    }
+
     private boolean appendUrlSegment(
         StringBuilder fmt, List<Object> fmtArgs, String segment, boolean needsPlus
     ) {
@@ -3032,7 +3051,7 @@ public class TaskGenerator {
             List<Object> fmtArgs = new ArrayList<>();
             fmtArgs.add(StringBuilder.class);
             fmtArgs.add(StringBuilder.class);
-            boolean needsPlus = appendUrlSegment(fmt, fmtArgs, baseUrl + before, false);
+            boolean needsPlus = appendUrlSegment(fmt, fmtArgs, joinUrl(baseUrl, before), false);
             if (needsPlus) fmt.append(" + ");
             fmt.append("$T.encode($L, $T.UTF_8)");
             fmtArgs.add(ClassName.get("java.net", "URLEncoder"));
@@ -3233,7 +3252,7 @@ public class TaskGenerator {
         if (!baseUrl.isEmpty() && !baseUrl.endsWith("/") && !path.isEmpty() && !path.startsWith("/")) {
             baseUrl = baseUrl + "/";
         }
-        String fullUrlTemplate = baseUrl + path;
+        String fullUrlTemplate = joinUrl(baseUrl, path);
         List<String> fieldPath = extractFieldPath(parentStream);
         String partitionField = router.partitionField();
         String parentKey = router.parentKey();
@@ -3412,7 +3431,7 @@ public class TaskGenerator {
         if (!baseUrl.isEmpty() && !baseUrl.endsWith("/") && !rawPath.isEmpty() && !rawPath.startsWith("/")) {
             baseUrl = baseUrl + "/";
         }
-        String fullUrlTemplate = baseUrl + rawPath;
+        String fullUrlTemplate = joinUrl(baseUrl, rawPath);
         String streamName = stream.getName();
         String methodName = "poll" + ManifestSpec.toClassName(streamName);
         List<String> fieldPath = extractFieldPath(stream);
