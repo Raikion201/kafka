@@ -631,7 +631,7 @@ public class TaskGenerator {
         body.addStatement("final $T streamName = $S", String.class, streamName);
 
         if (hasPagination) {
-            body.add(buildPaginationInit(paginator));
+            body.add(buildPaginationInit(paginator, isIncremental));
         } else {
             body.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
         }
@@ -1261,7 +1261,7 @@ public class TaskGenerator {
         return b.build();
     }
 
-    private CodeBlock buildPaginationInit(PaginatorSpec paginator) {
+    private CodeBlock buildPaginationInit(PaginatorSpec paginator, boolean hasIncrementalSync) {
         CodeBlock.Builder b = CodeBlock.builder();
         b.addStatement("$T<$T> result = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
         // Read stored offset so restarts resume from the last committed position.
@@ -1269,9 +1269,12 @@ public class TaskGenerator {
             "$T<$T, $T> _stored = context.offsetStorageReader().offset($T.of($S, streamName))",
             Map.class, String.class, Object.class, Map.class, "stream");
         if (paginator.isCursor()) {
+            // When IncrementalSync is also present, its datetime value owns "cursor".
+            // Use "api_cursor" as the key for the API pagination cursor to avoid collision.
+            String apiCursorKey = hasIncrementalSync ? "api_cursor" : "cursor";
             b.addStatement("$T nextCursor = null", String.class);
             b.beginControlFlow("if (_stored != null && _stored.get($S) instanceof $T _c && !_c.isEmpty())",
-                "cursor", String.class);
+                apiCursorKey, String.class);
             b.addStatement("nextCursor = _c");
             b.endControlFlow();
             if (isRequestPath(paginator)) {
@@ -1742,6 +1745,13 @@ public class TaskGenerator {
     }
 
     private CodeBlock buildPositionMapCode(PaginatorSpec paginator, String cursorVarName) {
+        if (cursorVarName != null && paginator != null && paginator.isCursor()) {
+            // Both IncrementalSync (datetime cursor) and CursorPagination coexist.
+            // Use separate keys to avoid the date cursor being sent as an API page cursor on restart.
+            return CodeBlock.of(
+                "$T.of(\"cursor\", $L != null ? $L : \"\", \"api_cursor\", nextCursor != null ? nextCursor : \"\")",
+                Map.class, cursorVarName, cursorVarName);
+        }
         if (cursorVarName != null) {
             return CodeBlock.of("$T.of(\"cursor\", $L != null ? $L : \"\")",
                 Map.class, cursorVarName, cursorVarName);
