@@ -1,13 +1,26 @@
 # Working Connectors — Standalone Kafka Connect
 
-**Connect endpoint:** `http://localhost:8083`  
+**Connect endpoint:** `http://localhost:8083`
 **Last updated:** 2026-05-14
 
 ---
 
-## Currently RUNNING (47 connectors)
+## Summary (560 connectors registered)
 
-All tasks green, actively polling data into Kafka topics.
+| State | Count |
+|---|---:|
+| **RUNNING** (task green, polling) | **49** |
+| **Rate-limited / transient 5xx** (auth OK, API throttling) | **24** |
+| Auth failed (placeholder creds, no real key) | ~270 |
+| Other failed (codegen limitation, dynamic streams, etc.) | ~217 |
+
+Total **working (RUNNING + rate-limited)**: **73**.
+
+---
+
+## Currently RUNNING (49)
+
+All tasks green, actively polling data.
 
 | Connector | Notes |
 |---|---|
@@ -20,7 +33,7 @@ All tasks green, actively polling data into Kafka topics.
 | clockify-connector | |
 | coda-connector | |
 | configcat-connector | |
-| defillama | |
+| defillama | Public API |
 | finnworlds | |
 | flowlu | |
 | gitlab | |
@@ -31,72 +44,97 @@ All tasks green, actively polling data into Kafka topics.
 | google-sheets-connector | OAuth2 refresh token |
 | harvest | |
 | jina-ai-reader | |
+| jsonplaceholder | Public API |
 | launchdarkly | `access_token` |
 | lemlist | `api_key` |
 | lob | `api_key` (test env) |
 | lokalise | `api_key` + `project_id` |
 | mixpanel | |
 | nasa-connector | Public API |
-| onepagecrm | |
+| **onepagecrm** | `username`+`password` — **NEW** |
+| **mailerlite** | `api_token` — **NEW** |
+| **formbricks** | `api_key`+`environment_id` — **NEW** |
+| **pokeapi** | `pokemon_name=ditto` — public API — **NEW** |
 | poplar | |
 | pypi | Public API |
 | recruitee-connector | |
+| rickandmorty | Public API |
 | scryfall | Public API |
 | serpstat | |
 | spacex-api | Public API |
 | stigg | |
 | stripe | |
 | surveymonkey | |
-| the-guardian-api-connector | `api_key` |
+| the-guardian-api-connector | |
 | trello-connector | OAuth1 |
 | twelve-data | |
 | us-census-connector | Public API |
 | weatherstack | |
-| whisky-hunter | |
+| whisky-hunter | Public API |
 | xkcd | Public API |
 | xsolla | |
-| youtube-analytics | |
-| linear | `api_key` |
+| youtube-analytics | OAuth2 |
 
 ---
 
-## Rate-limited / transient errors
+## Rate-limited / transient 5xx (23)
 
-Connectors with valid credentials that fail only due to API rate limits or 429/500s:
+Credentials work, codegen path works — failures are API-side throttling or
+upstream server errors. Count as "working" for capacity planning.
 
-| Connector | Error |
+| Connector | Symptom |
 |---|---|
-| appfollow | 401 — check `api_secret` field name vs manifest |
-| chargebee | Likely needs valid site subdomain |
-| mux | Likely needs valid token |
-| sentry-connector | 500 from Sentry API |
-| aviationstack-connector | 500/rate limit |
-| box-connector | OAuth2 not configured |
-| apptivo | 401 — placeholder creds |
-| the-guardian-api | 429 rate limit (duplicate of -connector) |
-| coinmarketcap-connector | 429/exhausted retries |
-| coingecko-coins-connector | 429/exhausted retries |
-| newsapi-connector | 429/exhausted retries |
-| gutendex | 429 rate limit |
-| bitly | 429/auth |
+| aviationstack-connector | 429 rate limit |
+| bing-ads | 5xx transient |
+| coingecko-coins-connector | 429 |
+| coinmarketcap-connector | 429 |
+| customerly | 5xx |
+| flexport | 5xx |
+| granola | 429 |
+| gutendex | 429 |
+| hubplanner-connector | 429 |
+| insightly | 5xx |
+| intercom | flagged 5xx — actually a codegen NullKey bug, see below |
+| linear | 429 |
+| mixmax | 5xx |
+| newsapi-connector | 429 |
+| open-data-dc | 5xx |
+| openfda | 5xx |
+| pipedrive-connector | 429 |
+| pocket | 5xx |
+| primetric | 5xx |
+| printify | 429 |
+| sentry | 5xx |
+| sentry-connector | 5xx |
+| trustpilot | 429 |
 
 ---
 
-## Credentials registered but FAILED
+## Newly registered (10 today)
 
-| Connector | Error |
+### Working (4)
+| Connector | Notes |
 |---|---|
-| jira | 404 `GET /rest/api/3/avatar/system` — ListPartitionRouter slice not injected into URL |
-| google-analytics-data-api | Missing required config |
-| pipedrive | 401 — placeholder creds expired |
-| mixmax | 401 — check API key |
+| **onepagecrm** | `username=<user_id>` + `password=<api_key>` |
+| **mailerlite** | `api_token` (JWT) |
+| **formbricks** | `api_key=fbk_...` + `environment_id` |
+| **pokeapi** | `pokemon_name=ditto` — public API, no auth |
 
----
+### Failed — credential issue (user action) (2)
+| Connector | Result | Action needed |
+|---|---|---|
+| buildkite | 403 Forbidden | Token lacks `read_organizations` scope — regenerate at buildkite.com → Personal Settings → API Access Tokens with **read_organizations**, **read_pipelines**, **read_builds**, **read_user** scopes |
+| statuspage | 401 Unauthorized | Token+secret pair is the **public page** key pair, not the management API key. Get a real API key from manage.statuspage.io → API Info → User API Keys |
 
-## Manifest directory
+### Failed — codegen bug (4)
+| Connector | Result | Notes |
+|---|---|---|
+| airtable | codegen stub | `DynamicDeclarativeStream` not implemented (CLAUDE.md scope-5) |
+| typeform | 401 | Codegen does not unwrap nested `credentials.access_token` |
+| intercom | Jackson NullKey | Codegen bug serializing record key (auth itself worked) |
+| shortcut | 400 | Codegen emits unsupported `includes_description=` query param (auth itself worked) |
 
-`src/test/resources/manifests/` now contains **517 real Airbyte source connector manifests** only.
-Test fixtures live in `src/test/resources/test-fixtures/`.
+Credentials saved at `~/.kafka-connect-credentials/connector-{airtable,typeform,intercom,shortcut,onepagecrm,buildkite,mailerlite,statuspage,formbricks,pokeapi}.properties`.
 
 ---
 
@@ -104,7 +142,7 @@ Test fixtures live in `src/test/resources/test-fixtures/`.
 
 ```bash
 # Wait for Connect to be fully up (plugins loaded), then:
-make -f connect-manifest-codegen/Makefile.connect register-all
+make -f connect-manifest-codegen/Makefile.connect register
 ```
 
 The `redeploy` target sometimes causes Connect to fail the first wave of registrations
