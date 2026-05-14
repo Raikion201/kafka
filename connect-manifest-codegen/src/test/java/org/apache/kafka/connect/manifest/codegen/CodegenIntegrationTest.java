@@ -83,7 +83,11 @@ public class CodegenIntegrationTest {
     private final TaskGenerator taskGen = new TaskGenerator();
 
     private InputStream resource(String name) {
-        String dir = name.endsWith("_test.yaml") ? "test-fixtures/" : "manifests/";
+        boolean isFixture = name.endsWith("_test.yaml")
+            || java.util.Set.of("zapier.yaml", "newsapi.yaml", "rickandmorty.yaml",
+                "jsonplaceholder.yaml", "google_analytics_jwt.yaml",
+                "google_cloud_storage_jwt.yaml").contains(name);
+        String dir = isFixture ? "test-fixtures/" : "manifests/";
         return getClass().getClassLoader().getResourceAsStream(dir + name);
     }
 
