@@ -39,7 +39,15 @@ public class ManifestParserTest {
                 "jsonplaceholder.yaml", "google_analytics_jwt.yaml",
                 "google_cloud_storage_jwt.yaml").contains(name);
         String dir = isFixture ? "test-fixtures/" : "manifests/";
-        return getClass().getClassLoader().getResourceAsStream(dir + name);
+        InputStream is = getClass().getClassLoader().getResourceAsStream(dir + name);
+        if (is == null && !isFixture && !name.startsWith("source-")) {
+            is = getClass().getClassLoader().getResourceAsStream(dir + "source-" + name);
+        }
+        if (is == null && !isFixture && !name.startsWith("source-") && name.contains("_")) {
+            String hyphen = name.replace('_', '-');
+            is = getClass().getClassLoader().getResourceAsStream(dir + "source-" + hyphen);
+        }
+        return is;
     }
 
     // ── defillama ─────────────────────────────────────────────────────────────

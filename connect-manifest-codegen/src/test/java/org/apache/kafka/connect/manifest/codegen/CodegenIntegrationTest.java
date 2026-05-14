@@ -86,9 +86,20 @@ public class CodegenIntegrationTest {
         boolean isFixture = name.endsWith("_test.yaml")
             || java.util.Set.of("zapier.yaml", "newsapi.yaml", "rickandmorty.yaml",
                 "jsonplaceholder.yaml", "google_analytics_jwt.yaml",
-                "google_cloud_storage_jwt.yaml").contains(name);
+                "google_cloud_storage_jwt.yaml", "pokeapi.yaml",
+                "acuity_scheduling.yaml").contains(name);
         String dir = isFixture ? "test-fixtures/" : "manifests/";
-        return getClass().getClassLoader().getResourceAsStream(dir + name);
+        InputStream is = getClass().getClassLoader().getResourceAsStream(dir + name);
+        // Airbyte-sourced manifests are named source-<name> after the parity cleanup.
+        // Tests may use short names (no prefix) or underscores where the file uses hyphens.
+        if (is == null && !isFixture && !name.startsWith("source-")) {
+            is = getClass().getClassLoader().getResourceAsStream(dir + "source-" + name);
+        }
+        if (is == null && !isFixture && !name.startsWith("source-") && name.contains("_")) {
+            String hyphen = name.replace('_', '-');
+            is = getClass().getClassLoader().getResourceAsStream(dir + "source-" + hyphen);
+        }
+        return is;
     }
 
     private ManifestSpec load(String name) throws Exception {
