@@ -170,6 +170,15 @@ public class TaskGenerator {
     /** Monotonically-increasing counter used to give unique variable names in emitNestedBodyPut. */
     private int bodyPutSeq = 0;
 
+    /**
+     * Set to the Java variable names for the window start and end when generating body code for
+     * a windowed (step-based) DatetimeBasedCursor stream, so that body templates referencing
+     * {@code stream_interval} or {@code stream_slice} can be rendered with the correct context.
+     * Null when not inside a windowed stream's body generation.
+     */
+    private String currentWindowStartVar = null;
+    private String currentWindowEndVar = null;
+
     /** Keys declared in the current manifest's spec.connection_specification.properties.
      *  Set at the start of {@link #generate} so credential resolution can fall back to
      *  {@code ""} for Airbyte sentinel keys like {@code nothing} that have no real property. */
@@ -651,7 +660,13 @@ public class TaskGenerator {
         body.add(buildUrlBlock(baseUrl, path, requestParams, paginator, hasPagination, auth,
             incrementalSync, cursorVar));
         body.beginControlFlow("try");
+        if (incrementalSync != null && incrementalSync.hasStep()) {
+            currentWindowStartVar = cursorVar;
+            currentWindowEndVar = "_windowEnd";
+        }
         buildRequestStatement(body, auth, paginator, requester);
+        currentWindowStartVar = null;
+        currentWindowEndVar = null;
         body.add(buildFetchBlock(paginator));
         if (hasPagination && paginator.isCursor()) {
             body.add(buildCursorStateUpdate(paginator));
@@ -1896,12 +1911,19 @@ public class TaskGenerator {
             String trimmed = strVal.trim();
             boolean looksLikeJsonObj = trimmed.startsWith("{") || trimmed.startsWith("[");
             if (strVal.contains("{{") || strVal.contains("{%")) {
+                // Use window-aware context when the template references stream_interval / stream_slice
+                // and we are generating code for a windowed (step-based) DatetimeBasedCursor stream.
+                boolean needsWindowCtx = currentWindowStartVar != null
+                    && (strVal.contains("stream_interval") || strVal.contains("stream_slice"));
+                String renderExpr = needsWindowCtx
+                    ? interpolateTemplateWithStreamSlice(strVal, currentWindowStartVar, currentWindowEndVar)
+                    : interpolateTemplate(strVal);
                 if (looksLikeJsonObj) {
                     // Template renders to a JSON object/array — parse at runtime so it embeds correctly.
                     b.addStatement("$L.put($S, MAPPER.readValue($L, $T.class))",
-                        mapVar, key, interpolateTemplate(strVal), Object.class);
+                        mapVar, key, renderExpr, Object.class);
                 } else {
-                    b.addStatement("$L.put($S, $L)", mapVar, key, interpolateTemplate(strVal));
+                    b.addStatement("$L.put($S, $L)", mapVar, key, renderExpr);
                 }
             } else if (looksLikeJsonObj) {
                 // Static JSON object/array string — parse at codegen-emit time so it embeds correctly.
@@ -2960,6 +2982,7 @@ public class TaskGenerator {
             .addStatement("slice.put($S, startTime)", "start_time")
             .addStatement("slice.put($S, endTime)", "end_time")
             .addStatement("ctx.put($S, slice)", "stream_slice")
+            .addStatement("ctx.put($S, slice)", "stream_interval")
             .addStatement("return ctx")
             .build();
     }
