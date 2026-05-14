@@ -555,6 +555,28 @@ public final class JinjaRenderer {
     }
 
     /**
+     * Mirrors the Airbyte Python CDK's {@code InterpolatedString} behaviour: after Jinja
+     * rendering, if the entire result string is wrapped in matching single or double quotes,
+     * strip the outer quote characters.
+     *
+     * <p>Airbyte manifests use this idiom to protect special characters (brackets, commas)
+     * from YAML/Jinja interpretation. For example:
+     * {@code "'[{{stream_slice['start_time']}}, {{stream_slice['end_time']}}]'"}
+     * renders to {@code '[1704067200, 1706745600]'} and the Python CDK (via
+     * {@code ast.literal_eval}) strips the outer single quotes to produce
+     * {@code [1704067200, 1706745600]} as the actual query-parameter value.
+     */
+    static String stripOuterQuotes(String s) {
+        if (s == null || s.length() < 2) return s;
+        char first = s.charAt(0);
+        char last = s.charAt(s.length() - 1);
+        if ((first == '\'' && last == '\'') || (first == '"' && last == '"')) {
+            return s.substring(1, s.length() - 1);
+        }
+        return s;
+    }
+
+    /**
      * Render {@code template} against {@code context}. Throws if jinjava
      * collected any error during rendering.
      */
@@ -580,7 +602,7 @@ public final class JinjaRenderer {
             throw new ConnectException(
                 "Jinja render failed for template '" + template + "': " + detail);
         }
-        return result.getOutput();
+        return stripOuterQuotes(result.getOutput());
     }
 
     /**
@@ -596,7 +618,7 @@ public final class JinjaRenderer {
             return template;
         }
         template = preprocess(template);
-        return JINJAVA.renderForResult(template, asObjectMap(context)).getOutput();
+        return stripOuterQuotes(JINJAVA.renderForResult(template, asObjectMap(context)).getOutput());
     }
 
     // Each rewrite function handles its own "nothing to do" early-return, so

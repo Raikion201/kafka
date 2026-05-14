@@ -172,6 +172,10 @@ public class TaskGenerator {
      *  {@code ""} for Airbyte sentinel keys like {@code nothing} that have no real property. */
     private java.util.Set<String> currentSpecPropKeys = java.util.Collections.emptySet();
 
+    /** Required keys from spec.connection_specification.required — used to detect optional
+     *  config keys in URL paths so the codegen can emit a skip-guard when they are missing. */
+    private java.util.Set<String> currentSpecRequiredKeys = java.util.Collections.emptySet();
+
     /**
      * Generate the source task class source file.
      *
@@ -184,6 +188,10 @@ public class TaskGenerator {
         this.currentSpecPropKeys = (spec.getSpec() != null
             && spec.getSpec().getConnectionSpecification() != null)
             ? spec.getSpec().getConnectionSpecification().getProperties().keySet()
+            : java.util.Collections.emptySet();
+        this.currentSpecRequiredKeys = (spec.getSpec() != null
+            && spec.getSpec().getConnectionSpecification() != null)
+            ? new java.util.HashSet<>(spec.getSpec().getConnectionSpecification().getRequired())
             : java.util.Collections.emptySet();
         List<StreamSpec> streams = spec.resolvedStreams();
         if (streams.isEmpty()) {
@@ -312,6 +320,7 @@ public class TaskGenerator {
         typeBuilder.addMethod(buildJinjaCtx());
         typeBuilder.addMethod(buildJinjaCtxWithRecord());
         typeBuilder.addMethod(buildJinjaCtxForStream());
+        typeBuilder.addMethod(buildJinjaCtxWithSlice());
 
         return JavaFile.builder(pkgName, typeBuilder.build())
             .skipJavaLangImports(true)
@@ -634,6 +643,8 @@ public class TaskGenerator {
             }
         }
 
+        // Guard: skip streams whose URL path depends on optional config keys that aren't set.
+        emitOptionalPathConfigGuards(body, path, ClassName.get("java.util", "List"), SOURCE_RECORD);
         body.add(buildUrlBlock(baseUrl, path, requestParams, paginator, hasPagination, auth,
             incrementalSync, cursorVar));
         body.beginControlFlow("try");
@@ -1332,10 +1343,19 @@ public class TaskGenerator {
             boolean firstOfGroup = paramKeys.size() == 1;
             String sep = (pathHasQuery || !firstOfGroup) ? "&" : "?";
             if (tmpl.contains("{{") || tmpl.contains("{%")) {
+                // When the template references stream_slice and we are in a window-sliced
+                // stream (step != null), inject stream_slice.start_time / end_time into the
+                // Jinja context. Airbyte CDK populates stream_slice in DatetimeBasedCursor.
+                boolean usesSlice = tmpl.contains("stream_slice");
+                boolean isWindowed = incrementalSync != null && incrementalSync.hasStep()
+                    && cursorVarName != null;
+                String renderExpr = (usesSlice && isWindowed)
+                    ? interpolateTemplateWithStreamSlice(tmpl, cursorVarName, "_windowEnd")
+                    : interpolateTemplateWithStream(tmpl);
                 b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
                     sep + entry.getKey() + "=",
                     ClassName.get("java.net", "URLEncoder"),
-                    ClassName.get(String.class), interpolateTemplateWithStream(tmpl),
+                    ClassName.get(String.class), renderExpr,
                     ClassName.get("java.nio.charset", "StandardCharsets"));
             } else {
                 // Literal value — URL-encode at codegen time, emit as a string constant.
@@ -1375,6 +1395,42 @@ public class TaskGenerator {
      * {@link JinjaSnippets#interpolateTemplate} so the value is rendered through
      * {@code JinjaRenderer.render(...)} at runtime — same path used for auth headers and cursors.
      */
+    private static final java.util.regex.Pattern CONFIG_KEY_IN_PATH =
+        java.util.regex.Pattern.compile("\\{\\{\\s*config\\[(['\"])([^'\"]+)\\1\\]\\s*\\}\\}");
+
+    /**
+     * Emits an early-return guard for each optional config key referenced in the URL path.
+     * When an optional config key is empty/null (the user didn't provide it), the stream
+     * cannot form a valid URL, so the poll method returns immediately with an empty list.
+     *
+     * <p>Required config keys are skipped — if they are absent the connector would have
+     * already failed validation. Standard cursor/auth fields ({@code start_date},
+     * {@code api_key}, etc.) need no guard because they are always validated at connect time.
+     *
+     * <p>Airbyte Python CDK: stream skips silently when a required config value is not set;
+     * we mirror this by returning an empty record list.
+     */
+    private void emitOptionalPathConfigGuards(CodeBlock.Builder b, String path,
+        ClassName listType, ClassName recordType) {
+        if (path == null || !path.contains("{{")) return;
+        java.util.regex.Matcher m = CONFIG_KEY_IN_PATH.matcher(path);
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+        while (m.find()) {
+            String key = m.group(2);
+            // Emit guard only for keys present in the spec but NOT required.
+            if (!currentSpecRequiredKeys.contains(key) && currentSpecPropKeys.contains(key)) {
+                seen.add(key);
+            }
+        }
+        for (String key : seen) {
+            b.beginControlFlow(
+                "if ($T.valueOf(config.originals().getOrDefault($S, \"\")).isEmpty())",
+                ClassName.get(String.class), key)
+                .addStatement("return new $T<>()", ClassName.get("java.util", "ArrayList"))
+                .endControlFlow();
+        }
+    }
+
     private void addInitialUrlStatement(CodeBlock.Builder b, String baseUrl, String path) {
         String combined = joinUrl(baseUrl, path);
         if (!combined.contains("{{") && !combined.contains("{%")) {
@@ -2809,6 +2865,27 @@ public class TaskGenerator {
             .build();
     }
 
+    private MethodSpec buildJinjaCtxWithSlice() {
+        ClassName mapClass = ClassName.get("java.util", "Map");
+        ClassName linkedHashMap = ClassName.get("java.util", "LinkedHashMap");
+        ParameterizedTypeName mapStringObject = ParameterizedTypeName.get(
+            mapClass, ClassName.get(String.class), ClassName.get(Object.class));
+        return MethodSpec.methodBuilder("jinjaCtxWithSlice")
+            .addModifiers(Modifier.PRIVATE)
+            .returns(mapStringObject)
+            .addParameter(String.class, "streamName")
+            .addParameter(String.class, "startTime")
+            .addParameter(String.class, "endTime")
+            .addStatement("$T ctx = jinjaCtxForStream(streamName)", mapStringObject)
+            .addStatement("$T<$T, $T> slice = new $T<>()",
+                mapClass, ClassName.get(String.class), ClassName.get(Object.class), linkedHashMap)
+            .addStatement("slice.put($S, startTime)", "start_time")
+            .addStatement("slice.put($S, endTime)", "end_time")
+            .addStatement("ctx.put($S, slice)", "stream_slice")
+            .addStatement("return ctx")
+            .build();
+    }
+
     private MethodSpec buildStop() {
         return MethodSpec.methodBuilder("stop")
             .addAnnotation(Override.class)
@@ -2839,6 +2916,24 @@ public class TaskGenerator {
             return "\"" + JinjaSnippets.escapeJavaString(template) + "\"";
         }
         return "render(\"" + JinjaSnippets.escapeJavaString(template) + "\", jinjaCtxForStream(streamName))";
+    }
+
+    /**
+     * Like {@link #interpolateTemplateWithStream} but also injects {@code stream_slice} with
+     * {@code start_time}/{@code end_time} for DatetimeBasedCursor window-sliced streams.
+     * Airbyte CDK puts window bounds in {@code stream_slice} so request_parameters can reference
+     * {@code stream_slice['start_time']} and {@code stream_slice['end_time']}.
+     *
+     * @param startVar  Java variable name holding the window start (cursor variable)
+     * @param endVar    Java variable name holding the window end (typically {@code _windowEnd})
+     */
+    private String interpolateTemplateWithStreamSlice(String template, String startVar, String endVar) {
+        if (template == null || template.isEmpty()) return "\"\"";
+        if (!template.contains("{{") && !template.contains("{%")) {
+            return "\"" + JinjaSnippets.escapeJavaString(template) + "\"";
+        }
+        return "render(\"" + JinjaSnippets.escapeJavaString(template) + "\", jinjaCtxWithSlice(streamName, "
+            + startVar + ", " + endVar + "))";
     }
 
     /** Returns the header name for an ApiKeyAuthenticator (inject_into.field_name or legacy header field). */
