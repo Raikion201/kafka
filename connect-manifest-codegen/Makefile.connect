@@ -4,9 +4,11 @@
 ##   make -f Makefile.connect sample      # samples only
 ##   make -f Makefile.connect register    # register credentialed connectors only (safe for 6 GB minikube)
 ##   make -f Makefile.connect register-all # register credentials + all manifest placeholders (needs >6 GB)
+##   make -f Makefile.connect redeploy    # rebuild JAR + hot-restart standalone Connect (~5 seconds)
 ##   make -f Makefile.connect deploy      # rebuild JAR + trigger Strimzi Kaniko re-build (~4 min)
 
-CONNECT   ?= http://localhost:18083
+CONNECT   ?= http://localhost:8083
+STANDALONE_DIR ?= $(HOME)/kafka/standalone
 BROKER    ?= my-cluster-dual-role-0
 NS        ?= kafka
 MSGS      ?= 3
@@ -18,7 +20,7 @@ JAR_FILE    ?= $(CODEGEN_DIR)build/libs/connect-manifest-codegen-4.4.0-SNAPSHOT.
 JAR_PORT    ?= 8888
 CONNECT_IMG ?= ttl.sh/my-connect-codegen:24h
 
-.PHONY: all status sample register register-all deploy
+.PHONY: all status sample register register-all redeploy deploy
 
 all: status sample
 
@@ -278,6 +280,31 @@ register:
 
 register-all:
 	@python3 -c "$$PY_REGISTER_ALL"
+
+# ── Standalone hot-redeploy (~5 seconds) ────────────────────────────────────
+# Builds the JAR, drops it into the standalone plugin path, kills+restarts
+# the Connect worker. No Docker, no Strimzi, no Kaniko.
+redeploy:
+	@set -e; \
+	cd "$(CODEGEN_DIR)/.." && ./gradlew :connect-manifest-codegen:jar -q; \
+	mkdir -p "$(STANDALONE_DIR)/plugins/codegen"; \
+	cp "$(JAR_FILE)" "$(STANDALONE_DIR)/plugins/codegen/"; \
+	echo "JAR copied to $(STANDALONE_DIR)/plugins/codegen/"; \
+	CONNECT_PID=$$(pgrep -f "ConnectDistributed $(STANDALONE_DIR)/config/connect-distributed.properties" | head -1); \
+	if [ -n "$$CONNECT_PID" ]; then \
+	  echo "Stopping Connect (pid $$CONNECT_PID)..."; \
+	  kill "$$CONNECT_PID"; \
+	  while kill -0 "$$CONNECT_PID" 2>/dev/null; do sleep 0.5; done; \
+	fi; \
+	nohup "$(STANDALONE_DIR)/bin/connect-distributed.sh" \
+	  "$(STANDALONE_DIR)/config/connect-distributed.properties" \
+	  >"$(STANDALONE_DIR)/logs/connect.log" 2>&1 & \
+	NEW_PID=$$!; \
+	echo "Connect restarted (pid $$NEW_PID), waiting for REST API..."; \
+	until curl -sf http://localhost:8083/ >/dev/null 2>&1; do sleep 1; done; \
+	echo "Connect ready. Plugin count:"; \
+	curl -s http://localhost:8083/connector-plugins | python3 -c \
+	  "import json,sys; p=[x for x in json.load(sys.stdin) if 'generated' in x['class']]; print(f'  {len(p)} codegen plugins loaded')"
 
 # ── Strimzi Kaniko re-build ───────────────────────────────────────────────────
 # Builds the JAR, serves it on port JAR_PORT, patches the KafkaConnect CR
