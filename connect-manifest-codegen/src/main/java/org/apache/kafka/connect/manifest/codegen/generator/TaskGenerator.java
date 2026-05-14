@@ -1883,8 +1883,20 @@ public class TaskGenerator {
     private void emitBodyMapPut(CodeBlock.Builder b, String mapVar, String key, Object val)
             throws com.fasterxml.jackson.core.JsonProcessingException {
         if (val instanceof String strVal) {
+            String trimmed = strVal.trim();
+            boolean looksLikeJsonObj = trimmed.startsWith("{") || trimmed.startsWith("[");
             if (strVal.contains("{{") || strVal.contains("{%")) {
-                b.addStatement("$L.put($S, $L)", mapVar, key, interpolateTemplate(strVal));
+                if (looksLikeJsonObj) {
+                    // Template renders to a JSON object/array — parse at runtime so it embeds correctly.
+                    b.addStatement("$L.put($S, MAPPER.readValue($L, $T.class))",
+                        mapVar, key, interpolateTemplate(strVal), Object.class);
+                } else {
+                    b.addStatement("$L.put($S, $L)", mapVar, key, interpolateTemplate(strVal));
+                }
+            } else if (looksLikeJsonObj) {
+                // Static JSON object/array string — parse at codegen-emit time so it embeds correctly.
+                b.addStatement("$L.put($S, MAPPER.readValue($S, $T.class))",
+                    mapVar, key, strVal, Object.class);
             } else {
                 b.addStatement("$L.put($S, $S)", mapVar, key, strVal);
             }
