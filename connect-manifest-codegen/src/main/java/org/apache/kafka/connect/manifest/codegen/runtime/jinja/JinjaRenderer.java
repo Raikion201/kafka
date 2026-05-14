@@ -645,6 +645,23 @@ public final class JinjaRenderer {
         return s != null && (s.indexOf("{{") >= 0 || s.indexOf("{%") >= 0);
     }
 
+    /**
+     * Collapses double-slashes in the path portion of a URL that may arise when a
+     * Jinja expression evaluates to a value that already begins with {@code '/'} but
+     * the template string also has a preceding separator slash.
+     *
+     * <p>Only the portion after {@code "://"} is normalised, so the scheme separator
+     * (e.g. {@code "https://"}) is never touched.</p>
+     */
+    public static String normalizeUrl(String url) {
+        if (url == null) return url;
+        int sep = url.indexOf("://");
+        if (sep < 0) return url;
+        String path = url.substring(sep + 3);
+        if (!path.contains("//")) return url;
+        return url.substring(0, sep + 3) + path.replace("//", "/");
+    }
+
     /** Exposed for filter / function registration tests. */
     public static Jinjava jinjava() {
         return JINJAVA;

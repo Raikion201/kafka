@@ -30,6 +30,7 @@ import java.util.concurrent.Executors;
 public final class SharedHttpClient {
 
     public static final HttpClient INSTANCE = HttpClient.newBuilder()
+        .version(HttpClient.Version.HTTP_1_1)
         .followRedirects(HttpClient.Redirect.NORMAL)
         .executor(Executors.newFixedThreadPool(
             Math.max(4, Runtime.getRuntime().availableProcessors() * 2),

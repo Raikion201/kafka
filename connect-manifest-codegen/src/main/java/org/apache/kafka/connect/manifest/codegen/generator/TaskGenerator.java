@@ -337,6 +337,7 @@ public class TaskGenerator {
         return JavaFile.builder(pkgName, typeBuilder.build())
             .skipJavaLangImports(true)
             .addStaticImport(JINJA_RENDERER, "render")
+            .addStaticImport(JINJA_RENDERER, "normalizeUrl")
             .build();
     }
 
@@ -938,11 +939,16 @@ public class TaskGenerator {
         }
 
         RequesterSpec parentRequester = parentStream.getRetriever().getRequester();
+        if (parentRequester == null) {
+            return MethodSpec.methodBuilder(methodName)
+                .addModifiers(Modifier.PRIVATE)
+                .addException(Exception.class)
+                .returns(listString)
+                .addStatement("return $T.emptyList()", Collections.class)
+                .build();
+        }
         String baseUrl = parentRequester.effectiveBaseUrl();
         String path    = parentRequester.getPath();
-        if (!baseUrl.isEmpty() && !baseUrl.endsWith("/") && !path.isEmpty() && !path.startsWith("/")) {
-            baseUrl = baseUrl + "/";
-        }
         PaginatorSpec parentPaginator = parentStream.getRetriever().getPaginator();
         List<String> fieldPath = extractFieldPath(parentStream);
 
@@ -970,7 +976,7 @@ public class TaskGenerator {
         // configured start date to "now", so all parent records are included in one pass.
         IncrementalSyncSpec parentSync = parentStream.getIncrementalSync();
         boolean parentIsWindowed = parentSync != null && parentSync.isDatetimeBased()
-            && parentRequester != null && parentRequester.getRequestBodyJson() != null
+            && parentRequester.getRequestBodyJson() != null
             && parentRequester.getRequestBodyJson().values().stream()
                 .anyMatch(v -> v instanceof String s
                     && (s.contains("stream_interval") || s.contains("stream_slice")));
@@ -1156,7 +1162,7 @@ public class TaskGenerator {
             body.addStatement("$T jwtToken = buildJwt()", String.class);
         }
         StringBuilder reqFmt = new StringBuilder(
-            "$T request = $T.newBuilder()\n        .uri($T.create(urlBuilder.toString().trim().replace(\" \", \"%20\")))");
+            "$T request = $T.newBuilder()\n        .uri($T.create(normalizeUrl(urlBuilder.toString().trim().replace(\" \", \"%20\"))))");
         List<Object> reqArgs = new ArrayList<>();
         reqArgs.add(HTTP_REQUEST);
         reqArgs.add(HTTP_REQUEST);
@@ -1533,10 +1539,15 @@ public class TaskGenerator {
      *
      * @return the new value of {@code needsPlus} after appending this segment
      */
-    // Joins base URL and path, preventing double slash when base ends with '/' and path starts with '/'.
+    // Joins base URL and path: deduplicates when both have the boundary, adds '/' when neither does.
+    // When path is a Jinja expression that renders to a leading '/', the resulting '//' is
+    // collapsed at runtime by normalizeUrl() (emitted in every URI.create() call site).
     private static String joinUrl(String base, String path) {
         if (base.endsWith("/") && path.startsWith("/")) {
-            return base + path.substring(1);
+            return base + path.substring(1);  // deduplicate
+        }
+        if (!base.isEmpty() && !path.isEmpty() && !base.endsWith("/") && !path.startsWith("/")) {
+            return base + "/" + path;  // add missing separator
         }
         return base + path;
     }
@@ -1684,10 +1695,6 @@ public class TaskGenerator {
             b.addStatement("urlBuilder.append($S + pageLimit)", sep + paginator.sizeParamName() + "=");
             b.endControlFlow();
         }
-    }
-
-    private CodeBlock buildFetchBlock(PaginatorSpec paginator) {
-        return buildFetchBlock(paginator, null);
     }
 
     private CodeBlock buildFetchBlock(PaginatorSpec paginator, StreamSpec stream) {
@@ -2228,7 +2235,7 @@ public class TaskGenerator {
         }
 
         StringBuilder fmt = new StringBuilder(
-            "$T request = $T.newBuilder()\n        .uri($T.create(($L).trim().replace(\" \", \"%20\")))");
+            "$T request = $T.newBuilder()\n        .uri($T.create(normalizeUrl(($L).trim().replace(\" \", \"%20\"))))");
         List<Object> args = new ArrayList<>();
         args.add(HTTP_REQUEST);
         args.add(HTTP_REQUEST);
@@ -3746,7 +3753,7 @@ public class TaskGenerator {
         } else if (auth != null && auth.isJwt()) {
             body.addStatement("$T _jwtToken_$L = buildJwt()", String.class, reqVar);
         }
-        StringBuilder fmt = new StringBuilder("$T $L = $T.newBuilder()\n        .uri($T.create($L))");
+        StringBuilder fmt = new StringBuilder("$T $L = $T.newBuilder()\n        .uri($T.create(normalizeUrl($L)))");
         List<Object> args = new ArrayList<>();
         args.add(HTTP_REQUEST);
         args.add(reqVar);
