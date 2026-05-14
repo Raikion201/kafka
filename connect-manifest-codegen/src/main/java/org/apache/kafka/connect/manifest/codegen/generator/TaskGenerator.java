@@ -473,11 +473,13 @@ public class TaskGenerator {
         // Config-time transforms — applied once before any other initialization reads config.
         m.addStatement("this.configTransformer = $T.fromJson($S)",
             CONFIG_TRANSFORMER_FACTORY, configTransformsJson(spec));
-        m.addStatement("@$T($S) $T<$T, $T> _cfgMap = ($T<$T, $T>) ($T<?, ?>) this.config.values()",
-            SuppressWarnings.class, "unchecked",
+        // Use originalsStrings() (not values()) so that user-supplied config fields
+        // not declared in the spec's ConfigDef still reach the Jinja context. This
+        // mirrors Airbyte Python's JinjaInterpolation.eval(), which passes the raw
+        // config dict unfiltered (airbyte_cdk/sources/declarative/interpolation/jinja.py).
+        m.addStatement("$T<$T, $T> _cfgMap = new $T<$T, $T>(this.config.originalsStrings())",
             Map.class, String.class, Object.class,
-            Map.class, String.class, Object.class,
-            Map.class);
+            java.util.LinkedHashMap.class, String.class, Object.class);
         m.beginControlFlow("if (!this.configTransformer.isNoop())")
             .addStatement("this.configTransformer.apply(_cfgMap)")
             .endControlFlow();

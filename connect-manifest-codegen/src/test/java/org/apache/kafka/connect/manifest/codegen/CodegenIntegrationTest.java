@@ -243,6 +243,25 @@ public class CodegenIntegrationTest {
             "Toggl BasicHttpAuthenticator task must set Authorization: Basic header");
     }
 
+    // ── spec/auth field-name mismatch: jinjaCtx must see originals, not ConfigDef-filtered values ──
+    // appfollow's spec declares `api_secret` but its authenticator reads `{{ config['api_key'] }}`.
+    // The generated _cfgMap must therefore be built from `originalsStrings()` (raw user input)
+    // rather than `config.values()` (which strips fields not in ConfigDef). This mirrors Airbyte
+    // Python's JinjaInterpolation.eval, which passes the raw config dict unfiltered
+    // (airbyte_cdk/sources/declarative/interpolation/jinja.py: context = {"config": config, ...}).
+    @Test
+    void appfollow_taskBuildsCfgMapFromOriginalsStrings() throws Exception {
+        String taskSrc = generate("source-appfollow.yaml").task.toString();
+        assertTrue(
+            taskSrc.contains("new LinkedHashMap<String, Object>(this.config.originalsStrings())"),
+            "Task must build _cfgMap from originalsStrings() so spec-undeclared fields like "
+                + "appfollow's `api_key` (declared as `api_secret` in spec) reach the Jinja context. "
+                + "Found task source did not contain the originalsStrings()-backed LinkedHashMap.");
+        assertTrue(taskSrc.contains("render(\"{{ config['api_key'] }}\""),
+            "Task must still emit the manifest's `config['api_key']` interpolation for the "
+                + "X-AppFollow-API-Token header.");
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     // PAGINATION ASSERTIONS
     // ══════════════════════════════════════════════════════════════════════════
