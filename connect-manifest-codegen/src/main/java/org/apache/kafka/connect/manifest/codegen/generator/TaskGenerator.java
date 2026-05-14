@@ -1364,7 +1364,7 @@ public class TaskGenerator {
                 String renderExpr = (usesSlice && isWindowed)
                     ? interpolateTemplateWithStreamSlice(tmpl, cursorVarName, "_windowEnd")
                     : interpolateTemplateWithStream(tmpl);
-                b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
+                b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L).trim(), $T.UTF_8))",
                     sep + entry.getKey() + "=",
                     ClassName.get("java.net", "URLEncoder"),
                     ClassName.get(String.class), renderExpr,
@@ -3224,7 +3224,7 @@ public class TaskGenerator {
     private static Pattern streamPartitionPattern(String cursorField) {
         String q = Pattern.quote(cursorField);
         return Pattern.compile(
-            "\\{\\{\\s*stream_partition(?:\\." + q
+            "\\{\\{\\s*(?:stream_partition|stream_slice)(?:\\." + q
             + "|\\[\\s*['\"]" + q + "['\"]\\s*\\])\\s*\\}\\}");
     }
 
@@ -3338,7 +3338,7 @@ public class TaskGenerator {
                     }
                 }
                 if (tmpl.contains("{{") || tmpl.contains("{%")) {
-                    b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
+                    b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L).trim(), $T.UTF_8))",
                         sep + entry.getKey() + "=",
                         ClassName.get("java.net", "URLEncoder"),
                         ClassName.get(String.class), interpolateTemplateWithStream(tmpl),
