@@ -660,7 +660,21 @@ public class TaskGenerator {
         body.add(buildUrlBlock(baseUrl, path, requestParams, paginator, hasPagination, auth,
             incrementalSync, cursorVar));
         body.beginControlFlow("try");
+        boolean bodyUsesStreamInterval = requester.getRequestBodyJson() != null
+            && requester.getRequestBodyJson().values().stream()
+                .anyMatch(v -> v instanceof String s
+                    && (s.contains("stream_interval") || s.contains("stream_slice")));
         if (incrementalSync != null && incrementalSync.hasStep()) {
+            currentWindowStartVar = cursorVar;
+            currentWindowEndVar = "_windowEnd";
+        } else if (isIncremental && bodyUsesStreamInterval) {
+            // No step: single wide window from cursor to now; stream_interval still needed in body
+            String wFmt = incrementalSync.getDatetimeFormat() != null
+                ? incrementalSync.getDatetimeFormat() : "%s";
+            body.addStatement("$T _windowEnd = $T.formatDate($T.now($T.UTC), $S)",
+                String.class, DATETIME_WINDOW_HELPER,
+                ClassName.get("java.time", "ZonedDateTime"),
+                ClassName.get("java.time", "ZoneOffset"), wFmt);
             currentWindowStartVar = cursorVar;
             currentWindowEndVar = "_windowEnd";
         }
@@ -944,8 +958,42 @@ public class TaskGenerator {
             body.endControlFlow();
         }
 
+        // When the parent stream has a windowed DatetimeBasedCursor, its request_body_json may
+        // reference stream_interval.  For the key-fetcher we use a single wide window: from the
+        // configured start date to "now", so all parent records are included in one pass.
+        IncrementalSyncSpec parentSync = parentStream.getIncrementalSync();
+        boolean parentIsWindowed = parentSync != null && parentSync.isDatetimeBased()
+            && parentRequester != null && parentRequester.getRequestBodyJson() != null
+            && parentRequester.getRequestBodyJson().values().stream()
+                .anyMatch(v -> v instanceof String s
+                    && (s.contains("stream_interval") || s.contains("stream_slice")));
+        if (parentIsWindowed) {
+            String fmt = parentSync.getDatetimeFormat() != null ? parentSync.getDatetimeFormat() : "%s";
+            IncrementalSyncSpec.DatetimeSpec startDt = parentSync.getStartDatetime();
+            String startFmt = (startDt != null && startDt.getDatetimeFormat() != null)
+                ? startDt.getDatetimeFormat() : fmt;
+            String startExpr = (startDt != null && startDt.getDatetime() != null)
+                ? interpolateTemplate(startDt.getDatetime()) : "\"0\"";
+            if (!startFmt.equals(fmt)) {
+                body.addStatement("$T _kfWindowStart = $T.formatDate($T.parseDate($L, $S), $S)",
+                    String.class, DATETIME_WINDOW_HELPER, DATETIME_WINDOW_HELPER, startExpr, startFmt, fmt);
+            } else {
+                body.addStatement("$T _kfWindowStart = $L", String.class, startExpr);
+            }
+            body.addStatement("$T _kfWindowEnd = $T.formatDate($T.now($T.UTC), $S)",
+                String.class, DATETIME_WINDOW_HELPER,
+                ClassName.get("java.time", "ZonedDateTime"),
+                ClassName.get("java.time", "ZoneOffset"), fmt);
+            currentWindowStartVar = "_kfWindowStart";
+            currentWindowEndVar = "_kfWindowEnd";
+            // jinjaCtxWithSlice expects a local 'streamName' variable in scope
+            body.addStatement("$T streamName = $S", String.class, parentStreamName);
+        }
+
         // Build and send request (same auth as child stream).
         buildRequestStatement(body, auth, null, parentRequester);
+        currentWindowStartVar = null;
+        currentWindowEndVar = null;
         body.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
         body.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");
         body.addStatement("break");
