@@ -167,6 +167,9 @@ public class TaskGenerator {
 
     private static final String APP_VERSION = "1.0.0";
 
+    /** Monotonically-increasing counter used to give unique variable names in emitNestedBodyPut. */
+    private int bodyPutSeq = 0;
+
     /** Keys declared in the current manifest's spec.connection_specification.properties.
      *  Set at the start of {@link #generate} so credential resolution can fall back to
      *  {@code ""} for Airbyte sentinel keys like {@code nothing} that have no real property. */
@@ -932,6 +935,9 @@ public class TaskGenerator {
         body.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");
         body.addStatement("break");
         body.endControlFlow();
+        body.beginControlFlow("if (response.body() == null || response.body().isBlank())");
+        body.addStatement("break");
+        body.endControlFlow();
         body.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
 
         // Extract next cursor before navigating field path.
@@ -1152,6 +1158,9 @@ public class TaskGenerator {
         body.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");
         body.addStatement(
             "throw new $T(\"HTTP \" + response.statusCode() + \" from \" + urlBuilder)", CONNECT_EXCEPTION);
+        body.endControlFlow();
+        body.beginControlFlow("if (response.body() == null || response.body().isBlank())");
+        body.addStatement("return result");
         body.endControlFlow();
         body.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
 
@@ -1613,6 +1622,9 @@ public class TaskGenerator {
             "throw new $T(\"HTTP \" + response.statusCode() + \" from \" + " + urlRef + ")",
             CONNECT_EXCEPTION);
         b.endControlFlow();
+        b.beginControlFlow("if (response.body() == null || response.body().isBlank())");
+        b.addStatement("return result");
+        b.endControlFlow();
         b.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
         return b.build();
     }
@@ -1821,10 +1833,53 @@ public class TaskGenerator {
     }
 
     /**
-     * Emits a single {@code _bodyMap.put(key, value)} statement.
-     * Jinja-templated strings are wrapped in {@code render(...)}, nested maps/lists are
-     * serialized to a JSON literal and decoded at runtime via {@code MAPPER.readValue}.
+     * Emits a put into a potentially-nested body map using a field_path.
+     * Each call uses a unique numeric suffix on temp-variable names so repeated
+     * calls with the same key names in the same method body never clash.
      */
+    private void emitNestedBodyPut(
+        CodeBlock.Builder b,
+        String mapVar,
+        java.util.List<String> path,
+        String valueFmt,
+        Object... valueArgs
+    ) {
+        if (path == null || path.isEmpty()) return;
+        if (path.size() == 1) {
+            b.addStatement(mapVar + ".put($S, " + valueFmt + ")", prepend(path.get(0), valueArgs));
+        } else {
+            int seq = bodyPutSeq++;
+            String leafKey = path.get(path.size() - 1);
+            // Declare temp var for first intermediate level
+            String firstKey = path.get(0);
+            String firstVar = "_nb" + seq + "_0";
+            b.addStatement(
+                "@SuppressWarnings(\"unchecked\") $T<String, Object> " + firstVar
+                    + " = ($T<String, Object>) " + mapVar + ".computeIfAbsent($S, k -> new $T<>())",
+                java.util.Map.class, java.util.Map.class, firstKey,
+                ClassName.get("java.util", "LinkedHashMap"));
+            String innerMap = firstVar;
+            for (int i = 1; i < path.size() - 1; i++) {
+                String seg = path.get(i);
+                String segVar = "_nb" + seq + "_" + i;
+                b.addStatement(
+                    "@SuppressWarnings(\"unchecked\") $T<String, Object> " + segVar
+                        + " = ($T<String, Object>) " + innerMap + ".computeIfAbsent($S, k -> new $T<>())",
+                    java.util.Map.class, java.util.Map.class, seg,
+                    ClassName.get("java.util", "LinkedHashMap"));
+                innerMap = segVar;
+            }
+            b.addStatement(innerMap + ".put($S, " + valueFmt + ")", prepend(leafKey, valueArgs));
+        }
+    }
+
+    private static Object[] prepend(Object first, Object[] rest) {
+        Object[] result = new Object[rest.length + 1];
+        result[0] = first;
+        System.arraycopy(rest, 0, result, 1, rest.length);
+        return result;
+    }
+
     private void emitBodyMapPut(CodeBlock.Builder b, String mapVar, String key, Object val)
             throws com.fasterxml.jackson.core.JsonProcessingException {
         if (val instanceof String strVal) {
@@ -1891,28 +1946,29 @@ public class TaskGenerator {
                 }
             }
             if (isBodyInjectedJson(paginator)) {
-                String fieldName = paginator.getPageTokenOption().getFieldName();
-                if (fieldName != null && !fieldName.isEmpty()) {
+                java.util.List<String> tokenPath = paginator.getPageTokenOption().getEffectivePath();
+                if (!tokenPath.isEmpty()) {
                     if (paginator.isCursor()) {
                         b.beginControlFlow("if (nextCursor != null)");
-                        b.addStatement("$L.put($S, nextCursor)", bodyMapVar, fieldName);
+                        emitNestedBodyPut(b, bodyMapVar, tokenPath, "nextCursor");
                         b.endControlFlow();
                     } else if (paginator.isOffsetIncrement()) {
-                        b.addStatement("$L.put($S, $T.valueOf(offset))", bodyMapVar, fieldName, String.class);
+                        emitNestedBodyPut(b, bodyMapVar, tokenPath, "$T.valueOf(offset)", String.class);
                     } else if (paginator.isPageIncrement()) {
-                        b.addStatement("$L.put($S, $T.valueOf(page))", bodyMapVar, fieldName, String.class);
+                        emitNestedBodyPut(b, bodyMapVar, tokenPath, "$T.valueOf(page)", String.class);
                     }
                 }
             }
             if (paginator != null && paginator.getPageSizeOption() != null
                     && "body_json".equalsIgnoreCase(paginator.getPageSizeOption().getInjectInto())) {
-                if (paginator.isCursor()) {
-                    // For cursor paginators pageLimit is not declared as a variable; use literal.
-                    b.addStatement("$L.put($S, $L)",
-                        bodyMapVar, paginator.getPageSizeOption().getFieldName(), paginator.pageSize());
-                } else {
-                    b.addStatement("$L.put($S, $T.valueOf(pageLimit))",
-                        bodyMapVar, paginator.getPageSizeOption().getFieldName(), String.class);
+                java.util.List<String> sizePath = paginator.getPageSizeOption().getEffectivePath();
+                if (!sizePath.isEmpty()) {
+                    if (paginator.isCursor()) {
+                        // For cursor paginators pageLimit is not declared as a variable; use literal.
+                        emitNestedBodyPut(b, bodyMapVar, sizePath, "$L", paginator.pageSize());
+                    } else {
+                        emitNestedBodyPut(b, bodyMapVar, sizePath, "$T.valueOf(pageLimit)", String.class);
+                    }
                 }
             }
             b.addStatement("$T $L = MAPPER.writeValueAsString($L)", String.class, bodyStrVar, bodyMapVar);
@@ -3465,6 +3521,9 @@ public class TaskGenerator {
             suffix, suffix);
         body.addStatement(isFirstLevel ? "return keys" : "continue");
         body.endControlFlow();
+        body.beginControlFlow("if (_resp$L.body() == null || _resp$L.body().isBlank())", suffix, suffix);
+        body.addStatement(isFirstLevel ? "return keys" : "continue");
+        body.endControlFlow();
 
         body.addStatement("$T _json$L = MAPPER.readValue(_resp$L.body(), $T.class)",
             Object.class, suffix, suffix, Object.class);
@@ -3677,6 +3736,10 @@ public class TaskGenerator {
 
         // 4xx/5xx: skip + advance (don't crash the connector).
         body.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");
+        body.addStatement("$L = _nextIdx", idxField);
+        body.addStatement("return result");
+        body.endControlFlow();
+        body.beginControlFlow("if (response.body() == null || response.body().isBlank())");
         body.addStatement("$L = _nextIdx", idxField);
         body.addStatement("return result");
         body.endControlFlow();

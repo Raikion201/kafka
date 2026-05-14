@@ -129,6 +129,9 @@ public class PaginatorSpec {
         @JsonProperty("field_name")
         private String fieldName;
 
+        @JsonProperty("field_path")
+        private java.util.List<String> fieldPath;
+
         @JsonProperty("inject_into")
         private String injectInto;
 
@@ -141,11 +144,31 @@ public class PaginatorSpec {
         }
 
         public String getFieldName() {
-            return fieldName;
+            if (fieldName != null) return fieldName;
+            if (fieldPath != null && !fieldPath.isEmpty()) return fieldPath.get(fieldPath.size() - 1);
+            return null;
         }
 
         public void setFieldName(String fieldName) {
             this.fieldName = fieldName;
+        }
+
+        public java.util.List<String> getFieldPath() {
+            return fieldPath;
+        }
+
+        public void setFieldPath(java.util.List<String> fieldPath) {
+            this.fieldPath = fieldPath;
+        }
+
+        /**
+         * Returns the effective path as a list of segments.
+         * Uses {@code field_path} when present; otherwise wraps {@code field_name} in a singleton.
+         */
+        public java.util.List<String> getEffectivePath() {
+            if (fieldPath != null && !fieldPath.isEmpty()) return fieldPath;
+            if (fieldName != null) return java.util.List.of(fieldName);
+            return java.util.List.of();
         }
 
         public String getInjectInto() {
