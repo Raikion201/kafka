@@ -17,28 +17,24 @@
 package org.apache.kafka.connect.manifest.codegen.runtime;
 
 import java.net.http.HttpClient;
-import java.util.concurrent.Executors;
 
 /**
  * JVM-wide shared {@link HttpClient} for all generated connector tasks.
  *
  * <p>Running 500+ connectors each with their own {@code HttpClient} creates one
  * thread-pool per client — easily 5000+ threads. Sharing one client reduces this
- * to a single fixed-size pool while still allowing concurrent requests (HttpClient
- * is fully thread-safe and multiplexes over HTTP/1.1 connections internally).
+ * to a single instance while still allowing concurrent requests (HttpClient is
+ * fully thread-safe and multiplexes over HTTP/1.1 connections internally).
+ *
+ * <p>No custom executor is set; the HTTP client uses its own internal selector thread
+ * and cached-thread-pool to avoid deadlocks with JDK 26's async DNS resolver under
+ * a fixed-size executor.
  */
 public final class SharedHttpClient {
 
     public static final HttpClient INSTANCE = HttpClient.newBuilder()
         .version(HttpClient.Version.HTTP_1_1)
         .followRedirects(HttpClient.Redirect.NORMAL)
-        .executor(Executors.newFixedThreadPool(
-            Math.max(4, Runtime.getRuntime().availableProcessors() * 2),
-            r -> {
-                Thread t = new Thread(r, "shared-http-worker");
-                t.setDaemon(true);
-                return t;
-            }))
         .build();
 
     private SharedHttpClient() {
