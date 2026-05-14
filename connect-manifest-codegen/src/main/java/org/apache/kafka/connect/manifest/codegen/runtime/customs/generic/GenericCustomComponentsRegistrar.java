@@ -45,8 +45,14 @@ public final class GenericCustomComponentsRegistrar {
     private GenericCustomComponentsRegistrar() {
     }
 
+    private static final String RSS = "source_rss.components.";
+
     /** Idempotent registration. Called from the static initializer and by generated task code. */
     public static void register() {
+        CustomComponentRegistry.register(
+            RSS + "CustomExtractor",
+            RssCustomExtractor::new);
+
         CustomComponentRegistry.register(
             SDM + "CustomFieldTransformation",
             ChargebeeCustomFieldTransformation::new);

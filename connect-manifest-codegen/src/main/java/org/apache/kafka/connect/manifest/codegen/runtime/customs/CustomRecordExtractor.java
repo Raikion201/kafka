@@ -17,7 +17,9 @@
 package org.apache.kafka.connect.manifest.codegen.runtime.customs;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -27,4 +29,18 @@ public interface CustomRecordExtractor extends CustomComponent {
 
     /** Extract zero or more records from a parsed HTTP response body. */
     List<Map<String, Object>> extract(JsonNode response);
+
+    /**
+     * Extract records from the raw HTTP response body string.
+     * The default implementation parses the body as JSON and delegates to {@link #extract(JsonNode)}.
+     * Override this method to handle non-JSON response bodies (e.g., XML for RSS feeds).
+     */
+    default List<Map<String, Object>> extractFromRawBody(String body) {
+        if (body == null || body.isBlank()) return Collections.emptyList();
+        try {
+            return extract(new ObjectMapper().readTree(body));
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to parse response body as JSON in custom extractor", e);
+        }
+    }
 }

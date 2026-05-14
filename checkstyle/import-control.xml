@@ -539,6 +539,8 @@
       <allow pkg="javax.crypto" />
       <allow pkg="javax.lang.model" />
       <allow pkg="javax.tools" />
+      <allow pkg="javax.xml.parsers" />
+      <allow pkg="org.w3c.dom" />
       <allow pkg="com.sun.net.httpserver" />
     </subpackage>
 

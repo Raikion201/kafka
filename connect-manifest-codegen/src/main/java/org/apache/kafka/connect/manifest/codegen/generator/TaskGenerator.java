@@ -624,7 +624,12 @@ public class TaskGenerator {
         // Normal stream (with optional DatetimeBasedCursor).
         String baseUrl = requester.effectiveBaseUrl();
         String path = requester.getPath();
-        if (!baseUrl.isEmpty() && !baseUrl.endsWith("/") && !path.isEmpty() && !path.startsWith("/")) {
+        // Don't add "/" when path is a pure Jinja expression (starts with {{ or {%):
+        // the expression may evaluate to a string starting with "/" at runtime,
+        // which would produce a double-slash if we also append "/" here.
+        boolean pathIsJinjaExpr = path.startsWith("{{") || path.startsWith("{%");
+        if (!baseUrl.isEmpty() && !baseUrl.endsWith("/") && !path.isEmpty()
+                && !path.startsWith("/") && !pathIsJinjaExpr) {
             baseUrl = baseUrl + "/";
         }
         String streamName = stream.getName();
@@ -683,7 +688,7 @@ public class TaskGenerator {
         buildRequestStatement(body, auth, paginator, requester);
         currentWindowStartVar = null;
         currentWindowEndVar = null;
-        body.add(buildFetchBlock(paginator));
+        body.add(buildFetchBlock(paginator, stream));
         if (hasPagination && paginator.isCursor()) {
             body.add(buildCursorStateUpdate(paginator));
         }
@@ -802,7 +807,7 @@ public class TaskGenerator {
 
         body.beginControlFlow("try");
         buildRequestStatement(body, auth, paginator, requester);
-        body.add(buildFetchBlock(paginator));
+        body.add(buildFetchBlock(paginator, stream));
         if (hasPagination && paginator.isCursor()) {
             body.add(buildCursorStateUpdate(paginator));
         }
@@ -1227,7 +1232,7 @@ public class TaskGenerator {
         body.beginControlFlow("if (response.body() == null || response.body().isBlank())");
         body.addStatement("return result");
         body.endControlFlow();
-        body.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
+        emitJsonInit(body, stream);
 
         if (isCustomExtractor(stream)) {
             body.add(buildCustomExtractorNavBlock(stream.getRetriever().getRecordSelector().getExtractor().getClassName()));
@@ -1682,6 +1687,10 @@ public class TaskGenerator {
     }
 
     private CodeBlock buildFetchBlock(PaginatorSpec paginator) {
+        return buildFetchBlock(paginator, null);
+    }
+
+    private CodeBlock buildFetchBlock(PaginatorSpec paginator, StreamSpec stream) {
         String urlRef = isRequestPath(paginator) ? "url" : "urlBuilder";
         CodeBlock.Builder b = CodeBlock.builder();
         b.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
@@ -1693,7 +1702,11 @@ public class TaskGenerator {
         b.beginControlFlow("if (response.body() == null || response.body().isBlank())");
         b.addStatement("return result");
         b.endControlFlow();
-        b.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
+        if (isCustomExtractor(stream)) {
+            b.addStatement("$T json = null", Object.class);
+        } else {
+            b.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
+        }
         return b.build();
     }
 
@@ -1701,20 +1714,36 @@ public class TaskGenerator {
         if (stream == null || stream.getRetriever() == null) return false;
         RecordSelectorSpec sel = stream.getRetriever().getRecordSelector();
         if (sel == null || sel.getExtractor() == null) return false;
-        return "CustomRecordExtractor".equals(sel.getExtractor().getType())
-            && sel.getExtractor().getClassName() != null
+        // Accept: type=CustomRecordExtractor with class_name, OR class_name only (no type).
+        boolean hasClassName = sel.getExtractor().getClassName() != null
             && !sel.getExtractor().getClassName().isBlank();
+        if (!hasClassName) return false;
+        String t = sel.getExtractor().getType();
+        return t == null || t.isBlank() || "CustomRecordExtractor".equals(t);
     }
 
     private CodeBlock buildCustomExtractorNavBlock(String className) {
         CodeBlock.Builder b = CodeBlock.builder();
+        // Use extractFromRawBody so the extractor receives the original bytes,
+        // enabling non-JSON bodies (e.g., XML for RSS) to be handled correctly.
         b.addStatement(
             "$T<$T<$T, $T>> _extracted = $T.create($S, $T.class, this.config.originalsStrings(), $T.of())"
-                + ".extract(MAPPER.readTree(MAPPER.writeValueAsString(json)))",
+                + ".extractFromRawBody(response.body())",
             List.class, Map.class, String.class, Object.class,
             CUSTOM_REGISTRY, className, CUSTOM_RECORD_EXTRACTOR, Map.class);
         b.addStatement("json = _extracted");
         return b.build();
+    }
+
+    /** Emits {@code Object json = ...;} for the main poll method, bypassing JSON parsing
+     *  when a custom extractor is present (it handles raw body parsing itself). */
+    private void emitJsonInit(CodeBlock.Builder body, StreamSpec stream) {
+        if (isCustomExtractor(stream)) {
+            // Placeholder — actual value set by buildCustomExtractorNavBlock via json = _extracted.
+            body.addStatement("$T json = null", Object.class);
+        } else {
+            body.addStatement("$T json = MAPPER.readValue(response.body(), $T.class)", Object.class, Object.class);
+        }
     }
 
     private CodeBlock buildFieldPathNav(List<String> fieldPath, boolean hasPagination) {
@@ -1765,22 +1794,33 @@ public class TaskGenerator {
 
         // For DatetimeBasedCursor: advance cursor before emitting so offsets are current.
         // With step: advance to window end (+ granularity); without step: scan records for max.
+        // Capture the cursor value BEFORE the update so that record_filter conditions like
+        // {{ record['published'] >= stream_interval['start_time'] }} use the window start,
+        // not the post-update max cursor value.
+        String prevCursorVar = null;
         if (cursorVarName != null && jsonCursorField != null) {
             if (incrementalSync != null && incrementalSync.hasStep()) {
                 emitWindowCursorAdvance(b, incrementalSync, cursorVarName);
             } else {
+                prevCursorVar = "_prevCursorForSlice";
+                b.addStatement("$T $L = $L", String.class, prevCursorVar, cursorVarName);
                 b.add(buildIncrementalCursorUpdate(cursorVarName, jsonCursorField));
             }
         }
 
         CodeBlock positionMap = buildPositionMapCode(paginator, cursorVarName);
         b.beginControlFlow("for ($T record : records)", Object.class);
-        b.add(buildPipelineEmitBlock(pipelineField, positionMap));
+        b.add(buildPipelineEmitBlock(pipelineField, positionMap, prevCursorVar));
         b.endControlFlow();
         return b.build();
     }
 
     private CodeBlock buildPipelineEmitBlock(String pipelineField, CodeBlock positionMap) {
+        return buildPipelineEmitBlock(pipelineField, positionMap, null);
+    }
+
+    private CodeBlock buildPipelineEmitBlock(String pipelineField, CodeBlock positionMap,
+                                             String prevCursorVar) {
         CodeBlock.Builder b = CodeBlock.builder();
         ParameterizedTypeName mapStrObj = ParameterizedTypeName.get(
             ClassName.get("java.util", "Map"),
@@ -1795,6 +1835,21 @@ public class TaskGenerator {
         b.addStatement("@$T($S) $T _tpRec = ($T) record", SuppressWarnings.class, "unchecked",
             mapStrObj, mapStrObj);
         b.addStatement("$T _tpCtx = jinjaCtx(_tpRec)", mapStrObj);
+        if (prevCursorVar != null) {
+            // Populate stream_interval so record_filter conditions like
+            // {{ record['published'] >= stream_interval['start_time'] }} can evaluate correctly.
+            // Use the cursor value captured BEFORE the batch update (not the post-update max).
+            b.addStatement(
+                "_tpCtx.put($S, $T.of($S, $L != null ? $L : \"\", $S, \"\"))",
+                "stream_interval", Map.class,
+                "start_time", prevCursorVar, prevCursorVar,
+                "end_time");
+            b.addStatement(
+                "_tpCtx.put($S, $T.of($S, $L != null ? $L : \"\", $S, \"\"))",
+                "stream_slice", Map.class,
+                "start_time", prevCursorVar, prevCursorVar,
+                "end_time");
+        }
         b.addStatement("$T _tpKept = $L.process(_tpRec, _tpCtx)", optMapStrObj, pipelineField);
         b.beginControlFlow("if (_tpKept.isEmpty())");
         b.addStatement("continue");
@@ -3252,7 +3307,7 @@ public class TaskGenerator {
 
         body.beginControlFlow("try");
         buildRequestStatement(body, auth, paginator, requester);
-        body.add(buildFetchBlock(paginator));
+        body.add(buildFetchBlock(paginator, stream));
         if (hasPagination && paginator.isCursor()) {
             body.add(buildCursorStateUpdate(paginator));
         }
