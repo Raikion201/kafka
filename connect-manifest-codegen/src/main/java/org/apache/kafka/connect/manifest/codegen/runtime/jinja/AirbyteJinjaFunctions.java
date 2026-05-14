@@ -34,6 +34,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAmount;
+import java.util.List;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -350,30 +351,36 @@ public final class AirbyteJinjaFunctions {
      * uses for strftime {@code %z} and unquoted literal {@code Z} characters).
      * Standard Java parsers require {@code +HH:MM} — this method normalises the input first.</p>
      */
+    private static final List<DateTimeFormatter> FALLBACK_OFFSET_FMTS = List.of(
+        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssZ"),
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ssX"),
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ssZ")
+    );
+
+    private static final List<DateTimeFormatter> FALLBACK_LOCAL_FMTS = List.of(
+        DateTimeFormatter.ISO_LOCAL_DATE_TIME,
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    );
+
     static ZonedDateTime parseToZdt(String s) {
-        String trimmed = s.trim();
+        String t = s.trim();
         try {
-            return ZonedDateTime.parse(trimmed);
-        } catch (DateTimeParseException ignored) {
-            // try offset
-        }
+            return ZonedDateTime.parse(t);
+        } catch (DateTimeParseException ignored) { /* try next */ }
         try {
-            return OffsetDateTime.parse(trimmed).toZonedDateTime();
-        } catch (DateTimeParseException ignored) {
-            // try compact +HHMM form (no colon), e.g. "2024-01-15T10:30:45+0000"
+            return OffsetDateTime.parse(t).toZonedDateTime();
+        } catch (DateTimeParseException ignored) { /* try next */ }
+        for (DateTimeFormatter fmt : FALLBACK_OFFSET_FMTS) {
+            try {
+                return OffsetDateTime.parse(t, fmt).toZonedDateTime();
+            } catch (DateTimeParseException ignored) { /* try next */ }
         }
-        try {
-            return OffsetDateTime.parse(trimmed,
-                DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssZ")).toZonedDateTime();
-        } catch (DateTimeParseException ignored) {
-            // try local
+        for (DateTimeFormatter fmt : FALLBACK_LOCAL_FMTS) {
+            try {
+                return LocalDateTime.parse(t, fmt).atZone(ZoneOffset.UTC);
+            } catch (DateTimeParseException ignored) { /* try next */ }
         }
-        try {
-            return LocalDateTime.parse(trimmed).atZone(ZoneOffset.UTC);
-        } catch (DateTimeParseException ignored) {
-            // try date-only
-        }
-        return LocalDate.parse(trimmed).atStartOfDay(ZoneOffset.UTC);
+        return LocalDate.parse(t).atStartOfDay(ZoneOffset.UTC);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

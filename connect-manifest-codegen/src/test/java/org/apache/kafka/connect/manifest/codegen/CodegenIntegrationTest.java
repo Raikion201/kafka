@@ -83,7 +83,8 @@ public class CodegenIntegrationTest {
     private final TaskGenerator taskGen = new TaskGenerator();
 
     private InputStream resource(String name) {
-        return getClass().getClassLoader().getResourceAsStream("manifests/" + name);
+        String dir = name.endsWith("_test.yaml") ? "test-fixtures/" : "manifests/";
+        return getClass().getClassLoader().getResourceAsStream(dir + name);
     }
 
     private ManifestSpec load(String name) throws Exception {

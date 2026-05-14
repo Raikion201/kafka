@@ -34,7 +34,8 @@ public class ManifestParserTest {
     private final ManifestParser parser = new ManifestParser();
 
     private InputStream resource(String name) {
-        return getClass().getClassLoader().getResourceAsStream("manifests/" + name);
+        String dir = name.endsWith("_test.yaml") ? "test-fixtures/" : "manifests/";
+        return getClass().getClassLoader().getResourceAsStream(dir + name);
     }
 
     // ── defillama ─────────────────────────────────────────────────────────────
