@@ -114,5 +114,9 @@ public final class GenericCustomComponentsRegistrar {
         CustomComponentRegistry.register(
             SDM + "NullCheckedDpathExtractor",
             NullCheckedDpathExtractor::new);
+
+        CustomComponentRegistry.register(
+            SDM + "LabelsRecordExtractor",
+            LabelsRecordExtractor::new);
     }
 }
