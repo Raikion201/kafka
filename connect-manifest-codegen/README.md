@@ -331,7 +331,23 @@ To support a new pagination strategy:
 
 ## Airbyte catalog coverage
 
-Tested against the full Airbyte connector catalog (544 source manifests, May 2026).
+Tested against the full Airbyte connector catalog (**522 source manifests**, May 2026).
+Manifest directory is kept in exact 1-to-1 parity with the Airbyte on-disk repo
+(501 top-level `manifest.yaml` + 21 nested under `<pkg>/manifest.yaml`).
+
+### Live deployment status (standalone Kafka Connect, 2026-05-14)
+
+559 connectors registered on `http://localhost:8083`.
+
+| State | Count | Notes |
+|---|---:|---|
+| **RUNNING** (task green, polling into Kafka) | **47** | Active connectors with valid credentials |
+| **Rate-limited / transient 5xx** | **23** | Auth OK, codegen OK — failures are API throttling/upstream errors |
+| Auth failed (placeholder creds, no real key) | 272 | `register-all` placeholder configs without credentials |
+| Other failed (codegen limitation, dynamic streams) | 217 | Missing features, stub tasks, etc. |
+| **Total working (RUNNING + rate-limited)** | **70** | |
+
+See [`working-connectors.md`](working-connectors.md) for the full per-connector breakdown.
 
 ### What works today
 
