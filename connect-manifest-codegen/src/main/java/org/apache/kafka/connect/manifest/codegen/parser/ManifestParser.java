@@ -58,6 +58,7 @@ public class ManifestParser {
         try {
             JsonNode root = YAML.readTree(file);
             resolveRefs(root);
+            propagateStreamParameters(root);
             return validate(YAML.treeToValue(root, ManifestSpec.class));
         } catch (IOException e) {
             throw new ManifestParseException("Failed to parse manifest file: " + file.getPath(), e);
@@ -73,6 +74,7 @@ public class ManifestParser {
         try {
             JsonNode root = YAML.readTree(in);
             resolveRefs(root);
+            propagateStreamParameters(root);
             return validate(YAML.treeToValue(root, ManifestSpec.class));
         } catch (IOException e) {
             throw new ManifestParseException("Failed to parse manifest from stream", e);
@@ -188,6 +190,35 @@ public class ManifestParser {
         String ptr = ref.startsWith("#") ? ref.substring(1) : ref;
         if (ptr.isEmpty()) return root;
         return root.at(ptr);
+    }
+
+    /**
+     * Propagates stream-level {@code $parameters.path} into the nested requester when the
+     * requester has no path set. Airbyte manifests like Jira use this pattern to share a
+     * single requester definition across streams while varying only the URL path.
+     */
+    static void propagateStreamParameters(JsonNode root) {
+        JsonNode streams = root.path("streams");
+        if (!streams.isArray()) return;
+        for (JsonNode stream : streams) {
+            if (!(stream instanceof ObjectNode streamObj)) continue;
+            JsonNode params = streamObj.get("$parameters");
+            if (params == null || !params.isObject()) continue;
+            JsonNode pathNode = params.get("path");
+            if (pathNode == null || !pathNode.isTextual()) continue;
+            String path = pathNode.asText();
+            injectPath(streamObj.get("retriever"), path);
+        }
+    }
+
+    private static void injectPath(JsonNode retriever, String path) {
+        if (!(retriever instanceof ObjectNode retrieverObj)) return;
+        JsonNode requester = retrieverObj.get("requester");
+        if (!(requester instanceof ObjectNode requesterObj)) return;
+        JsonNode existing = requesterObj.get("path");
+        if (existing == null || existing.isNull() || existing.asText().isEmpty()) {
+            requesterObj.put("path", path);
+        }
     }
 
     private ManifestSpec validate(ManifestSpec spec) throws ManifestParseException {
