@@ -2,7 +2,7 @@
 
 **Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
 **Last updated:** 2026-05-15
-**JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT` (commit pending — request_headers Jinja fix)
+**JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT` (commit `9a0da4694f` — request_headers Jinja fix)
 **Registered:** 73 total (49 RUNNING · 18 rate-limited / token-expired · 2 cred fix needed · 2 codegen gaps · 0 dynamic-stream stubs)
 
 ---
