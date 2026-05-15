@@ -421,6 +421,37 @@ public class CodegenIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // GOOGLE ANALYTICS DATA API — DynamicDeclarativeStream (ConfigComponentsResolver)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void ga4_generatedTask_isNotDynamicStreamStub() throws Exception {
+        String taskSrc = generate("source-google-analytics-data-api.yaml").task.toString();
+        assertFalse(taskSrc.contains("GenericDynamicStreamStub"),
+            "source-google-analytics-data-api.yaml must generate a real task, not a stub");
+        assertTrue(taskSrc.contains("runReport"),
+            "GA4 task must contain runReport() method");
+        assertTrue(taskSrc.contains("HARDCODED_REPORTS"),
+            "GA4 task must embed hardcoded default reports");
+    }
+
+    @Test
+    void ga4_generatedTask_containsClientAndServiceAuthPaths() throws Exception {
+        String taskSrc = generate("source-google-analytics-data-api.yaml").task.toString();
+        assertTrue(taskSrc.contains("googleapis.com/oauth2/v4/token"),
+            "GA4 task must reference Client OAuth token endpoint");
+        assertTrue(taskSrc.contains("oauth2.googleapis.com/token"),
+            "GA4 task must reference Service account token endpoint");
+        assertTrue(taskSrc.contains("SHA256withRSA"),
+            "GA4 task must sign JWT with RS256");
+    }
+
+    @Test
+    void ga4_generatedTask_compilesCleanly(@TempDir Path tmpDir) throws Exception {
+        compileTriple(generate("source-google-analytics-data-api.yaml"), tmpDir);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // NEW PAGINATION TYPES
     // ══════════════════════════════════════════════════════════════════════════
 

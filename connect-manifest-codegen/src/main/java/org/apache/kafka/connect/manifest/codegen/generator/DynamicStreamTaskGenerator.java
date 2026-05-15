@@ -34,7 +34,7 @@ import com.squareup.javapoet.TypeSpec;
  *   <li>Google Sheets — {@code sheets.googleapis.com} discovery + {@code spreadsheet_id} config</li>
  *   <li>Airtable — {@code api.airtable.com} base URL, HttpComponentsResolver</li>
  *   <li>Google Analytics Data API — {@code analyticsdata.googleapis.com} base URL,
- *       ConfigComponentsResolver with 47+ predefined reports</li>
+ *       ConfigComponentsResolver with 57 predefined reports</li>
  * </ul>
  * All other manifests fall back to {@link GenericDynamicStreamStub} which throws on
  * {@code start()} with a clear "not yet supported" message.
@@ -76,6 +76,11 @@ public class DynamicStreamTaskGenerator {
             return JavaFile.builder(pkgName, type).skipJavaLangImports(true).build();
         }
 
+        if (canGenerateGoogleAnalytics(stream)) {
+            TypeSpec type = GoogleAnalyticsDataApiTaskBody.build(taskClassName, configClass);
+            return JavaFile.builder(pkgName, type).skipJavaLangImports(true).build();
+        }
+
         TypeSpec stub = GenericDynamicStreamStub.build(taskClassName, configClass,
             spec.connectorClassName());
         return JavaFile.builder(pkgName, stub).skipJavaLangImports(true).build();
@@ -101,5 +106,11 @@ public class DynamicStreamTaskGenerator {
     private static boolean canGenerateAirtable(StreamSpec stream) {
         String baseUrl = stream.getRetriever().getRequester().effectiveBaseUrl();
         return baseUrl != null && baseUrl.contains("api.airtable.com");
+    }
+
+    /** Returns true when the manifest's dynamic stream polls analyticsdata.googleapis.com. */
+    private static boolean canGenerateGoogleAnalytics(StreamSpec stream) {
+        String baseUrl = stream.getRetriever().getRequester().effectiveBaseUrl();
+        return baseUrl != null && baseUrl.contains("analyticsdata.googleapis.com");
     }
 }
