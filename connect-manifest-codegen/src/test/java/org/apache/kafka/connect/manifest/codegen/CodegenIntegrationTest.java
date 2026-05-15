@@ -394,6 +394,33 @@ public class CodegenIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // AIRTABLE — DynamicDeclarativeStream (HttpComponentsResolver)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void airtable_generatedTask_isNotDynamicStreamStub() throws Exception {
+        String taskSrc = generate("source-airtable.yaml").task.toString();
+        assertTrue(!taskSrc.contains("GenericDynamicStreamStub"),
+            "source-airtable.yaml must generate a real task, not a stub");
+        assertTrue(taskSrc.contains("discoverStreams"),
+            "Airtable task must contain discoverStreams() method");
+    }
+
+    @Test
+    void airtable_generatedTask_containsOAuthAndPatBranches() throws Exception {
+        String taskSrc = generate("source-airtable.yaml").task.toString();
+        assertTrue(taskSrc.contains("airtable.com/oauth2/v1/token"),
+            "Airtable task must reference OAuth token endpoint");
+        assertTrue(taskSrc.contains("api_key"),
+            "Airtable task must reference PAT api_key credential");
+    }
+
+    @Test
+    void airtable_generatedTask_compilesCleanly(@TempDir Path tmpDir) throws Exception {
+        compileTriple(generate("source-airtable.yaml"), tmpDir);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // NEW PAGINATION TYPES
     // ══════════════════════════════════════════════════════════════════════════
 
