@@ -472,13 +472,20 @@ public class TaskGenerator {
         // Config-time transforms — applied once before any other initialization reads config.
         m.addStatement("this.configTransformer = $T.fromJson($S)",
             CONFIG_TRANSFORMER_FACTORY, configTransformsJson(spec));
-        // Use originalsStrings() (not values()) so that user-supplied config fields
-        // not declared in the spec's ConfigDef still reach the Jinja context. This
-        // mirrors Airbyte Python's JinjaInterpolation.eval(), which passes the raw
-        // config dict unfiltered (airbyte_cdk/sources/declarative/interpolation/jinja.py).
+        // Build the Jinja config map from two sources:
+        //  (1) originalsStrings() — the raw user-supplied props, including fields not declared
+        //      in the spec's ConfigDef (e.g. appfollow's `api_key`, which the spec declares as
+        //      `api_secret`). Mirrors Airbyte Python's JinjaInterpolation.eval(), which passes
+        //      the raw config dict unfiltered (airbyte_cdk/sources/declarative/interpolation/jinja.py:90).
+        //  (2) ConfigDef defaults via values() — for declared fields the user omitted (e.g.
+        //      shortcut's `query` default `title:Our first Epic`). Airbyte's Python config
+        //      dict already has spec defaults merged in by the spec layer; we have to merge
+        //      them ourselves because Kafka Connect splits raw input from typed/defaulted values.
         m.addStatement("$T<$T, $T> _cfgMap = new $T<$T, $T>(this.config.originalsStrings())",
             Map.class, String.class, Object.class,
             java.util.LinkedHashMap.class, String.class, Object.class);
+        m.addStatement(
+            "this.config.values().forEach((_k, _v) -> { if (_v != null) _cfgMap.putIfAbsent(_k, _v); })");
         m.beginControlFlow("if (!this.configTransformer.isNoop())")
             .addStatement("this.configTransformer.apply(_cfgMap)")
             .endControlFlow();

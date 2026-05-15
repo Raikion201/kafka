@@ -257,9 +257,30 @@ public class CodegenIntegrationTest {
             "Task must build _cfgMap from originalsStrings() so spec-undeclared fields like "
                 + "appfollow's `api_key` (declared as `api_secret` in spec) reach the Jinja context. "
                 + "Found task source did not contain the originalsStrings()-backed LinkedHashMap.");
+        assertTrue(
+            taskSrc.contains(
+                "this.config.values().forEach((_k, _v) -> { if (_v != null) _cfgMap.putIfAbsent(_k, _v); })"),
+            "Task must also merge ConfigDef defaults via values() so spec-declared fields the "
+                + "user omitted (e.g. shortcut's `query` default) reach Jinja interpolation.");
         assertTrue(taskSrc.contains("render(\"{{ config['api_key'] }}\""),
             "Task must still emit the manifest's `config['api_key']` interpolation for the "
                 + "X-AppFollow-API-Token header.");
+    }
+
+    @Test
+    void shortcut_taskPicksUpQueryDefaultFromConfigDef() throws Exception {
+        // Shortcut's search_epics stream interpolates `{{ config['query'] }}` into a required
+        // request parameter. The spec declares `query` with a default of "title:Our first Epic"
+        // and the field is NOT marked required. Without merging ConfigDef defaults into the
+        // Jinja context, omitting `query` from the connector config yields a 400 from the API
+        // ("missing required parameter").
+        String taskSrc = generate("source-shortcut.yaml").task.toString();
+        assertTrue(
+            taskSrc.contains("this.config.values().forEach((_k, _v) ->"),
+            "Shortcut task must merge ConfigDef defaults so `query` resolves to its spec default "
+                + "when the user does not supply one in the connector config.");
+        assertTrue(taskSrc.contains("render(\"{{ config['query'] }}\""),
+            "Shortcut task must still emit the manifest's `{{ config['query'] }}` interpolation.");
     }
 
     @Test
