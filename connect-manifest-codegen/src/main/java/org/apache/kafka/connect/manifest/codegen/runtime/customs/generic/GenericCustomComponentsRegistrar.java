@@ -124,5 +124,9 @@ public final class GenericCustomComponentsRegistrar {
         CustomComponentRegistry.register(
             SDM + "LabelsRecordExtractor",
             LabelsRecordExtractor::new);
+
+        CustomComponentRegistry.register(
+            SDM + "KlaviyoIncludedFieldExtractor",
+            KlaviyoIncludedFieldExtractor::new);
     }
 }
