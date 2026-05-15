@@ -142,6 +142,16 @@ public class PartitionRouterSpec {
         return getParentStreamConfigs().isEmpty() ? null : getParentStreamConfigs().get(0).getParentStreamName();
     }
 
+    /**
+     * The {@code request_option} on the first parent_stream_config, if any.
+     * When non-null, the substream router must inject the partition value into the child
+     * request via this option (Python CDK substream_partition_router.py lines 162-176)
+     * instead of (or in addition to) path substitution.
+     */
+    public RequestOptionSpec parentRequestOption() {
+        return getParentStreamConfigs().isEmpty() ? null : getParentStreamConfigs().get(0).getRequestOption();
+    }
+
     // ── inner classes ─────────────────────────────────────────────────────────
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -154,6 +164,14 @@ public class PartitionRouterSpec {
         private String partitionField;
 
         private StreamRef stream;
+
+        /**
+         * How the partition value is injected into the child stream's outgoing request.
+         * Python CDK: ParentStreamConfig.request_option (substream_partition_router.py line 79).
+         * When set, the substream router calls inject_into_request() per Python lines 162-176.
+         */
+        @JsonProperty("request_option")
+        private RequestOptionSpec requestOption;
 
         public String getParentKey() {
             return parentKey;
@@ -177,6 +195,14 @@ public class PartitionRouterSpec {
 
         public void setStream(StreamRef stream) {
             this.stream = stream;
+        }
+
+        public RequestOptionSpec getRequestOption() {
+            return requestOption;
+        }
+
+        public void setRequestOption(RequestOptionSpec requestOption) {
+            this.requestOption = requestOption;
         }
 
         public String getParentStreamName() {

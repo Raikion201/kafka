@@ -263,6 +263,29 @@ public class ManifestParserTest {
         assertTrue(!retriever.hasSubstreamPartition());
     }
 
+    @Test
+    void calendly_substreamParentStreamConfigParsesRequestOption() throws Exception {
+        // Python source: airbyte_cdk/sources/declarative/partition_routers/substream_partition_router.py
+        // lines 79 (ParentStreamConfig.request_option) + 162-176 (_get_request_option).
+        // The child stream's path is static; the parent partition key is injected as a query
+        // parameter (?organization=<URI>) via request_option.
+        ManifestSpec spec = parser.parse(resource("source-calendly.yaml"));
+        var eventTypes = spec.resolvedStreams().stream()
+            .filter(s -> "event_types".equals(s.getName()))
+            .findFirst().orElseThrow();
+        var router = eventTypes.getRetriever().getSubstreamRouter();
+        assertNotNull(router, "event_types must have a SubstreamPartitionRouter");
+        assertEquals("current_organization", router.parentKey());
+        assertEquals("organization_uri", router.partitionField());
+        assertEquals("api_user", router.parentStreamName());
+
+        var parentOpt = router.parentRequestOption();
+        assertNotNull(parentOpt, "ParentStreamConfig.request_option must be parsed, not dropped");
+        assertEquals("organization", parentOpt.getFieldName());
+        assertTrue(parentOpt.isRequestParameter(),
+            "Calendly injects the parent organization URI as a request_parameter");
+    }
+
     // ── DefaultErrorHandler / backoff / response_filter ───────────────────────
 
     @Test

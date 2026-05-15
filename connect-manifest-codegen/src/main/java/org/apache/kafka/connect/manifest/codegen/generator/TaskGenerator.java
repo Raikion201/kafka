@@ -799,7 +799,7 @@ public class TaskGenerator {
         }
 
         // Build URL substituting {{ stream_partition.X }} → _partitionKey.
-        body.add(buildSubstreamUrlBlock(baseUrl, rawPath, paginator, hasPagination));
+        body.add(buildSubstreamUrlBlock(baseUrl, rawPath, paginator, hasPagination, router));
 
         body.beginControlFlow("try");
         buildRequestStatement(body, auth, paginator, requester);
@@ -853,7 +853,8 @@ public class TaskGenerator {
      */
     private CodeBlock buildSubstreamUrlBlock(
         String baseUrl, String rawPath,
-        PaginatorSpec paginator, boolean hasPagination
+        PaginatorSpec paginator, boolean hasPagination,
+        PartitionRouterSpec router
     ) {
         CodeBlock.Builder b = CodeBlock.builder();
 
@@ -896,8 +897,22 @@ public class TaskGenerator {
                 ClassName.get("java.nio.charset", "StandardCharsets"),
                 after);
         }
+
+        // Inject parent_stream_configs[].request_option (Python substream_partition_router.py
+        // lines 162-176). When inject_into=request_parameter, append the parent partition value
+        // as ?<field_name>=<URL-encoded _partitionKey>.
+        boolean firstParam = !joinUrl(baseUrl, rawPath).contains("?");
+        PartitionRouterSpec.RequestOptionSpec parentOpt = router != null ? router.parentRequestOption() : null;
+        if (parentOpt != null && parentOpt.isRequestParameter() && parentOpt.getFieldName() != null) {
+            b.addStatement("urlBuilder.append($S).append($T.encode(_partitionKey, $T.UTF_8))",
+                (firstParam ? "?" : "&") + parentOpt.getFieldName() + "=",
+                ClassName.get("java.net", "URLEncoder"),
+                ClassName.get("java.nio.charset", "StandardCharsets"));
+            firstParam = false;
+        }
+
         if (hasPagination && paginator != null) {
-            appendPaginationParams(b, paginator, !joinUrl(baseUrl, rawPath).contains("?"),
+            appendPaginationParams(b, paginator, firstParam,
                 isBodyInjectedJson(paginator) || isBodyInjectedData(paginator));
         }
         return b.build();
