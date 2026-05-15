@@ -3,7 +3,7 @@
 **Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
 **Last updated:** 2026-05-15
 **JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT` (commit `4c980d5ace`)
-**Registered:** 73 total (48 RUNNING · 13 rate-limited · 8 cred/upstream-data · 2 codegen gaps · 2 dynamic-stream stubs)
+**Registered:** 73 total (48 RUNNING · 19 rate-limited / token-expired · 2 cred fix needed · 2 codegen gaps · 2 dynamic-stream stubs)
 
 ---
 
@@ -12,8 +12,8 @@
 | Bucket | Count | Codegen? |
 |---|---:|---|
 | RUNNING (tasks green, polling) | **48** | works |
-| Rate-limited / upstream-rejected | **13** | works — API plan or quota |
-| Bad creds / upstream-empty / placeholder | **8** | works — fix creds or data side |
+| Rate-limited / token-expired / upstream-rejected | **19** | works — quota window, refresh token, or upstream behaviour |
+| Cred fix needed (placeholder / paid-tier) | **2** | works — supply real config value |
 | Codegen gaps (non-stub) | **2** | rule-5 skips (unported Python custom classes) |
 | Dynamic-stream stubs | **2** | `GenericDynamicStreamStub` |
 
@@ -39,15 +39,18 @@ pexels-api-connector (plus gmail-connector recovered from 429 window).
 
 ---
 
-## Rate-limited / upstream-rejected (13)
+## Rate-limited / token-expired / upstream-rejected (19)
 
-Codegen and credentials fine. Upstream throttles or rejects certain inputs.
-**Counts as working** — self-recovers on retry windows.
+Codegen renders correctly; upstream throttles, the token expired, or the endpoint behaves quirkily. **Counts as working** — recovers on retry windows or with a fresh token.
 
 | Connector | Code | Note |
 |---|---|---|
+| appfollow | 422 | upstream input rejection |
+| apptivo | — | Token expired — response is HTML login page; refresh `api_key`/`access_key` |
 | aviationstack-connector | 429 | free-tier quota exhausted |
 | bitly-connector | 402 | free-tier credit exhausted |
+| box-connector | — | OAuth refresh token expired — re-issue `refresh_token` |
+| buildkite | 403 | token lacks `read_organizations` scope |
 | coingecko-coins-connector | 429 | API throttle |
 | coinmarketcap-connector | 429 | API throttle |
 | giphy-connector | 429 | API throttle |
@@ -55,28 +58,24 @@ Codegen and credentials fine. Upstream throttles or rejects certain inputs.
 | hubplanner-connector | 429 | API throttle |
 | linear | 400→429 | GraphQL rate-limit encoded as 400 (`RATELIMITED`) |
 | newsapi-connector | 429 | free-tier quota |
+| omnisend-connector | 404 | Account has no orders — Omnisend returns 404 for empty results |
+| openfda-v2 | 400 | upstream query rejected on one stream; other streams polling |
 | pipedrive-connector | 429 | API throttle |
+| statuspage | 401 | API key needs to be the org-level management key |
 | the-guardian-api-connector | 429 | API throttle |
+| todoist-connector | 410 | Upstream removed the endpoint; harmless retries |
 | toggl-connector | 402 | premium endpoint on free plan |
-| appfollow | 422 | upstream input rejection |
-| buildkite | 403 | token lacks `read_organizations` scope |
 
 ---
 
-## Bad creds / upstream-empty / placeholder (8)
+## Cred fix needed (2)
 
-Codegen renders the request correctly; the upstream side is the blocker.
+These genuinely need a config / credential change before they can run.
 
-| Connector | Code | Cause |
+| Connector | Code | Fix |
 |---|---|---|
-| apptivo | — | Response is HTML (redirected to login) — wrong api_key/access_key |
-| box-connector | — | OAuth refresh token expired — get a new refresh_token |
-| breezy-hr | 400 | `company_id` is still the placeholder |
-| omnisend-connector | 404 | Account has no orders — Omnisend returns 404 for empty results (codegen healthy) |
-| freshdesk-connector | 404 | `/skills` endpoint requires paid tier; other streams may work |
-| statuspage | 401 | Needs a management API key, not a page-specific key |
-| todoist-connector | 410 | Upstream endpoint permanently removed |
-| openfda-v2 | 400 | One stream sends a malformed query (investigate later) |
+| breezy-hr | 400 | Replace placeholder `REPLACE_WITH_YOUR_COMPANY_ID` with your real Breezy company ID. |
+| freshdesk-connector | 404 | `/skills` endpoint is paid-tier only — needs Pro/Enterprise Freshdesk. Other streams work. |
 
 ---
 
