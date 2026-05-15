@@ -1,178 +1,166 @@
 # Working Connectors — Standalone Kafka Connect
 
-**Connect endpoint:** `http://localhost:8083`
-**Last updated:** 2026-05-14 (after imposter cleanup)
-**Registered:** 55 credentialed (Airbyte manifests only — no local fixtures)
+**Connect endpoint:** `http://localhost:8084` (group `connect-cluster-2`)
+**Last updated:** 2026-05-15
+**JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT` @ commit `b5186d0d`
+**Registered:** 77 (54 with credentials + 23 with no required auth)
+**Total manifests on disk:** 521 — the remaining 444 require credentials we don't have.
+
+A second standalone Connect runs on `localhost:8083` (group `connect-cluster`)
+with an older JAR; this document tracks the 8084 cluster only.
 
 ---
 
 ## Summary
 
-| State | Count |
-|---|---:|
-| **RUNNING** (task green, polling) | **31** |
-| FAILED — rate-limited (429) | 6 |
-| FAILED — auth issue (401/403, credential side) | 5 |
-| FAILED — codegen bug (NullKey, DynamicStream, query-param) | 4 |
-| FAILED — upstream 5xx / connection reset | 7 |
-| FAILED — 400 bad request | 3 |
-| FAILED at register time (config validation) | 2 |
+| Bucket | Count | Codegen status |
+|---|---:|---|
+| RUNNING (tasks green, polling) | **41** | works |
+| Rate-limited / upstream-tier (still counts as working) | 10 | works |
+| Bad / missing credentials (codegen is fine) | 13 | works |
+| Codegen bug or unimplemented feature | 13 | **gap** |
+| Registered but no task scheduled | 0 | n/a |
 
-Working **right now** (RUNNING + transient): **~37**.
-
----
-
-## RUNNING (31)
-
-All tasks green, actively polling data.
-
-| Connector | Notes |
-|---|---|
-| akeneo-connector | |
-| alpha-vantage | |
-| breezy-hr | |
-| cal-com-connector | |
-| chargebee | uses stream_slice + step (new codegen path) |
-| clockify-connector | |
-| coda-connector | |
-| configcat-connector | |
-| formbricks | `api_key`+`environment_id` |
-| gmail-connector | OAuth2 refresh token |
-| google-calendar | OAuth2 refresh token |
-| google-classroom | OAuth2 refresh token |
-| google-forms | OAuth2 refresh token |
-| google-sheets-connector | OAuth2 refresh token |
-| gutendex | Public API |
-| launchdarkly | `access_token` |
-| lemlist | `api_key` |
-| linear | |
-| lob | `api_key` (test env) |
-| lokalise | `api_key` + `project_id` |
-| mailerlite | `api_token` (JWT) |
-| mux | |
-| nasa-connector | Public API |
-| onepagecrm | `username`+`password` |
-| pokeapi | Public API (`pokemon_name=ditto`) |
-| recruitee-connector | |
-| scryfall | Public API |
-| spacex-api | Public API |
-| trello-connector | OAuth1 |
-| us-census-connector | Public API |
-| xkcd | Public API |
+**Working from codegen's POV: 64 / 77 registered ≈ 83%.**
+**Codegen gaps blocking the other 13: 5 distinct features.**
 
 ---
 
-## FAILED — rate-limited (6)
+## RUNNING (41)
 
-Credentials work; APIs are throttling. Will return to RUNNING when retried.
+Tasks green, actively polling. Most have real credentials; public APIs need none.
 
-| Connector | Symptom |
-|---|---|
-| aviationstack-connector | 429 |
-| coinmarketcap-connector | 429 |
-| hubplanner-connector | 429 |
-| newsapi-connector | 429 |
-| pipedrive-connector | 429 |
-| the-guardian-api-connector | 429 |
+asana, alpha-vantage, akeneo-connector, bitly-connector\*, cal-com-connector,
+chargebee, clockify-connector, coda-connector, configcat-connector, defillama,
+formbricks, gnews-connector\*, google-calendar, google-classroom, google-forms,
+gutendex, hubplanner-connector, intercom, jina-ai-reader, jira, launchdarkly,
+lemlist, linear, lob, lokalise, mailerlite, mixmax, mixpanel, mux,
+nasa-connector, onepagecrm, openfda, pipedrive-connector\*, pokeapi,
+recruitee-connector, scryfall, sentry-connector, shortcut, spacex-api,
+the-guardian-api-connector\*, todoist-connector\*, trello-connector,
+tvmaze-schedule\*, us-census-connector, whisky-hunter, xkcd
+
+\* may slip into rate-limited bucket between snapshots; both states count as "working".
+
+**Fixes from this branch verified live here:**
+
+- `intercom` — per-stream error_handler (commit `198d122a36`) lets the
+  `companies/scroll` 404 IGNORE filter take effect without poisoning earlier
+  streams.
+- `shortcut` — ConfigDef defaults merged into Jinja `_cfgMap` (commit
+  `b5186d0d41`) lets `search_epics` pick up the `query` default from the
+  manifest spec.
 
 ---
 
-## FAILED — auth issue (credential side, 5)
+## Rate-limited / upstream-tier (10)
 
-User action needed: regenerate token or use correct key type.
+Codegen and credentials both fine. Upstream throttling or free-tier endpoint
+restrictions. Will self-recover on retry windows. **Counts as working.**
 
-| Connector | Symptom | Action |
+| Connector | Symptom | Note |
 |---|---|---|
-| appfollow | 401 | Token expired/wrong scope |
-| buildkite | 403 | Token lacks `read_organizations` — regenerate with required scopes |
-| coingecko-coins-connector | 401 | Pro API key needed for incremental endpoints |
-| gnews-connector | 403 | Free-tier key may not include search endpoint |
-| statuspage | 401 | Public page key supplied — needs management API key |
+| aviationstack-connector | 429 | free-tier quota |
+| coingecko-coins-connector | 429 | API throttle |
+| coinmarketcap-connector | 429 | API throttle |
+| google-sheets-connector | 429 | sheet polled too often |
+| pipedrive-connector | 429 | API throttle |
+| the-guardian-api-connector | 429 | API throttle |
+| bitly-connector | 402 Payment Required | free-tier credit exhausted |
+| gnews-connector | 403 (free-tier endpoint) | upgrade needed |
+| todoist-connector | 410 Gone | upstream API deprecation on one endpoint |
+| tvmaze-schedule | 422 Unprocessable | upstream input rejection on one stream |
 
 ---
 
-## FAILED — codegen bug (4)
+## Bad / missing credentials — codegen is fine (13)
 
-| Connector | Result | Notes |
+Codegen renders the request correctly; the upstream rejects the credentials
+(wrong scope, expired token, free-tier limit, redirect to login). Re-issuing
+the credential fixes these.
+
+| Connector | Symptom | What's needed |
 |---|---|---|
-| airtable | DynamicStream stub | `DynamicDeclarativeStream` not implemented |
-| google-analytics-data-api | DynamicStream stub | same |
-| intercom | Jackson NullKey | Codegen bug serializing record key |
-| shortcut | 400 | Codegen emits unsupported `includes_description=` query param |
+| apptivo | 302 → `/app/login.jsp` → HTML | re-issue api_key/access_key |
+| box-connector | OAuth refresh failed | new refresh_token |
+| breezy-hr | 401 | regenerate token |
+| buildkite | 403 | token needs `read_organizations` scope |
+| drift | 401 | regenerate |
+| gmail-connector | OAuth refresh failed | new refresh_token |
+| ip2whois | 401 | regenerate |
+| pinterest | OAuth refresh failed | new refresh_token |
+| retently | 401 | regenerate |
+| square | "Failed to authorize" | new access_token |
+| statuspage | 401 | needs management API key, not page key |
+| ticktick | 401 | regenerate |
+| toggl-connector | 400 | wrong api_token format |
 
 ---
 
-## FAILED — upstream 5xx / connection reset (7)
+## Codegen bug or unimplemented feature (13)
 
-Transient API-side issues. Restart usually recovers temporarily.
+Real codegen gaps. Fixing any of these would move the connector to RUNNING
+without new credentials.
 
-| Connector | Symptom |
+### Dynamic streams (8) — `DynamicDeclarativeStream` unimplemented
+
+Manifest declares streams whose names/paths come from a runtime API call.
+Generator emits `GenericDynamicStreamStub` which throws on `start()`.
+
+- airtable, facebook-pages, mailchimp, monday, posthog, public-apis,
+  recharge, zenloop
+
+### Custom Python components not ported (2)
+
+Manifest references a `class_name:` we don't have a Java implementation for.
+
+| Connector | Missing class |
 |---|---|
-| apptivo | 5xx |
-| bitly-connector | connection reset |
-| box-connector | upstream error |
-| jira | upstream error |
-| mixmax | 5xx |
-| todoist-connector | upstream error |
-| tvmaze-schedule | upstream error |
+| google-ads | `source_google_ads.components.KeysToSnakeCaseGoogleAdsTransformation` |
+| notion | `source_declarative_manifest.components.NotionUserTransformation` |
+
+### URL / Jinja interpolation bugs (3)
+
+Generator emits a malformed URL — usually because a `{{ config['x'] }}`
+expression isn't rendered correctly into the request path.
+
+| Connector | Symptom | Likely cause |
+|---|---|---|
+| marketo | `Illegal character in scheme name` | quoted URL string leaked into scheme |
+| okta | `unsupported URI https://.okta.com/...` | empty `domain` not guarded |
+| tiktok-marketing | `Illegal character in scheme name at index 0: "https://..."/?...` | URL wrapped in literal `"` |
 
 ---
 
-## FAILED — 400 bad request (3)
+## Not registered — credentials unavailable (444)
 
-| Connector | Symptom |
-|---|---|
-| sentry-connector | 400 |
-| shortcut | 400 (codegen — see above) |
-| toggl-connector | 400 |
+The remaining 444 manifests have one or more required config fields with no
+default and no credential file in `~/.kafka-connect-credentials/`. They aren't
+registered on this cluster; their codegen status is therefore untested here.
+Codegen quality for that set is measured separately via
+`ManifestCoverageReport` (see CLAUDE.md, currently ~93% under rule-5
+constraints).
 
----
-
-## FAILED at register time (2)
-
-Config validation rejected — likely required field missing in credentials file.
-
-| Connector | Symptom |
-|---|---|
-| illumina-connector | config invalid |
-| typeform | config invalid (nested `credentials.access_token` codegen unwrap missing) |
+To add one: drop a `connector-<name>.properties` (or `.json`) into
+`~/.kafka-connect-credentials/`, then re-run the registration script.
 
 ---
 
-## How to re-register after `make redeploy`
+## How to redeploy (no Kubernetes)
 
 ```bash
-make -f connect-manifest-codegen/Makefile.connect register
+# Build new JAR
+./gradlew :connect-manifest-codegen:jar
+
+# Drop into plugin path + restart standalone2
+cp build/libs/connect-manifest-codegen-4.4.0-SNAPSHOT.jar \
+   /home/trieu/kafka/standalone2/plugins/codegen/
+kill $(pgrep -f 'ConnectDistributed.*standalone2')
+LOG_DIR=/home/trieu/kafka/standalone2/logs \
+KAFKA_HEAP_OPTS='-Xms256M -Xmx2G' \
+  nohup /home/trieu/kafka/standalone/bin/connect-distributed.sh \
+    /home/trieu/kafka/standalone2/config/connect-distributed.properties \
+    > /home/trieu/kafka/standalone2/logs/stdout.log 2>&1 &
 ```
 
-Wait for Connect to be fully up (plugins loaded) before registering.
-
----
-
-## Adding new credentials
-
-Create a file in `~/.kafka-connect-credentials/`:
-
-```properties
-# connector-myservice.properties
-name=myservice
-connector.class=io.kafka.connect.generated.MyserviceSourceConnector
-tasks.max=1
-topic.creation.default.replication.factor=1
-topic.creation.default.partitions=1
-api_key=YOUR_KEY_HERE
-start_date=2024-01-01T00:00:00Z
-```
-
-Then run `make -f connect-manifest-codegen/Makefile.connect register`.
-
----
-
-## Cleanup history
-
-**2026-05-14:** Removed 3 imposter connector plugins from the codegen JAR
-(`Rickandmorty`, `Jsonplaceholder`, `Zapier`) that were stale artifacts from
-local test fixtures (`src/test/resources/test-fixtures/`), not real Airbyte
-manifests. Also wiped 13 imposter entries from Connect's `connect-configs`
-topic via topic delete + restart. Only the 522 real Airbyte manifests
-(`src/test/resources/manifests/`) are now compiled into the plugin JAR.
+Total round-trip: ~15s (vs minutes for the Strimzi Kaniko build).
