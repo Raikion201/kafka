@@ -19,6 +19,9 @@ package org.apache.kafka.connect.manifest.codegen.model;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Models an entry in the top-level {@code dynamic_streams:} list. Airbyte uses these
  * to declare streams whose concrete names and per-stream URL parameters are discovered
@@ -65,11 +68,22 @@ public class DynamicStreamSpec {
         return componentsResolver.getRetriever().getRequester();
     }
 
+    /** Returns the components_mapping entries (resolver "fill these fields with the discovered record values"). */
+    public List<ComponentMappingDefinition> componentsMapping() {
+        if (componentsResolver == null || componentsResolver.getComponentsMapping() == null) {
+            return Collections.emptyList();
+        }
+        return componentsResolver.getComponentsMapping();
+    }
+
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ComponentsResolverSpec {
 
         @JsonProperty("retriever")
         private RetrieverSpec retriever;
+
+        @JsonProperty("components_mapping")
+        private List<ComponentMappingDefinition> componentsMapping;
 
         public RetrieverSpec getRetriever() {
             return retriever;
@@ -77,6 +91,82 @@ public class DynamicStreamSpec {
 
         public void setRetriever(RetrieverSpec v) {
             this.retriever = v;
+        }
+
+        public List<ComponentMappingDefinition> getComponentsMapping() {
+            return componentsMapping;
+        }
+
+        public void setComponentsMapping(List<ComponentMappingDefinition> v) {
+            this.componentsMapping = v;
+        }
+    }
+
+    /**
+     * Models a {@code ComponentMappingDefinition} entry. Each mapping says: at runtime,
+     * evaluate {@link #value} as a Jinja template (in the context of {@code config},
+     * {@code components_values=record}, {@code stream_slice}) and set the result at
+     * {@link #fieldPath} inside a deep-copy of the stream template.
+     *
+     * <p>Mirrors {@code airbyte_cdk.sources.declarative.resolvers.components_resolver.ComponentMappingDefinition}
+     * (python-cdk components_resolver.py lines 17-27).</p>
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ComponentMappingDefinition {
+
+        @JsonProperty("field_path")
+        private List<String> fieldPath;
+
+        @JsonProperty("value")
+        private String value;
+
+        @JsonProperty("value_type")
+        private String valueType;
+
+        @JsonProperty("condition")
+        private String condition;
+
+        @JsonProperty("create_or_update")
+        private Boolean createOrUpdate;
+
+        public List<String> getFieldPath() {
+            return fieldPath == null ? Collections.emptyList() : fieldPath;
+        }
+
+        public void setFieldPath(List<String> v) {
+            this.fieldPath = v;
+        }
+
+        public String getValue() {
+            return value;
+        }
+
+        public void setValue(String v) {
+            this.value = v;
+        }
+
+        public String getValueType() {
+            return valueType;
+        }
+
+        public void setValueType(String v) {
+            this.valueType = v;
+        }
+
+        public String getCondition() {
+            return condition;
+        }
+
+        public void setCondition(String v) {
+            this.condition = v;
+        }
+
+        public Boolean getCreateOrUpdate() {
+            return createOrUpdate;
+        }
+
+        public void setCreateOrUpdate(Boolean v) {
+            this.createOrUpdate = v;
         }
     }
 }

@@ -301,6 +301,35 @@ public class ManifestParserTest {
         assertEquals("Permission denied or entity is unprocessable.", codeFilter.getErrorMessage());
     }
 
+    // ── DynamicDeclarativeStream / components_mapping ─────────────────────────
+
+    @Test
+    void airtable_parsesComponentsMappingFromDynamicStream() throws Exception {
+        ManifestSpec spec = parser.parse(resource("source-airtable.yaml"));
+        assertEquals(1, spec.getDynamicStreams().size(),
+            "airtable declares one dynamic_streams entry");
+        var dyn = spec.getDynamicStreams().get(0);
+        var mappings = dyn.componentsMapping();
+        assertTrue(mappings.size() >= 4,
+            "airtable's components_mapping has 4+ entries (name, path, schema path, transformation value)");
+
+        // First mapping: top-level "name" field with conditional Jinja that uses both
+        // components_values and stream_slice — proves we capture the value template verbatim.
+        var nameMap = mappings.get(0);
+        assertEquals(java.util.List.of("name"), nameMap.getFieldPath());
+        assertNotNull(nameMap.getValue());
+        assertTrue(nameMap.getValue().contains("components_values"),
+            "value template must reference components_values placeholder");
+        assertTrue(nameMap.getValue().contains("stream_slice"),
+            "value template must reference stream_slice placeholder");
+
+        // Second mapping: nested field_path retriever.requester.path — proves list parsing.
+        var pathMap = mappings.get(1);
+        assertEquals(java.util.List.of("retriever", "requester", "path"), pathMap.getFieldPath());
+        assertTrue(pathMap.getValue().contains("base_id"));
+        assertTrue(pathMap.getValue().contains("components_values.id"));
+    }
+
     @Test
     void assemblyai_parsesCompositeErrorHandlerWithIgnoreFilter() throws Exception {
         ManifestSpec spec = parser.parse(resource("assemblyai.yaml"));
