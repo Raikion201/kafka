@@ -1538,6 +1538,8 @@ public class TaskGenerator {
     // When path is a Jinja expression that renders to a leading '/', the resulting '//' is
     // collapsed at runtime by normalizeUrl() (emitted in every URI.create() call site).
     private static String joinUrl(String base, String path) {
+        base = stripOuterQuotes(base);
+        path = stripOuterQuotes(path);
         if (base.endsWith("/") && path.startsWith("/")) {
             return base + path.substring(1);  // deduplicate
         }
@@ -1545,6 +1547,31 @@ public class TaskGenerator {
             return base + "/" + path;  // add missing separator
         }
         return base + path;
+    }
+
+    /**
+     * Strips outer matching single/double quotes from a URL component template.
+     *
+     * <p>Mirrors Airbyte CDK behaviour: {@code InterpolatedString.eval} runs
+     * {@code ast.literal_eval} on each rendered component (url_base, path) which
+     * strips literal-quote wrappers like {@code "https://..."}. We do the strip
+     * at template level here — before concatenating url_base + path — because our
+     * codegen merges both into a single Jinja template before rendering, so the
+     * post-render {@code stripOuterQuotes} in JinjaRenderer cannot see them once
+     * the path is appended.</p>
+     *
+     * <p>Example: tiktok-marketing's url_base is the literal string
+     * {@code "https://{{ ... }}.tiktok.com/open_api/v1.3/"} — outer {@code "}
+     * chars are part of the YAML value and Airbyte strips them; we must too.</p>
+     */
+    private static String stripOuterQuotes(String s) {
+        if (s == null || s.length() < 2) return s;
+        char first = s.charAt(0);
+        char last = s.charAt(s.length() - 1);
+        if ((first == '\'' && last == '\'') || (first == '"' && last == '"')) {
+            return s.substring(1, s.length() - 1);
+        }
+        return s;
     }
 
     private boolean appendUrlSegment(
