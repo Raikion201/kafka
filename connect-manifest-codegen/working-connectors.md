@@ -2,8 +2,8 @@
 
 **Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
 **Last updated:** 2026-05-15
-**JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT` (commit `4c980d5ace`)
-**Registered:** 73 total (48 RUNNING · 19 rate-limited / token-expired · 2 cred fix needed · 2 codegen gaps · 2 dynamic-stream stubs)
+**JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT` (commit `fe6857ee78`)
+**Registered:** 73 total (48 RUNNING · 19 rate-limited / token-expired · 2 cred fix needed · 2 codegen gaps · 0 dynamic-stream stubs)
 
 ---
 
@@ -15,9 +15,9 @@
 | Rate-limited / token-expired / upstream-rejected | **19** | works — quota window, refresh token, or upstream behaviour |
 | Cred fix needed (placeholder / paid-tier) | **2** | works — supply real config value |
 | Codegen gaps (non-stub) | **2** | rule-5 skips (unported Python custom classes) |
-| Dynamic-stream stubs | **2** | `GenericDynamicStreamStub` |
+| Dynamic-stream stubs | **0** | all DDS connectors now generate real task code |
 
-**Codegen correct for 69 / 73 registered (~95%).**
+**Codegen correct for 69 / 73 registered (~95%). DDS stubs eliminated (airtable + GA4 → real tasks).**
 
 ---
 
@@ -86,7 +86,7 @@ Connector starts but a stream fails because the generator can't render a custom 
 | Connector | Missing component | Effect |
 |---|---|---|
 | klaviyo-connector | `KlaviyoIncludedFieldExtractor` | one stream extractor; rest of connector is fine |
-| google-analytics-data-api | `CombinedExtractor`, `KeyValueExtractor`, `DimensionFilterConfigTransformation` | also needs DDS (see stubs) |
+| google-analytics-data-api | `CombinedExtractor`, `KeyValueExtractor`, `DimensionFilterConfigTransformation` | custom class ports now registered; DDS codegen done (real task generated) — needs real credentials to verify end-to-end |
 
 ### Recently fixed
 - **calendly-connector** (commit `4c980d5ace`) — SubstreamPartitionRouter now
@@ -97,14 +97,18 @@ Connector starts but a stream fails because the generator can't render a custom 
 
 ---
 
-## Dynamic-stream stubs (2)
+## Dynamic-stream stubs (0)
 
-Both emit `GenericDynamicStreamStub` (throws on `start()`).
+All DDS connectors now generate real task code — `GenericDynamicStreamStub` is no longer emitted
+for any registered connector.
 
-- **airtable** — metadata fetch + `SubstreamPartitionRouter` (bases → tables).
-- **google-analytics-data-api** — declares `dynamic_streams:` AND references unported custom classes.
-
-DDS port in progress (#27 done — parser side; #30/#31 pending — runtime + airtable codegen path).
+Previously stubbed:
+- **airtable** — now generates `AirtableSourceTask` (DDS.T2, commit `c559fe261b`). Discovers
+  all bases→tables at `start()` via paginated metadata API. OAuth2 + PAT auth. Needs valid
+  credentials at `~/.kafka-connect-credentials/connector-airtable.properties` to run.
+- **google-analytics-data-api** — now generates `GoogleAnalyticsDataApiSourceTask` (DDS.T3,
+  commit `fe6857ee78`). Embeds 57 default reports; polls every `propertyId × report`.
+  Client OAuth2 + Service-account JWT (RS256). Needs valid credentials to run.
 
 ---
 
