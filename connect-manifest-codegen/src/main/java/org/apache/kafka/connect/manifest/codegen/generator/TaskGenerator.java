@@ -359,11 +359,9 @@ public class TaskGenerator {
                 .initializer("$T.INSTANCE", SHARED_HTTP_CLIENT)
                 .build());
 
-        boolean hasHttpStream = streams.stream().anyMatch(s -> !isCustomDispatch(s));
-        if (hasHttpStream) {
-            typeBuilder.addField(RETRY_POLICY, "retryPolicy", Modifier.PRIVATE);
-            typeBuilder.addField(BACKOFF_STRATEGY, "backoffStrategy", Modifier.PRIVATE);
-        }
+        // Per-stream RetryPolicy/BackoffStrategy are constructed at each sendWithRetry call
+        // site so that each declarative stream's own error_handler (response_filters +
+        // backoff_strategies) is applied — matching Airbyte's per-HttpRequester model.
 
         if (auth != null && auth.isBasicHttp()) {
             typeBuilder.addField(String.class, "cachedCredentials", Modifier.PRIVATE);
@@ -499,16 +497,6 @@ public class TaskGenerator {
                     pipelineFieldName(s.getName()), TRANSFORMATION_PIPELINE_FACTORY,
                     transformsJson);
             }
-        }
-
-        StreamSpec primaryHttpStream = streams.stream()
-            .filter(s -> !isCustomDispatch(s))
-            .findFirst()
-            .orElse(null);
-        if (primaryHttpStream != null) {
-            RequesterSpec.ErrorHandlerSpec eh = primaryHttpStream.getRetriever().getRequester().getErrorHandler();
-            m.addStatement("this.retryPolicy = $L", retryPolicyExpr(eh));
-            m.addStatement("this.backoffStrategy = $L", backoffChainExpr(eh));
         }
 
         if (auth != null && auth.isBasicHttp()) {
@@ -1007,7 +995,7 @@ public class TaskGenerator {
         buildRequestStatement(body, auth, null, parentRequester);
         currentWindowStartVar = null;
         currentWindowEndVar = null;
-        body.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
+        emitSendWithRetryCall(body, "response", "request", parentRequester.getErrorHandler());
         body.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");
         body.addStatement("break");
         body.endControlFlow();
@@ -1218,7 +1206,7 @@ public class TaskGenerator {
         body.addStatement(reqFmt.toString(), reqArgs.toArray());
 
         // Fetch with retry
-        body.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
+        emitSendWithRetryCall(body, "response", "request", requester.getErrorHandler());
 
         // HTTP codes treated as SUCCESS (e.g. 403) → return empty record with advanced index
         for (int code : successCodes) {
@@ -1700,7 +1688,8 @@ public class TaskGenerator {
     private CodeBlock buildFetchBlock(PaginatorSpec paginator, StreamSpec stream) {
         String urlRef = isRequestPath(paginator) ? "url" : "urlBuilder";
         CodeBlock.Builder b = CodeBlock.builder();
-        b.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
+        emitSendWithRetryCall(b, "response", "request",
+            stream.getRetriever().getRequester().getErrorHandler());
         b.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");
         b.addStatement(
             "throw new $T(\"HTTP \" + response.statusCode() + \" from \" + " + urlRef + ")",
@@ -2869,9 +2858,33 @@ public class TaskGenerator {
             .addModifiers(Modifier.PRIVATE)
             .returns(httpResponseString)
             .addParameter(HTTP_REQUEST, "request")
+            .addParameter(RETRY_POLICY, "retryPolicy")
+            .addParameter(BACKOFF_STRATEGY, "backoffStrategy")
             .addException(Exception.class)
             .addCode(body.build())
             .build();
+    }
+
+    /**
+     * Emits {@code HttpResponse<String> <respVar> = sendWithRetry(<reqVar>, <retryPolicy>,
+     * <backoffStrategy>);} using the per-stream/per-requester {@code error_handler}.
+     *
+     * <p>This mirrors Airbyte Python's per-requester error handling: each declarative stream's
+     * {@code HttpRequester} carries its own {@code error_handler} with its own
+     * {@code response_filters} and {@code backoff_strategies}
+     * (airbyte_cdk/sources/declarative/requesters/http_requester.py:37-110). A single shared
+     * policy on the task would silently apply the first stream's filters to all streams.</p>
+     */
+    private void emitSendWithRetryCall(
+        CodeBlock.Builder body,
+        String respVar,
+        String reqVar,
+        RequesterSpec.ErrorHandlerSpec eh
+    ) {
+        body.addStatement("$T<$T> $L = sendWithRetry($L, $L, $L)",
+            HTTP_RESPONSE, String.class, respVar, reqVar,
+            retryPolicyExpr(eh),
+            backoffChainExpr(eh));
     }
 
     /**
@@ -3810,8 +3823,8 @@ public class TaskGenerator {
         appendHttpMethod(fmt, args, httpMethod, jsonBody, dataBody, bodyVar);
         fmt.append("\n        .build()");
         body.addStatement(fmt.toString(), args.toArray());
-        body.addStatement("$T<$T> $L = sendWithRetry($L)",
-            HTTP_RESPONSE, String.class, respVar, reqVar);
+        emitSendWithRetryCall(body, respVar, reqVar,
+            requester != null ? requester.getErrorHandler() : null);
     }
 
     /**
@@ -3889,7 +3902,7 @@ public class TaskGenerator {
 
         body.beginControlFlow("try");
         buildRequestStatement(body, auth, null, requester);
-        body.addStatement("$T<$T> response = sendWithRetry(request)", HTTP_RESPONSE, String.class);
+        emitSendWithRetryCall(body, "response", "request", requester.getErrorHandler());
 
         // 4xx/5xx: skip + advance (don't crash the connector).
         body.beginControlFlow("if (response.statusCode() < 200 || response.statusCode() >= 300)");

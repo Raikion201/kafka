@@ -262,6 +262,37 @@ public class CodegenIntegrationTest {
                 + "X-AppFollow-API-Token header.");
     }
 
+    @Test
+    void intercom_companiesStreamUsesItsOwnErrorHandlerFilters() throws Exception {
+        // Intercom's companies stream uses the deprecated /companies/scroll endpoint and
+        // declares per-stream response_filters (401 FAIL, 404 IGNORE, 400 RETRY, 500
+        // RESET_PAGINATION). The admin_activity_logs stream (which appears first in the
+        // manifest) declares only 401 FAIL. A previous global retryPolicy field captured the
+        // first stream's filters and applied them everywhere, so a 404 on companies/scroll —
+        // which Intercom returns after a scroll expires — propagated as a fatal error.
+        String taskSrc = generate("source-intercom.yaml").task.toString();
+        int pollCompaniesStart = taskSrc.indexOf("private List<SourceRecord> pollCompanies(");
+        assertTrue(pollCompaniesStart > 0, "Generated task must define pollCompanies()");
+        int pollCompaniesEnd = taskSrc.indexOf("private List<SourceRecord> poll",
+            pollCompaniesStart + 1);
+        String pollCompaniesBody = pollCompaniesEnd > 0
+            ? taskSrc.substring(pollCompaniesStart, pollCompaniesEnd)
+            : taskSrc.substring(pollCompaniesStart);
+        assertTrue(pollCompaniesBody.contains("ResponseAction.IGNORE")
+                && pollCompaniesBody.contains("List.of(404)"),
+            "pollCompanies must wire its own 404→IGNORE HttpResponseFilter. "
+                + "Without it, the Intercom scroll API's 404 (\"scroll parameter not found\") "
+                + "fails the task instead of returning zero records.");
+        assertTrue(pollCompaniesBody.contains("ResponseAction.RESET_PAGINATION")
+                && pollCompaniesBody.contains("List.of(500)"),
+            "pollCompanies must wire its own 500→RESET_PAGINATION HttpResponseFilter.");
+        assertTrue(pollCompaniesBody.contains("ConstantBackoffStrategy(60.0d)"),
+            "pollCompanies must wire its own ConstantBackoffStrategy(60s).");
+        assertFalse(taskSrc.contains("this.retryPolicy ="),
+            "Task must NOT assign a single global retryPolicy field — that pattern silently "
+                + "applies the first stream's error_handler to all streams.");
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     // PAGINATION ASSERTIONS
     // ══════════════════════════════════════════════════════════════════════════
