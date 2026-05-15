@@ -14,10 +14,11 @@
 | RUNNING (tasks green, polling) | **42** | works |
 | Rate-limited / upstream-tier | **15** | works — API plan or quota |
 | Bad / expired credentials | **10** | works — re-issue creds to fix |
-| DynamicDeclarativeStream stub | **4** | not yet implemented |
+| Codegen gaps (stubs) | **4** | not yet implemented |
 
 **Codegen correct for 67 / 71 registered (94%).**  
-The 4 stub connectors need `DynamicDeclarativeStream` support to work.
+The 4 stub connectors split between two gaps: `DynamicDeclarativeStream` (1
+true case + 1 hybrid) and unported Python `class_name:` components (2 cases).
 
 ---
 
@@ -81,16 +82,41 @@ Fix = re-issue the credential or supply the correct field value.
 
 ---
 
-## DynamicDeclarativeStream stubs (4)
+## Codegen gaps (4)
 
-Manifest declares streams whose names/paths come from a runtime API call.
-Generator emits `GenericDynamicStreamStub` which throws on `start()`.
-Needs dedicated codegen work to support.
+All four currently emit `GenericDynamicStreamStub` (throws on `start()`)
+because the parser drops every stream it can't render and falls through to
+the stub path. Real blocker varies:
 
-- airtable
-- google-analytics-data-api
-- public-apis
-- zenloop
+### DynamicDeclarativeStream (1)
+
+Manifest declares streams whose names/paths come from a runtime API call;
+needs the `DynamicDeclarativeStream` + `HttpComponentsResolver` runtime
+machinery (currently only google-sheets shape is implemented).
+
+- **airtable** — adds a nested `SubstreamPartitionRouter` (bases → tables)
+  on top of the DDS metadata fetch.
+
+### DDS + unported Python `class_name:` components (1)
+
+- **google-analytics-data-api** — declares `dynamic_streams:` AND
+  references `CombinedExtractor`, `KeyValueExtractor`,
+  `DimensionFilterConfigTransformation`. Even with DDS support, the custom
+  classes would still need to be ported (out of scope per current
+  directive).
+
+### Unported Python `class_name:` components only (2)
+
+These don't actually use `DynamicDeclarativeStream`; they hit the stub
+because every stream in the manifest references an unregistered Python
+custom class, so the parser drops them all and the generator falls through:
+
+| Connector | Missing class |
+|---|---|
+| public-apis | `source_public_apis.components.CustomExtractor` |
+| zenloop | `source_zenloop.components.ZenloopPartitionRouter` |
+
+These are out of scope per the "skip custom classes" directive.
 
 ---
 
