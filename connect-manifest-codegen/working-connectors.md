@@ -2,8 +2,8 @@
 
 **Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
 **Last updated:** 2026-05-15
-**JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT` (commit `fe6857ee78`)
-**Registered:** 73 total (48 RUNNING · 19 rate-limited / token-expired · 2 cred fix needed · 2 codegen gaps · 0 dynamic-stream stubs)
+**JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT` (commit pending — request_headers Jinja fix)
+**Registered:** 73 total (49 RUNNING · 18 rate-limited / token-expired · 2 cred fix needed · 2 codegen gaps · 0 dynamic-stream stubs)
 
 ---
 
@@ -11,8 +11,8 @@
 
 | Bucket | Count | Codegen? |
 |---|---:|---|
-| RUNNING (tasks green, polling) | **48** | works |
-| Rate-limited / token-expired / upstream-rejected | **19** | works — quota window, refresh token, or upstream behaviour |
+| RUNNING (tasks green, polling) | **49** | works |
+| Rate-limited / token-expired / upstream-rejected | **18** | works — quota window, refresh token, or upstream behaviour |
 | Cred fix needed (placeholder / paid-tier) | **2** | works — supply real config value |
 | Codegen gaps (non-stub) | **2** | rule-5 skips (unported Python custom classes) |
 | Dynamic-stream stubs | **0** | all DDS connectors now generate real task code |
@@ -21,7 +21,7 @@
 
 ---
 
-## RUNNING (48)
+## RUNNING (49)
 
 Tasks green, actively polling.
 
@@ -31,15 +31,16 @@ dockerhub, formbricks, gmail-connector, google-calendar, google-classroom, googl
 google-sheets-connector, gutendex, hugging-face-datasets, intercom, jina-ai-reader, jira,
 jotform-connector, launchdarkly, lemlist, lob, lokalise, mailerlite, mixmax, mux,
 nasa-connector, onepagecrm, pexels-api-connector, pokeapi, pypi, recruitee-connector,
-rss, scryfall, sentry-connector, shortcut, spacex-api, trello-connector, tvmaze-schedule,
-us-census-connector, whisky-hunter, wikipedia-pageviews, xkcd, yahoo-finance-price
+rss, scryfall, sentry-connector, shortcut, spacex-api, statuspage, trello-connector,
+tvmaze-schedule, us-census-connector, whisky-hunter, wikipedia-pageviews, xkcd,
+yahoo-finance-price
 
 **New this session:** calendly-connector, close-com-connector, jotform-connector,
-pexels-api-connector (plus gmail-connector recovered from 429 window).
+pexels-api-connector, statuspage (plus gmail-connector recovered from 429 window).
 
 ---
 
-## Rate-limited / token-expired / upstream-rejected (19)
+## Rate-limited / token-expired / upstream-rejected (18)
 
 Codegen renders correctly; upstream throttles, the token expired, or the endpoint behaves quirkily. **Counts as working** — recovers on retry windows or with a fresh token.
 
@@ -61,7 +62,6 @@ Codegen renders correctly; upstream throttles, the token expired, or the endpoin
 | omnisend-connector | 404 | Account has no orders — Omnisend returns 404 for empty results |
 | openfda-v2 | 400 | upstream query rejected on one stream; other streams polling |
 | pipedrive-connector | 429 | API throttle |
-| statuspage | 401 | API key needs to be the org-level management key |
 | the-guardian-api-connector | 429 | API throttle |
 | todoist-connector | 410 | Upstream removed the endpoint; harmless retries |
 | toggl-connector | 402 | premium endpoint on free plan |

@@ -1219,9 +1219,9 @@ public class TaskGenerator {
             reqArgs.add(auth.getHeaderPrefix());
         }
         for (Map.Entry<String, String> h : requestHeaders.entrySet()) {
-            reqFmt.append("\n        .header($S, $S)");
+            reqFmt.append("\n        .header($S, $L)");
             reqArgs.add(h.getKey());
-            reqArgs.add(h.getValue());
+            reqArgs.add(interpolateTemplate(h.getValue()));
         }
         appendHttpMethod(reqFmt, reqArgs, lcHttpMethod, lcJsonBody, lcDataBody, lcBodyVar);
         reqFmt.append("\n        .build()");
@@ -2329,9 +2329,9 @@ public class TaskGenerator {
 
         // Custom request headers from the manifest.
         for (Map.Entry<String, String> h : reqHeaders.entrySet()) {
-            fmt.append("\n        .header($S, $S)");
+            fmt.append("\n        .header($S, $L)");
             args.add(h.getKey());
-            args.add(h.getValue());
+            args.add(interpolateTemplate(h.getValue()));
         }
 
         // HTTP method.
@@ -2538,9 +2538,9 @@ public class TaskGenerator {
         if (login.getRequestHeaders() != null) {
             for (Map.Entry<String, String> e : login.getRequestHeaders().entrySet()) {
                 if (e.getValue() != null && !e.getValue().isEmpty()) {
-                    reqBuilder.append("        .header($S, $S)\n");
+                    reqBuilder.append("        .header($S, $L)\n");
                     reqArgs.add(e.getKey());
-                    reqArgs.add(e.getValue());
+                    reqArgs.add(interpolateTemplate(e.getValue()));
                 }
             }
         }
@@ -3865,9 +3865,9 @@ public class TaskGenerator {
             args.add(auth.getHeaderPrefix());
         }
         for (Map.Entry<String, String> h : egHeaders.entrySet()) {
-            fmt.append("\n        .header($S, $S)");
+            fmt.append("\n        .header($S, $L)");
             args.add(h.getKey());
-            args.add(h.getValue());
+            args.add(interpolateTemplate(h.getValue()));
         }
         appendHttpMethod(fmt, args, httpMethod, jsonBody, dataBody, bodyVar);
         fmt.append("\n        .build()");
