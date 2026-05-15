@@ -57,6 +57,9 @@ class GenericCustomComponentsRegistrarTest {
 
     @Test
     void allClassNamesResolve() {
+        assertExtractor(SDM + "CombinedExtractor");
+        assertExtractor(SDM + "KeyValueExtractor");
+        assertTransform(SDM + "DimensionFilterConfigTransformation");
         assertTransform(SDM + "CustomFieldTransformation");
         assertTransform(SDM + "TransformEmptyMetrics");
         assertTransform(SDM + "TransformDatetimesToRFC3339");

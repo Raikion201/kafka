@@ -128,5 +128,17 @@ public final class GenericCustomComponentsRegistrar {
         CustomComponentRegistry.register(
             SDM + "KlaviyoIncludedFieldExtractor",
             KlaviyoIncludedFieldExtractor::new);
+
+        CustomComponentRegistry.register(
+            SDM + "CombinedExtractor",
+            CombinedExtractor::new);
+
+        CustomComponentRegistry.register(
+            SDM + "KeyValueExtractor",
+            KeyValueExtractorStub::new);
+
+        CustomComponentRegistry.register(
+            SDM + "DimensionFilterConfigTransformation",
+            DimensionFilterConfigTransformationStub::new);
     }
 }
