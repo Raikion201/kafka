@@ -3,7 +3,7 @@
 **Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
 **Last updated:** 2026-05-16
 **JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT` (commit `9a0da4694f` — request_headers Jinja fix)
-**Registered:** 73 total (51 RUNNING · 18 rate-limited / token-expired · 2 cred fix needed · 1 codegen gap · 0 dynamic-stream stubs)
+**Registered:** 81 total (56 RUNNING · 19 rate-limited / token-expired · 2 cred fix needed · 2 codegen gaps · 2 cred-format / 422 · 0 dynamic-stream stubs)
 
 ---
 
@@ -11,42 +11,47 @@
 
 | Bucket | Count | Codegen? |
 |---|---:|---|
-| RUNNING (tasks green, polling) | **51** | works |
-| Rate-limited / token-expired / upstream-rejected | **18** | works — quota window, refresh token, or upstream behaviour |
+| RUNNING (tasks green, polling) | **56** | works |
+| Rate-limited / token-expired / upstream-rejected | **19** | works — quota window, refresh token, or upstream behaviour |
+| Cred-format / 422 (likely bad config field) | **2** | works — fix config value |
 | Cred fix needed (placeholder / paid-tier) | **2** | works — supply real config value |
-| Codegen gaps (non-stub) | **1** | rule-5 skip (unported Python custom class) |
+| Codegen gaps (non-stub) | **2** | rule-5 skip (unported Python custom class) |
 | Dynamic-stream stubs | **0** | all DDS connectors now generate real task code |
 
-**Codegen correct for 71 / 73 registered (~97%). airtable + GA4 verified live with real credentials.**
+**Codegen correct for 79 / 81 registered (~98%). 5 new credentialed connectors verified live this session: openweather, polygon-stock-api, judge-me-reviews, savvycal, pingdom.**
 
 ---
 
-## RUNNING (49)
+## RUNNING (56)
 
 Tasks green, actively polling.
 
-akeneo-connector, airtable, alpha-vantage, cal-com-connector, calendly-connector, chargebee,
-clockify-connector, close-com-connector, coda-connector, configcat-connector, defillama,
-dockerhub, formbricks, gmail-connector, google-analytics-data-api, google-calendar,
-google-classroom, google-forms, google-sheets-connector, gutendex, hugging-face-datasets,
-intercom, jina-ai-reader, jira, jotform-connector, klaviyo-connector, launchdarkly, lemlist,
-lob, lokalise, mailerlite, mixmax, mux, nasa-connector, onepagecrm, pexels-api-connector,
-pokeapi, pypi, recruitee-connector, rss, scryfall, sentry-connector, shortcut, spacex-api,
-statuspage, trello-connector, tvmaze-schedule, us-census-connector, whisky-hunter,
-wikipedia-pageviews, xkcd, yahoo-finance-price
+airtable, akeneo-connector, alpha-vantage, appfollow, cal-com-connector, calendly-connector,
+chargebee, clockify-connector, close-com-connector, coda-connector, configcat-connector,
+defillama, dockerhub, formbricks, gmail-connector, google-calendar, google-classroom,
+google-forms, google-sheets-connector, gutendex, hugging-face-datasets, intercom,
+jina-ai-reader, jira, jotform-connector, judge-me-reviews, launchdarkly, lemlist, linear,
+lob, lokalise, mailerlite, mux, nasa-connector, onepagecrm, openweather, pexels-api-connector,
+pingdom, pokeapi, polygon-stock-api, pypi, recruitee-connector, rss, savvycal, scryfall,
+sentry-connector, shortcut, spacex-api, statuspage, trello-connector, tvmaze-schedule,
+us-census-connector, whisky-hunter, wikipedia-pageviews, xkcd, yahoo-finance-price
 
-**New this session:** airtable (PAT auth, live stream discovery), google-analytics-data-api
-(verified live — real API calls), klaviyo-connector (running, one extractor stub).
+**New this session:**
+- **openweather** — switched manifest from One Call 3.0 to `/data/2.5/weather` (free key
+  doesn't have One Call subscription). 2185 records on topic `onecall`.
+- **polygon-stock-api**, **judge-me-reviews**, **savvycal**, **pingdom** — new
+  credentialed registrations, all RUNNING.
+- **statuspage** — unblocked by codegen header-Jinja fix (commit `9a0da4694f`).
+- **linear**, **appfollow** — recovered from previous rate-limit window.
 
 ---
 
-## Rate-limited / token-expired / upstream-rejected (18)
+## Rate-limited / token-expired / upstream-rejected (19)
 
 Codegen renders correctly; upstream throttles, the token expired, or the endpoint behaves quirkily. **Counts as working** — recovers on retry windows or with a fresh token.
 
 | Connector | Code | Note |
 |---|---|---|
-| appfollow | 422 | upstream input rejection |
 | apptivo | — | Token expired — response is HTML login page; refresh `api_key`/`access_key` |
 | aviationstack-connector | 429 | free-tier quota exhausted |
 | bitly-connector | 402 | free-tier credit exhausted |
@@ -56,8 +61,9 @@ Codegen renders correctly; upstream throttles, the token expired, or the endpoin
 | coinmarketcap-connector | 429 | API throttle |
 | giphy-connector | 429 | API throttle |
 | gnews-connector | 403 | free-tier blocked |
+| google-analytics-data-api | 403 | OAuth token re-expired — refresh `client_secret`/refresh token |
 | hubplanner-connector | 429 | API throttle |
-| linear | 400→429 | GraphQL rate-limit encoded as 400 (`RATELIMITED`) |
+| mixmax | 429 | API throttle |
 | newsapi-connector | 429 | free-tier quota |
 | omnisend-connector | 404 | Account has no orders — Omnisend returns 404 for empty results |
 | openfda-v2 | 400 | upstream query rejected on one stream; other streams polling |
@@ -68,9 +74,20 @@ Codegen renders correctly; upstream throttles, the token expired, or the endpoin
 
 ---
 
+## Cred-format / 422 (2)
+
+Codegen renders correctly; the request is being rejected by the upstream as malformed. Most likely a config field is the wrong shape (e.g. internal ID vs. name).
+
+| Connector | Code | Suspected fix |
+|---|---|---|
+| mailersend | 422 | `domain_id` must be the MailerSend internal ID (`GET /v1/domains` → `data[].id`), not the domain name |
+| newsdata-io | 422 | Re-check `api_key` format and `start_date` window |
+
+---
+
 ## Cred fix needed (2)
 
-These genuinely need a config / credential change before they can run.
+Genuinely needs a config / credential change before it can run.
 
 | Connector | Code | Fix |
 |---|---|---|
@@ -79,20 +96,24 @@ These genuinely need a config / credential change before they can run.
 
 ---
 
-## Codegen gaps — non-stub (1)
+## Codegen gaps — non-stub (2)
 
-Connector starts but a stream fails because the generator can't render a custom Python class. Rule-5 skip (no live SDKs, no custom-class ports without a clear REST mapping).
+Connector starts but a stream fails because the generator can't render a custom Python class, or because the manifest references a config field the spec doesn't declare. Rule-5 skip (no live SDKs, no custom-class ports without a clear REST mapping).
 
 | Connector | Missing component | Effect |
 |---|---|---|
 | klaviyo-connector | `KlaviyoIncludedFieldExtractor` | one stream extractor fails; rest of connector polling fine |
+| mailosaur | spec gap: manifest references `config['serverid']` but spec doesn't declare it, so the field is never generated. Needs codegen-side auto-scan of `config[...]` refs, or a manifest patch. | 404 on `/api/messages` (no serverid) |
 
 ### Recently fixed
+- **statuspage** (commit `9a0da4694f`) — `request_headers` values were emitted as raw
+  string literals; switched to `$L` + `interpolateTemplate` so Jinja inside header
+  values now interpolates. Fix swept across 4 emission sites in `TaskGenerator`.
+- **openweather** (manifest-local) — path switched from `onecall` (3.0/paid) to
+  `weather` (2.5/free); url_base now `data/2.5/`. Producing real SF weather records.
 - **calendly-connector** (commit `4c980d5ace`) — SubstreamPartitionRouter now
   injects `parent_stream_configs[].request_option` as a query parameter
-  (`?organization=<URI>`). Verified end-to-end: task RUNNING, producing to
-  `event_types`, `organization_memberships`, `api_user` topics.
-  Likely also unblocks other connectors using the same shape — worth a sweep.
+  (`?organization=<URI>`).
 
 ---
 
@@ -106,7 +127,7 @@ Previously stubbed:
   all bases→tables at `start()` via paginated metadata API. PAT auth verified live — task RUNNING.
 - **google-analytics-data-api** — now generates `GoogleAnalyticsDataApiSourceTask` (DDS.T3,
   commit `fe6857ee78`). Embeds 57 default reports; polls every `propertyId × report`.
-  Verified live with real credentials — task RUNNING.
+  Currently failing on 403 (OAuth token re-expired) — codegen is correct.
 
 ---
 
