@@ -24,6 +24,25 @@ change, a generator branch, a runtime helper):
 This applies just as strongly to bug fixes: before changing behaviour, confirm
 what the Python runtime actually does for the same input.
 
+### Credential / setup docs for individual connectors
+
+When adding credentials for a connector (or debugging why a registered one
+won't authenticate), the Airbyte docs page for that source is the canonical
+reference: how to mint the token, which scopes are required, what the
+`start_date` / region / subdomain fields expect, and known upstream quirks.
+
+URL pattern: `https://docs.airbyte.com/integrations/sources/<connector-name>`
+
+The `<connector-name>` matches the manifest filename stem — drop the
+`source-` prefix from `source-<name>.yaml`. Examples:
+- `source-statuspage.yaml` → https://docs.airbyte.com/integrations/sources/statuspage
+- `source-google-analytics-data-api.yaml` → https://docs.airbyte.com/integrations/sources/google-analytics-data-api
+- `source-amazon-ads.yaml` → https://docs.airbyte.com/integrations/sources/amazon-ads
+
+Fetch it with WebFetch when you need to know where the user should get an API
+key, what the OAuth callback expects, or what a vendor-specific field
+(`account_id`, `subdomain`, `region`, etc.) is supposed to contain.
+
 ## 2. Split work into tasks; one task = one commit
 
 - Use `TaskCreate` to break any non-trivial change into discrete tasks before
