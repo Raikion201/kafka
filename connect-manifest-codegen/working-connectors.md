@@ -1,9 +1,9 @@
 # Working Connectors — Standalone Kafka Connect
 
 **Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
-**Last updated:** 2026-05-15
+**Last updated:** 2026-05-16
 **JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT` (commit `9a0da4694f` — request_headers Jinja fix)
-**Registered:** 73 total (49 RUNNING · 18 rate-limited / token-expired · 2 cred fix needed · 2 codegen gaps · 0 dynamic-stream stubs)
+**Registered:** 73 total (51 RUNNING · 18 rate-limited / token-expired · 2 cred fix needed · 1 codegen gap · 0 dynamic-stream stubs)
 
 ---
 
@@ -11,13 +11,13 @@
 
 | Bucket | Count | Codegen? |
 |---|---:|---|
-| RUNNING (tasks green, polling) | **49** | works |
+| RUNNING (tasks green, polling) | **51** | works |
 | Rate-limited / token-expired / upstream-rejected | **18** | works — quota window, refresh token, or upstream behaviour |
 | Cred fix needed (placeholder / paid-tier) | **2** | works — supply real config value |
-| Codegen gaps (non-stub) | **2** | rule-5 skips (unported Python custom classes) |
+| Codegen gaps (non-stub) | **1** | rule-5 skip (unported Python custom class) |
 | Dynamic-stream stubs | **0** | all DDS connectors now generate real task code |
 
-**Codegen correct for 69 / 73 registered (~95%). DDS stubs eliminated (airtable + GA4 → real tasks).**
+**Codegen correct for 71 / 73 registered (~97%). airtable + GA4 verified live with real credentials.**
 
 ---
 
@@ -25,18 +25,18 @@
 
 Tasks green, actively polling.
 
-akeneo-connector, alpha-vantage, cal-com-connector, calendly-connector, chargebee,
+akeneo-connector, airtable, alpha-vantage, cal-com-connector, calendly-connector, chargebee,
 clockify-connector, close-com-connector, coda-connector, configcat-connector, defillama,
-dockerhub, formbricks, gmail-connector, google-calendar, google-classroom, google-forms,
-google-sheets-connector, gutendex, hugging-face-datasets, intercom, jina-ai-reader, jira,
-jotform-connector, launchdarkly, lemlist, lob, lokalise, mailerlite, mixmax, mux,
-nasa-connector, onepagecrm, pexels-api-connector, pokeapi, pypi, recruitee-connector,
-rss, scryfall, sentry-connector, shortcut, spacex-api, statuspage, trello-connector,
-tvmaze-schedule, us-census-connector, whisky-hunter, wikipedia-pageviews, xkcd,
-yahoo-finance-price
+dockerhub, formbricks, gmail-connector, google-analytics-data-api, google-calendar,
+google-classroom, google-forms, google-sheets-connector, gutendex, hugging-face-datasets,
+intercom, jina-ai-reader, jira, jotform-connector, klaviyo-connector, launchdarkly, lemlist,
+lob, lokalise, mailerlite, mixmax, mux, nasa-connector, onepagecrm, pexels-api-connector,
+pokeapi, pypi, recruitee-connector, rss, scryfall, sentry-connector, shortcut, spacex-api,
+statuspage, trello-connector, tvmaze-schedule, us-census-connector, whisky-hunter,
+wikipedia-pageviews, xkcd, yahoo-finance-price
 
-**New this session:** calendly-connector, close-com-connector, jotform-connector,
-pexels-api-connector, statuspage (plus gmail-connector recovered from 429 window).
+**New this session:** airtable (PAT auth, live stream discovery), google-analytics-data-api
+(verified live — real API calls), klaviyo-connector (running, one extractor stub).
 
 ---
 
@@ -79,14 +79,13 @@ These genuinely need a config / credential change before they can run.
 
 ---
 
-## Codegen gaps — non-stub (2)
+## Codegen gaps — non-stub (1)
 
 Connector starts but a stream fails because the generator can't render a custom Python class. Rule-5 skip (no live SDKs, no custom-class ports without a clear REST mapping).
 
 | Connector | Missing component | Effect |
 |---|---|---|
-| klaviyo-connector | `KlaviyoIncludedFieldExtractor` | one stream extractor; rest of connector is fine |
-| google-analytics-data-api | `CombinedExtractor`, `KeyValueExtractor`, `DimensionFilterConfigTransformation` | custom class ports now registered; DDS codegen done (real task generated) — needs real credentials to verify end-to-end |
+| klaviyo-connector | `KlaviyoIncludedFieldExtractor` | one stream extractor fails; rest of connector polling fine |
 
 ### Recently fixed
 - **calendly-connector** (commit `4c980d5ace`) — SubstreamPartitionRouter now
@@ -104,11 +103,10 @@ for any registered connector.
 
 Previously stubbed:
 - **airtable** — now generates `AirtableSourceTask` (DDS.T2, commit `c559fe261b`). Discovers
-  all bases→tables at `start()` via paginated metadata API. OAuth2 + PAT auth. Needs valid
-  credentials at `~/.kafka-connect-credentials/connector-airtable.properties` to run.
+  all bases→tables at `start()` via paginated metadata API. PAT auth verified live — task RUNNING.
 - **google-analytics-data-api** — now generates `GoogleAnalyticsDataApiSourceTask` (DDS.T3,
   commit `fe6857ee78`). Embeds 57 default reports; polls every `propertyId × report`.
-  Client OAuth2 + Service-account JWT (RS256). Needs valid credentials to run.
+  Verified live with real credentials — task RUNNING.
 
 ---
 
