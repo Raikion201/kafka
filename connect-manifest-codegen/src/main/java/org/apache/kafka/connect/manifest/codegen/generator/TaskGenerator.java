@@ -1653,11 +1653,10 @@ public class TaskGenerator {
                 IncrementalSyncSpec.DatetimeSpec endDt = sync.getEndDatetime();
                 if (endDt != null && endDt.getDatetime() != null) {
                     // end_datetime has a Jinja expression (e.g. now_utc().strftime(...)).
-                    // Render it at runtime, then reformat to the cursor's datetime format.
+                    // Render it at runtime, then reformat to the cursor's datetime_format.
                     String parseFmt = "%Y-%m-%dT%H:%M:%SZ";
-                    String cursorFmt = sync.getStartDatetime() != null
-                        && sync.getStartDatetime().getDatetimeFormat() != null
-                        ? sync.getStartDatetime().getDatetimeFormat() : parseFmt;
+                    String cursorFmt = sync.getDatetimeFormat() != null
+                        ? sync.getDatetimeFormat() : parseFmt;
                     b.addStatement(
                         "urlBuilder.append($S + $T.encode($T.formatDate($T.parseDate(render($L, jinjaCtx()), $S), $S), $T.UTF_8))",
                         sep + endOpt.getFieldName() + "=",
