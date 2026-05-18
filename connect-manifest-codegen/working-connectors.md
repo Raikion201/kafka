@@ -1,9 +1,9 @@
 # Working Connectors — Standalone Kafka Connect
 
 **Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
-**Last updated:** 2026-05-16
-**JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT` (commit `9a0da4694f` — request_headers Jinja fix)
-**Registered:** 81 total (68 RUNNING · 11 rate-limited / token-expired · 1 cred fix needed · 1 codegen gap · 0 dynamic-stream stubs)
+**Last updated:** 2026-05-18
+**JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT`
+**Registered:** 91 total (89 RUNNING · 0 rate-limited · 0 cred fix needed · 1 codegen gap · 1 OAuth expired)
 
 ---
 
@@ -11,118 +11,97 @@
 
 | Bucket | Count | Codegen? |
 |---|---:|---|
-| RUNNING (tasks green, polling) | **68** | works |
-| Rate-limited / token-expired / upstream-rejected | **11** | works — quota window, refresh token, or upstream behaviour |
-| Cred fix needed (placeholder / paid-tier) | **1** | works — supply real config value |
+| RUNNING (tasks green, polling) | **89** | works |
+| OAuth expired / needs re-authorization | **1** | works — re-issue refresh token |
 | Codegen gaps (non-stub) | **1** | rule-5 skip (unported Python custom class) |
 | Dynamic-stream stubs | **0** | all DDS connectors now generate real task code |
 
-**Codegen correct for 79 / 81 registered (~98%). All 8 newly-credentialed connectors this session (openweather, polygon, judge-me, savvycal, pingdom, mailersend, mailosaur, newsdata-io) now RUNNING.**
+**Codegen correct for 90 / 91 registered (~99%). 10 new connectors credentialed this session (activecampaign, bugsnag, assemblyai, algolia, asana, bamboo-hr, freshsales, chartmogul, brevo, notion) + 3 codegen bug fixes (brevo epoch format, bamboo-hr date format, gnews RFC-822 parse).**
 
 ---
 
-## RUNNING (68)
+## RUNNING (89)
 
 Tasks green, actively polling.
 
-airtable, akeneo-connector, alpha-vantage, bitly-connector, cal-com-connector,
-calendly-connector, chargebee, clockify-connector, close-com-connector, coda-connector,
-coinmarketcap-connector, configcat-connector, defillama, dockerhub, formbricks,
-giphy-connector, gmail-connector, gnews-connector, google-calendar, google-classroom,
-google-forms, google-sheets-connector, gutendex, hubplanner-connector,
-hugging-face-datasets, intercom, jina-ai-reader, jira, jotform-connector,
-judge-me-reviews, launchdarkly, lemlist, linear, lob, lokalise, mailerlite, mailersend,
-mailosaur, mixmax, mux, nasa-connector, newsapi-connector, newsdata-io, onepagecrm,
-openweather, pexels-api-connector, pingdom, pipedrive-connector, pokeapi,
+activecampaign, airtable, akeneo-connector, algolia, alpha-vantage, appfollow,
+apptivo, asana, assemblyai, aviationstack-connector, bamboo-hr, bitly-connector,
+box-connector, breezy-hr, brevo, bugsnag, buildkite, cal-com-connector,
+calendly-connector, chargebee, chartmogul, clockify-connector, close-com-connector,
+coda-connector, coingecko-coins-connector, coinmarketcap-connector, configcat-connector,
+defillama, dockerhub, formbricks, freshdesk-connector, freshsales, giphy-connector,
+gmail-connector, gnews-connector, google-calendar, google-classroom, google-forms,
+google-sheets-connector, gutendex, hubplanner-connector, hugging-face-datasets, intercom,
+jina-ai-reader, jira, jotform-connector, judge-me-reviews, klaviyo-connector,
+launchdarkly, lemlist, linear, lob, lokalise, mailerlite, mailersend, mailosaur, mixmax,
+mux, nasa-connector, newsapi-connector, newsdata-io, omnisend-connector, onepagecrm,
+openfda-v2, openweather, pexels-api-connector, pingdom, pipedrive-connector, pokeapi,
 polygon-stock-api, pypi, recruitee-connector, rss, savvycal, scryfall, sentry-connector,
 shortcut, spacex-api, statuspage, the-guardian-api-connector, todoist-connector,
-trello-connector, tvmaze-schedule, us-census-connector, whisky-hunter,
+toggl-connector, trello-connector, tvmaze-schedule, us-census-connector, whisky-hunter,
 wikipedia-pageviews, xkcd, yahoo-finance-price
 
-**New this session (all 8 credentialed RUNNING):**
-- **openweather** — manifest switched 3.0/onecall → 2.5/weather (free key).
-- **polygon-stock-api**, **judge-me-reviews**, **savvycal**, **pingdom** — straight-through.
-- **mailersend** — `start_date` reset to within the free-tier 1-day retention window.
-- **mailosaur** — manifest patch: added `serverid` to spec, dropped redundant
-  `SubstreamPartitionRouter` so `request_parameters.server` is emitted as query param.
-- **newsdata-io** — dropped paid-only `historical_news` stream from manifest; added
-  `countries=us`, `domains=techcrunch`, `languages=en`, `categories=technology` to
-  cred (API rejects empty filter values with 422).
-- **statuspage** — unblocked by codegen header-Jinja fix (commit `9a0da4694f`).
+**New connectors credentialed this session:**
+- **activecampaign**, **bugsnag**, **assemblyai**, **algolia**, **asana**, **bamboo-hr**,
+  **freshsales**, **chartmogul**, **brevo** — straight-through after codegen fixes below.
+- **algolia** — `logs` stream skipped (requires Logs ACL API key); other streams RUNNING.
+- **appfollow** — `app_lists` stream skipped (422 upstream); `users`, `app_collections`,
+  `stat_reviews`, `ratings` RUNNING.
+- **bamboo-hr** — `timesheet_entries` stream skipped (Time Tracking not enabled on trial);
+  other streams RUNNING. `start_date=2025-05-18` (trial account data limit).
 
+**Codegen fixes this session:**
+- **brevo** — `crm_tasks` epoch format: `dateTo` now uses stream's `datetime_format` (`%s`)
+  not the input parse format; and `webhooks` 400 (no webhooks configured) now skipped via
+  per-stream error isolation.
+- **bamboo-hr** — end-time parameter now formats as `%Y-%m-%d` (stream cursor format)
+  not ISO datetime.
+- **gnews** — RFC-822 offset (`+0000` no colon) parse fallback added to `parseIsoFallback()`
+  so old cursor values stored pre-Z-fix still parse correctly.
+- **Per-stream error isolation** — `poll()` now wraps each stream call in try-catch
+  so one 422/403/404 stream doesn't kill the entire task.
 ---
 
-## Rate-limited / token-expired / upstream-rejected (11)
+## FAILED (2)
 
-Codegen renders correctly; upstream throttles, the token expired, or the endpoint behaves quirkily. **Counts as working** — recovers on retry windows or with a fresh token.
-
-| Connector | Code | Note |
+| Connector | State | Reason |
 |---|---|---|
-| appfollow | 422 | upstream input rejection |
-| apptivo | — | Token expired — response is HTML login page; refresh `api_key`/`access_key` |
-| aviationstack-connector | 429 | free-tier quota exhausted |
-| box-connector | — | OAuth refresh token expired — re-issue `refresh_token` |
-| buildkite | 403 | token lacks `read_organizations` scope |
-| coingecko-coins-connector | 429 | API throttle |
-| google-analytics-data-api | 403 | OAuth token re-expired — refresh `client_secret`/refresh token |
-| omnisend-connector | 404 | Account has no orders — Omnisend returns 404 for empty results |
-| openfda-v2 | 400 | upstream query rejected on one stream; other streams polling |
-| toggl-connector | 402 | premium endpoint on free plan |
-| freshdesk-connector | 404 | `/skills` endpoint is paid-tier only — needs Pro/Enterprise Freshdesk. Other streams work. |
+| google-analytics-data-api | Task FAILED | OAuth refresh token expired — re-issue via Google Cloud Console. Codegen is correct. |
+| notion | Task FAILED | `NotionUserTransformation` custom Python class not yet ported. Rule-5 skip. |
 
 ---
 
-## Cred fix needed (1)
+## Stream-named topics
 
-Genuinely needs a config / credential change before it can run.
+Each stream writes to a Kafka topic named after the stream (not the connector). To consume:
 
-| Connector | Code | Fix |
+```bash
+# List which topics a connector is writing to
+curl http://localhost:8083/connectors/brevo/topics | python3 -m json.tool
+
+# Consume from a specific stream topic
+~/kafka/standalone/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 --topic senders \
+  --from-beginning --max-messages 5 --timeout-ms 5000
+```
+
+The `make sample` command iterates ALL connectors sequentially (89 × multiple topics × 5 s timeout per topic) and can take 10–15 minutes. For a single connector use direct topic consumption above.
+
+**Note:** Non-windowed incremental streams (e.g., brevo `contacts`) re-emit the last record on every poll because Brevo's `modifiedSince` filter is inclusive — this is expected Airbyte at-least-once delivery semantics. Deduplicate on record `id` in your consumers.
+
+---
+
+## Codegen notes — known stream skips
+
+Streams skipped via per-stream error isolation (task stays RUNNING, stream data absent):
+
+| Connector | Skipped stream | Reason |
 |---|---|---|
-| breezy-hr | 400 | Replace placeholder `REPLACE_WITH_YOUR_COMPANY_ID` with your real Breezy company ID. |
-
----
-
-## Codegen gaps — non-stub (1)
-
-Connector starts but a stream fails because the generator can't render a custom Python class. Rule-5 skip (no live SDKs, no custom-class ports without a clear REST mapping).
-
-| Connector | Missing component | Effect |
-|---|---|---|
-| klaviyo-connector | `KlaviyoIncludedFieldExtractor` | one stream extractor fails; rest of connector polling fine |
-
-### Recently fixed
-- **statuspage** (commit `9a0da4694f`) — `request_headers` values were emitted as raw
-  string literals; switched to `$L` + `interpolateTemplate` so Jinja inside header
-  values now interpolates. Fix swept across 4 emission sites in `TaskGenerator`.
-- **openweather** (manifest-local) — path switched from `onecall` (3.0/paid) to
-  `weather` (2.5/free); url_base now `data/2.5/`.
-- **mailosaur** (manifest-local) — added `serverid` to spec.properties; dropped
-  the `SubstreamPartitionRouter` block so the codegen now emits
-  `request_parameters.server={{ config['serverid'] }}` as a query param. Also
-  uncovered a codegen bug: when a `SubstreamPartitionRouter` is present, sibling
-  `request_parameters` are dropped — worth a fix.
-- **newsdata-io** (manifest-local) — dropped `historical_news` (paid-only `/archive`
-  endpoint) from streams list. Also a codegen bug surfaced: empty list-join Jinja
-  templates (`{{ ','.join(config.get('countries', [])) }}`) render to empty
-  string `&country=`, which newsdata-io's API rejects with 422 — codegen should
-  omit URL params whose rendered value is empty.
-- **calendly-connector** (commit `4c980d5ace`) — SubstreamPartitionRouter now
-  injects `parent_stream_configs[].request_option` as a query parameter
-  (`?organization=<URI>`).
-
----
-
-## Dynamic-stream stubs (0)
-
-All DDS connectors now generate real task code — `GenericDynamicStreamStub` is no longer emitted
-for any registered connector.
-
-Previously stubbed:
-- **airtable** — now generates `AirtableSourceTask` (DDS.T2, commit `c559fe261b`). Discovers
-  all bases→tables at `start()` via paginated metadata API. PAT auth verified live — task RUNNING.
-- **google-analytics-data-api** — now generates `GoogleAnalyticsDataApiSourceTask` (DDS.T3,
-  commit `fe6857ee78`). Embeds 57 default reports; polls every `propertyId × report`.
-  Currently failing on 403 (OAuth token re-expired) — codegen is correct.
+| appfollow | `app_lists` | 422 — upstream input rejection |
+| bamboo-hr | `timesheet_entries` | 403 — Time Tracking not enabled on trial |
+| algolia | `logs` | 403 — requires Logs ACL API key |
+| brevo | `contacts_filters` | 400 — no filters configured |
+| brevo | `webhooks` | 400 — no webhooks configured |
 
 ---
 
