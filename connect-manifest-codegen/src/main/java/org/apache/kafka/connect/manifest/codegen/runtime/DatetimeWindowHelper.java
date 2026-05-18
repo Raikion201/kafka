@@ -214,6 +214,10 @@ public final class DatetimeWindowHelper {
             .replace("%f", "SSSSSS");  // microseconds (6 digits)
         // T is a reserved letter in Java DTF patterns — quote it as a literal.
         java = java.replace("T", "'T'");
+        // After all %X substitutions, any remaining uppercase Z is a literal timezone
+        // suffix (e.g. from "%H:%M:%SZ"). Java DTF treats bare Z as RFC-822 offset (+0000),
+        // so quote it as 'Z' to preserve the literal character.
+        java = java.replace("Z", "'Z'");
         // Strip any fractional-seconds suffix from the Python format that may appear as
         // ".%f+00:00" — Java DateTimeFormatter needs these sections handled separately.
         // Split around XXX so we can make the offset optional for formatting.

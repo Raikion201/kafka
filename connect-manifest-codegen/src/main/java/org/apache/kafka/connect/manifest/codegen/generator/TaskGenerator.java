@@ -1650,10 +1650,28 @@ public class TaskGenerator {
                     ClassName.get("java.net", "URLEncoder"),
                     ClassName.get("java.nio.charset", "StandardCharsets"));
             } else {
-                // Epoch seconds — many APIs (e.g. Delighted) expect integer timestamps.
-                b.addStatement("urlBuilder.append($S + $T.valueOf($T.currentTimeMillis() / 1000))",
-                    sep + endOpt.getFieldName() + "=",
-                    String.class, System.class);
+                IncrementalSyncSpec.DatetimeSpec endDt = sync.getEndDatetime();
+                if (endDt != null && endDt.getDatetime() != null) {
+                    // end_datetime has a Jinja expression (e.g. now_utc().strftime(...)).
+                    // Render it at runtime, then reformat to the cursor's datetime format.
+                    String parseFmt = "%Y-%m-%dT%H:%M:%SZ";
+                    String cursorFmt = sync.getStartDatetime() != null
+                        && sync.getStartDatetime().getDatetimeFormat() != null
+                        ? sync.getStartDatetime().getDatetimeFormat() : parseFmt;
+                    b.addStatement(
+                        "urlBuilder.append($S + $T.encode($T.formatDate($T.parseDate(render($L, jinjaCtx()), $S), $S), $T.UTF_8))",
+                        sep + endOpt.getFieldName() + "=",
+                        ClassName.get("java.net", "URLEncoder"),
+                        DATETIME_WINDOW_HELPER, DATETIME_WINDOW_HELPER,
+                        interpolateTemplate(endDt.getDatetime()),
+                        parseFmt, cursorFmt,
+                        ClassName.get("java.nio.charset", "StandardCharsets"));
+                } else {
+                    // Epoch seconds fallback — some APIs (e.g. Delighted) expect integer timestamps.
+                    b.addStatement("urlBuilder.append($S + $T.valueOf($T.currentTimeMillis() / 1000))",
+                        sep + endOpt.getFieldName() + "=",
+                        String.class, System.class);
+                }
             }
             hasParams = true;
         }
