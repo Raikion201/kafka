@@ -245,15 +245,29 @@ public final class DatetimeWindowHelper {
 
     // ── private ────────────────────────────────────────────────────────────────
 
+    // Handles RFC-822 offset (+0000 without colon) with optional fractional seconds.
+    private static final DateTimeFormatter RFC822_OFFSET_FMT = new DateTimeFormatterBuilder()
+        .appendPattern("yyyy-MM-dd'T'HH:mm:ss")
+        .optionalStart()
+        .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true)
+        .optionalEnd()
+        .appendOffset("+HHmm", "Z")
+        .toFormatter();
+
     /** Parses a human-readable date/datetime string using common ISO formats. */
     private static ZonedDateTime parseIsoFallback(String value) {
         try {
             return ZonedDateTime.parse(value);
         } catch (Exception e1) {
             try {
-                return LocalDateTime.parse(value).atZone(ZoneOffset.UTC);
+                // Handle RFC-822 offset (+0000 without colon), e.g. from stored cursors.
+                return ZonedDateTime.parse(value, RFC822_OFFSET_FMT);
             } catch (Exception e2) {
-                return LocalDate.parse(value).atStartOfDay(ZoneOffset.UTC);
+                try {
+                    return LocalDateTime.parse(value).atZone(ZoneOffset.UTC);
+                } catch (Exception e3) {
+                    return LocalDate.parse(value).atStartOfDay(ZoneOffset.UTC);
+                }
             }
         }
     }
