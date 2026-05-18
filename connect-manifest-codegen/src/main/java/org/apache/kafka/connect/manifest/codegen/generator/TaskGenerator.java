@@ -557,7 +557,14 @@ public class TaskGenerator {
         body.addStatement("$T<$T> all = new $T<>()", List.class, SOURCE_RECORD, ArrayList.class);
         for (StreamSpec stream : streams) {
             String pollMethod = "poll" + ManifestSpec.toClassName(stream.getName());
+            // Wrap per-stream: a 4xx/account-limitation on one stream skips it rather than
+            // failing the whole task (mirrors Airbyte CDK's per-stream error isolation).
+            body.beginControlFlow("try");
             body.addStatement("all.addAll($L())", pollMethod);
+            body.nextControlFlow("catch ($T _se)", CONNECT_EXCEPTION);
+            body.addStatement("$T.err.println(\"[WARN] stream $L skipped: \" + _se.getMessage())",
+                System.class, stream.getName());
+            body.endControlFlow();
         }
         body.addStatement("return all");
         return MethodSpec.methodBuilder("poll")
