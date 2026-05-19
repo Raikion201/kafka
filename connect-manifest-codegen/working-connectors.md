@@ -3,7 +3,7 @@
 **Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
 **Last updated:** 2026-05-19
 **JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT`
-**Registered:** 115 total (113 RUNNING · 1 codegen gap · 1 OAuth expired)
+**Registered:** 118 total (116 RUNNING · 1 codegen gap · 1 OAuth expired)
 
 ---
 
@@ -11,16 +11,16 @@
 
 | Bucket | Count | Codegen? |
 |---|---:|---|
-| RUNNING (tasks green, polling) | **113** | works |
+| RUNNING (tasks green, polling) | **116** | works |
 | OAuth expired / needs re-authorization | **1** | works — re-issue refresh token |
 | Codegen gaps (non-stub) | **1** | rule-5 skip (unported Python custom class) |
 | Dynamic-stream stubs | **0** | all DDS connectors now generate real task code |
 
-**Codegen correct for 114 / 115 registered (~99%). 14 new connectors credentialed today — 10 producing real records, 4 RUNNING but quiet pending vendor config (see notes).**
+**Codegen correct for 117 / 118 registered (~99%). 17 new connectors credentialed today — 10 producing real records, 7 RUNNING but quiet pending vendor config (see notes).**
 
 ---
 
-## RUNNING (109)
+## RUNNING (116)
 
 Tasks green, actively polling.
 
@@ -31,7 +31,7 @@ cal-com-connector, calendly-connector, chargebee, chartmogul, clockify-connector
 close-com-connector, coda-connector, coingecko-coins-connector, coinmarketcap-connector,
 configcat-connector, defillama, dockerhub, emailoctopus, eventbrite, exchange-rates,
 finnhub, formbricks, freshdesk-connector, freshsales, giphy-connector, gitlab,
-gmail-connector, gnews-connector, google-calendar, google-classroom, google-forms,
+gmail-connector, gnews-connector, google-calendar, google-classroom, google-forms, harvest,
 google-sheets-connector, gutendex, hubplanner-connector, hugging-face-datasets, intercom,
 ip2whois, jina-ai-reader, jira, jotform-connector, judge-me-reviews, klaviyo-connector,
 launchdarkly, lemlist, linear, lob, lokalise, mailerlite, mailersend, mailosaur,
@@ -39,9 +39,9 @@ marketstack, mixmax, mux, nasa-connector, newsapi-connector, newsdata-io, nytime
 omnisend-connector, onepagecrm, openaq, openfda, openfda-v2, openweather,
 pexels-api-connector, pingdom, pipedrive-connector, plausible, pokeapi, polygon-stock-api,
 postmarkapp, pypi, recruitee-connector, revenuecat, rollbar, rss, savvycal, scryfall,
-sentry-connector, shippo, shortcut, spacex-api, statuspage, stockdata,
+sentry-connector, shippo, shortcut, spacex-api, square, statuspage, stockdata,
 the-guardian-api-connector, ticketmaster, tmdb, todoist-connector, toggl-connector,
-trello-connector, tvmaze-schedule, us-census-connector, watchmode, weatherstack,
+trello-connector, tvmaze-schedule, typeform, us-census-connector, watchmode, weatherstack,
 whisky-hunter, wikipedia-pageviews, xkcd, yahoo-finance-price
 
 **New connectors credentialed this session (2026-05-18 evening):**
@@ -82,7 +82,9 @@ whisky-hunter, wikipedia-pageviews, xkcd, yahoo-finance-price
 | beamer | Bearer — 1 stream (nps) |
 | bigmailer | ApiKey header (X-API-Key) — 10 streams |
 | boldsign | ApiKey header (X-API-KEY) — 8 streams |
-
+| typeform | Bearer (`credentials.access_token`) |
+| harvest | Bearer (`credentials.api_token` + `account_id=2208984`) |
+| square | Bearer (`credentials.api_key`, `is_sandbox=true`) |
 **Earlier batch (still green):** activecampaign, bugsnag, assemblyai, algolia, asana,
 bamboo-hr, freshsales, chartmogul, brevo — straight-through after codegen fixes
 (brevo epoch format, bamboo-hr date format, gnews RFC-822 parse, per-stream error isolation).
