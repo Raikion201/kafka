@@ -4,11 +4,18 @@
 ##   make -f Makefile.connect sample      # samples only
 ##   make -f Makefile.connect register    # register credentialed connectors only (safe for 6 GB minikube)
 ##   make -f Makefile.connect register-all # register credentials + all manifest placeholders (needs >6 GB)
+##   make -f Makefile.connect register ONLY=clickup-api,recreation   # register only the named connectors
 ##   make -f Makefile.connect redeploy    # rebuild JAR + hot-restart standalone Connect (~5 seconds)
 ##   make -f Makefile.connect deploy      # rebuild JAR + trigger Strimzi Kaniko re-build (~4 min)
+##
+## Override BOOTSTRAP / CONSUMER_BIN for a different broker:
+##   make -f Makefile.connect sample BOOTSTRAP=other:9092
+##   make -f Makefile.connect sample CONSUMER_BIN=/path/to/kafka-console-consumer.sh
 
 CONNECT   ?= http://localhost:8083
 STANDALONE_DIR ?= $(HOME)/kafka/standalone
+BOOTSTRAP ?= localhost:9092
+CONSUMER_BIN ?= $(STANDALONE_DIR)/bin/kafka-console-consumer.sh
 BROKER    ?= my-cluster-dual-role-0
 NS        ?= kafka
 MSGS      ?= 3
@@ -37,15 +44,16 @@ export PY_STATUS
 
 define PY_SAMPLE
 import json, subprocess, sys, urllib.request
-CONNECT = "$(CONNECT)"; POD = "$(BROKER)"; NS = "$(NS)"; N = $(MSGS)
+CONNECT = "$(CONNECT)"; N = $(MSGS)
+CONSUMER = "$(CONSUMER_BIN)"; BOOTSTRAP = "$(BOOTSTRAP)"
+POD = "$(BROKER)"; NS = "$(NS)"
 
 def api(p):
     return json.loads(urllib.request.urlopen(CONNECT + p, timeout=10).read())
 
 def consume(topic):
-    cmd = ["kubectl","exec","-n",NS,POD,"--","bin/kafka-console-consumer.sh",
-           "--bootstrap-server","localhost:9092","--topic",topic,
-           "--from-beginning","--max-messages",str(N),"--timeout-ms","5000"]
+    cmd = [CONSUMER, "--bootstrap-server", BOOTSTRAP, "--topic", topic,
+           "--from-beginning", "--max-messages", str(N), "--timeout-ms", "5000"]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     return [l for l in r.stdout.splitlines() if l.strip()][:N]
 
@@ -81,6 +89,7 @@ CONNECT  = "$(CONNECT)"
 CREDS    = "$(CREDS_DIR)"
 MANIFESTS= "$(MANIFESTS)"
 PKG      = "io.kafka.connect.generated"
+ONLY     = {n.strip() for n in "$(ONLY)".split(",") if n.strip()}
 
 def post(name, config):
     body = json.dumps({"name": name, "config": config}).encode()
@@ -135,7 +144,17 @@ if os.path.isdir(CREDS):
             except Exception as ex:
                 print(f"  SKIP {fname}: {ex}", file=sys.stderr)
 
-# ── 2. Register in parallel ─────────────────────────────────────────────────
+# ── 2. Filter by ONLY= if provided ─────────────────────────────────────────
+if ONLY:
+    missing = ONLY - {n for n, _ in tasks}
+    if missing:
+        print(f"  WARN no cred file for: {', '.join(sorted(missing))}", file=sys.stderr)
+    tasks = [(n, c) for n, c in tasks if n in ONLY]
+    if not tasks:
+        print("Nothing to register (ONLY filter matched no cred files).", file=sys.stderr)
+        sys.exit(1)
+
+# ── 3. Register in parallel ─────────────────────────────────────────────────
 created = existed = errors = 0
 with ThreadPoolExecutor(max_workers=20) as ex:
     futs = {ex.submit(post, n, c): n for n, c in tasks}
@@ -160,6 +179,7 @@ CONNECT  = "$(CONNECT)"
 CREDS    = "$(CREDS_DIR)"
 MANIFESTS= "$(MANIFESTS)"
 PKG      = "io.kafka.connect.generated"
+ONLY     = {n.strip() for n in "$(ONLY)".split(",") if n.strip()}
 
 def post(name, config):
     body = json.dumps({"name": name, "config": config}).encode()
@@ -253,6 +273,15 @@ if os.path.isdir(MANIFESTS):
             tasks.append((name, config))
         except Exception as ex:
             print(f"  SKIP {fname}: {ex}", file=sys.stderr)
+
+if ONLY:
+    missing = ONLY - {n for n, _ in tasks}
+    if missing:
+        print(f"  WARN no cred or manifest for: {', '.join(sorted(missing))}", file=sys.stderr)
+    tasks = [(n, c) for n, c in tasks if n in ONLY]
+    if not tasks:
+        print("Nothing to register (ONLY filter matched nothing).", file=sys.stderr)
+        sys.exit(1)
 
 created = existed = errors = 0
 with ThreadPoolExecutor(max_workers=20) as ex:
