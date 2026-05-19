@@ -1,9 +1,9 @@
 # Working Connectors — Standalone Kafka Connect
 
 **Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
-**Last updated:** 2026-05-18
+**Last updated:** 2026-05-19
 **JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT`
-**Registered:** 91 total (89 RUNNING · 0 rate-limited · 0 cred fix needed · 1 codegen gap · 1 OAuth expired)
+**Registered:** 111 total (109 RUNNING · 1 codegen gap · 1 OAuth expired)
 
 ---
 
@@ -11,16 +11,16 @@
 
 | Bucket | Count | Codegen? |
 |---|---:|---|
-| RUNNING (tasks green, polling) | **89** | works |
+| RUNNING (tasks green, polling) | **109** | works |
 | OAuth expired / needs re-authorization | **1** | works — re-issue refresh token |
 | Codegen gaps (non-stub) | **1** | rule-5 skip (unported Python custom class) |
 | Dynamic-stream stubs | **0** | all DDS connectors now generate real task code |
 
-**Codegen correct for 90 / 91 registered (~99%). 10 new connectors credentialed this session (activecampaign, bugsnag, assemblyai, algolia, asana, bamboo-hr, freshsales, chartmogul, brevo, notion) + 3 codegen bug fixes (brevo epoch format, bamboo-hr date format, gnews RFC-822 parse).**
+**Codegen correct for 110 / 111 registered (~99%). 10 new connectors credentialed this session (openfda, gitlab, revenuecat, ip2whois, rollbar, watchmode, eventbrite, stockdata, plausible, shippo) — 6 producing real records (1.3M total), 4 RUNNING but quiet pending vendor config (see notes).**
 
 ---
 
-## RUNNING (89)
+## RUNNING (109)
 
 Tasks green, actively polling.
 
@@ -29,37 +29,58 @@ apptivo, asana, assemblyai, aviationstack-connector, bamboo-hr, bitly-connector,
 box-connector, breezy-hr, brevo, bugsnag, buildkite, cal-com-connector,
 calendly-connector, chargebee, chartmogul, clockify-connector, close-com-connector,
 coda-connector, coingecko-coins-connector, coinmarketcap-connector, configcat-connector,
-defillama, dockerhub, formbricks, freshdesk-connector, freshsales, giphy-connector,
-gmail-connector, gnews-connector, google-calendar, google-classroom, google-forms,
-google-sheets-connector, gutendex, hubplanner-connector, hugging-face-datasets, intercom,
-jina-ai-reader, jira, jotform-connector, judge-me-reviews, klaviyo-connector,
-launchdarkly, lemlist, linear, lob, lokalise, mailerlite, mailersend, mailosaur, mixmax,
-mux, nasa-connector, newsapi-connector, newsdata-io, omnisend-connector, onepagecrm,
-openfda-v2, openweather, pexels-api-connector, pingdom, pipedrive-connector, pokeapi,
-polygon-stock-api, pypi, recruitee-connector, rss, savvycal, scryfall, sentry-connector,
-shortcut, spacex-api, statuspage, the-guardian-api-connector, todoist-connector,
-toggl-connector, trello-connector, tvmaze-schedule, us-census-connector, whisky-hunter,
-wikipedia-pageviews, xkcd, yahoo-finance-price
+defillama, dockerhub, emailoctopus, eventbrite, exchange-rates, finnhub, formbricks,
+freshdesk-connector, freshsales, giphy-connector, gitlab, gmail-connector, gnews-connector,
+google-calendar, google-classroom, google-forms, google-sheets-connector, gutendex,
+hubplanner-connector, hugging-face-datasets, intercom, ip2whois, jina-ai-reader, jira,
+jotform-connector, judge-me-reviews, klaviyo-connector, launchdarkly, lemlist, linear,
+lob, lokalise, mailerlite, mailersend, mailosaur, marketstack, mixmax, mux, nasa-connector,
+newsapi-connector, newsdata-io, nytimes, omnisend-connector, onepagecrm, openaq,
+openfda, openfda-v2, openweather, pexels-api-connector, pingdom, pipedrive-connector,
+plausible, pokeapi, polygon-stock-api, postmarkapp, pypi, recruitee-connector, revenuecat,
+rollbar, rss, savvycal, scryfall, sentry-connector, shippo, shortcut, spacex-api,
+statuspage, stockdata, the-guardian-api-connector, ticketmaster, tmdb, todoist-connector,
+toggl-connector, trello-connector, tvmaze-schedule, us-census-connector, watchmode,
+weatherstack, whisky-hunter, wikipedia-pageviews, xkcd, yahoo-finance-price
 
-**New connectors credentialed this session:**
-- **activecampaign**, **bugsnag**, **assemblyai**, **algolia**, **asana**, **bamboo-hr**,
-  **freshsales**, **chartmogul**, **brevo** — straight-through after codegen fixes below.
-- **algolia** — `logs` stream skipped (requires Logs ACL API key); other streams RUNNING.
-- **appfollow** — `app_lists` stream skipped (422 upstream); `users`, `app_collections`,
-  `stat_reviews`, `ratings` RUNNING.
-- **bamboo-hr** — `timesheet_entries` stream skipped (Time Tracking not enabled on trial);
-  other streams RUNNING. `start_date=2025-05-18` (trial account data limit).
+**New connectors credentialed this session (2026-05-18 evening):**
 
-**Codegen fixes this session:**
-- **brevo** — `crm_tasks` epoch format: `dateTo` now uses stream's `datetime_format` (`%s`)
-  not the input parse format; and `webhooks` 400 (no webhooks configured) now skipped via
-  per-stream error isolation.
-- **bamboo-hr** — end-time parameter now formats as `%Y-%m-%d` (stream cursor format)
-  not ISO datetime.
-- **gnews** — RFC-822 offset (`+0000` no colon) parse fallback added to `parseIsoFallback()`
-  so old cursor values stored pre-Z-fix still parse correctly.
-- **Per-stream error isolation** — `poll()` now wraps each stream call in try-catch
-  so one 422/403/404 stream doesn't kill the entire task.
+| Connector | Records | Notes |
+|---|---:|---|
+| finnhub | 5,042,500 | stock_symbols (5.0M) + marketnews (16.6K) |
+| ticketmaster | 64,223 | events 52.6K · attractions/venues 5.2K each · suggest 1.2K |
+| openaq | 23,996 | 12 streams; `country_ids=[840]` filter applied |
+| tmdb | 11,290 | 17 movie sub-streams |
+| emailoctopus | 10,407 | lists stream |
+| marketstack | 6,700 | exchanges only (other streams need paid plan) |
+| postmarkapp | 2,312 | Server-Token endpoints only — account-level may 401 (same UUID used for both tokens) |
+| nytimes | 800 | only Most Popular API enabled on the key |
+| weatherstack | 36 | free tier: forecast + current_weather only (no historical) |
+| exchange-rates | 4+ | manifest patched to hit `api.exchangeratesapi.io/v1/latest` with `access_key` query param (was the wrong apilayer.com endpoint) — EUR base, 168 currencies |
+
+**New connectors credentialed this session (2026-05-19 morning) — fresh standalone after `data/` + `logs/` wipe:**
+
+| Connector | Records | Notes |
+|---|---:|---|
+| watchmode | 883,343 | 8 movie/show streams — biggest haul of the batch |
+| openfda | 397,098 | 5 of 9 streams active; needs `producer.override.max.request.size=10485760` (drug-labelling records exceed 1MB default) |
+| eventbrite | 16,645 | 2 streams (events, categories) |
+| shippo | 6,826 | 2 streams |
+| revenuecat | 1,432 | 8 streams (Project API key, read scope) |
+| ip2whois | 500 | single `domain=www.google.com` lookup loop — hits free-tier 500/mo cap |
+| gitlab | 0 | RUNNING but quiet — `groups_list=["gitlab-org"]` not parsing into scan scope; try `groups=gitlab-org` |
+| stockdata | 0 | RUNNING but quiet — `symbols=["AAPL","TSLA","MSFT"]` array not flowing through to API call |
+| plausible | 0 | RUNNING but quiet — site_id `airbyte.com` doesn't belong to the user's account; needs a real owned domain |
+| rollbar | 0 | RUNNING but quiet — same token used for both project + account; project-scoped streams 404. Needs a real Project Access Token alongside the Account Access Token |
+
+**Earlier batch (still green):** activecampaign, bugsnag, assemblyai, algolia, asana,
+bamboo-hr, freshsales, chartmogul, brevo — straight-through after codegen fixes
+(brevo epoch format, bamboo-hr date format, gnews RFC-822 parse, per-stream error isolation).
+- **algolia** — `logs` stream skipped (requires Logs ACL API key).
+- **appfollow** — `app_lists` stream skipped (422 upstream).
+- **bamboo-hr** — `timesheet_entries` skipped (Time Tracking not enabled on trial); `start_date=2025-05-18`.
+
+---
 ---
 
 ## FAILED (2)
@@ -102,6 +123,10 @@ Streams skipped via per-stream error isolation (task stays RUNNING, stream data 
 | algolia | `logs` | 403 — requires Logs ACL API key |
 | brevo | `contacts_filters` | 400 — no filters configured |
 | brevo | `webhooks` | 400 — no webhooks configured |
+| marketstack | `tickers`, `currencies`, `eod`, `dividends`, `splits`, `intraday` | 401 — free plan only authorizes `exchanges` |
+| nytimes | books, archive, articles, etc. | per-stream 401 — each API must be enabled on the developer portal |
+| weatherstack | `historical`, `location_lookup` | free plan blocks historical + autocomplete |
+| postmarkapp | account-level (`servers`, `domains`, `senders`, ...) | 401 — same UUID used for both Server-Token and Account-Token; need a real account token from `https://account.postmarkapp.com/account/edit` |
 
 ---
 
