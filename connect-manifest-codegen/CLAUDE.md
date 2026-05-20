@@ -103,25 +103,52 @@ Real connectors need real credentials. We mirror Airbyte's pattern:
   `acceptance-test-config.yaml` entries (streams, expected schemas) so we
   test the same surface they do.
 
-## 5. No live vendor SDKs
+## 5. What we deliberately don't codegen
 
-Do not pull in third-party vendor SDKs (e.g. `com.google.api-ads:google-ads-java`,
-`com.google.apis:google-api-services-*`, AWS SDK, Salesforce SDK) to back a
-Custom* implementation. The codegen emits a portable Kafka Connect plugin —
-adding a vendor SDK pins us to that vendor's release cadence, breaks on major
-protobuf/grpc upgrades, balloons the plugin JAR, and pulls transitive deps
-that conflict with Connect runtime classes.
+The codegen targets the Airbyte declarative manifest surface that maps cleanly
+onto a portable Kafka Connect HTTP plugin. The following are out of scope and
+should be skipped (stub task that throws on `start()`), not faked:
 
-Implement Custom* requesters and decoders against the vendor's REST/HTTP API
-directly using `java.net.http.HttpClient` (already used by every generated
-task) and Jackson for JSON. If the vendor only ships gRPC, raise it before
-implementing — do not silently add the SDK. Stubs that throw
-`ConnectException("not yet implemented")` are acceptable until a REST path
-exists; vendoring the SDK is not.
+1. **Python custom classes** — `CustomAuthenticator`, `CustomPartitionRouter`,
+   `CustomTransformation`, `CustomRecordExtractor`, `CustomPaginationStrategy`,
+   etc. that point at a Python class path (`source_<x>.components.Foo`). These
+   need a hand-written Java port via `CustomComponentRegistry`. Until the port
+   exists, the manifest is a rule-5 skip. (Ports we already have: see
+   `CustomComponentRegistry`.)
+2. **Non-HTTP transports** — anything that isn't request/response over HTTP(S).
+   gRPC, raw TCP, JDBC sources, file/SFTP sources. Not in scope.
+3. **GraphQL sources** — `GraphQLSource` and any manifest whose request is a
+   GraphQL query body that has to be assembled from a schema. We don't have a
+   GraphQL emitter and won't add one without an explicit ask.
+4. **Live vendor SDKs** — do not pull in third-party vendor SDKs (e.g.
+   `com.google.api-ads:google-ads-java`, `com.google.apis:google-api-services-*`,
+   AWS SDK, Salesforce SDK) to back a Custom* implementation. Adding a vendor
+   SDK pins us to that vendor's release cadence, breaks on major
+   protobuf/grpc upgrades, balloons the plugin JAR, and pulls transitive deps
+   that conflict with Connect runtime classes. Implement Custom* requesters
+   and decoders against the vendor's REST/HTTP API directly using
+   `java.net.http.HttpClient` (already used by every generated task) and
+   Jackson for JSON. If the vendor only ships gRPC, that falls under (2).
 
-This applies to Phase 2 of the Google Ads work and to any future connector
-that has an "official Java SDK" — we re-implement against the underlying
-HTTP API, same way the Airbyte Python source does it.
+**Explicitly in scope, despite the historical "rule-5 skip" wording in older
+notes:**
+
+- **DynamicDeclarativeStream (DDS)** — manifests that resolve their stream
+  list at runtime (e.g. Mailchimp's per-list streams, Notion's per-database
+  streams). Implement the resolver path; do not emit a stub.
+- **AsyncRetriever** — long-poll / job-create-then-poll flows. In scope; the
+  codegen should emit the create-job → poll-status → fetch-result loop the
+  Python `AsyncRetriever` runs.
+- **HTTPAPIBudget / MovingWindowCallRatePolicy** — client-side rate limiting.
+  In scope.
+
+If you find yourself about to emit a stub for anything in the "in scope" list,
+stop and implement it. Stubs are only for (1)–(4) above.
+
+Stubs throw `ConnectException("not yet implemented")` (or the existing
+DDS-style message) and the manifest is recorded as a rule-5 skip in
+`working-connectors.md` with the specific reason — Python class name,
+GraphQL, gRPC, or vendor-SDK-only.
 
 ## 6. Track unfillable connectors after every credentialing session
 
@@ -135,7 +162,8 @@ Reasons a connector is "unfillable" include:
 - Free tier doesn't expose the data the manifest expects (paid-only streams)
 - OAuth flow needs a redirect URI we can't host / a domain we don't own
 - The connector isn't in our codegen manifest set at all (no source-<x>.yaml)
-- Codegen gap: DDS, AsyncRetriever, CustomAuthenticator, etc. — rule-5 skip
+- Codegen gap: rule-5 skip (Python custom class, GraphQL, gRPC, vendor-SDK-only)
+  — note: DDS, AsyncRetriever, and HTTPAPIBudget are NOT rule-5 skips; implement them
 - The credentials registered fine but the task is silent — vendor-config issue
 
 What to do:
@@ -209,31 +237,31 @@ ManifestCoverageReport.gradeEndToEndCoverage`; the report file
 | 12 | `CustomPartitionRouter` | partitioning broken |
 | 8 | `DynamicDeclarativeStream` | stub only |
 
-### Path to ~93% (under the rule-5 constraints)
+### Path forward
 
 1. ~~Phase 1: DefaultErrorHandler + backoff~~ ✓ Done.
 2. ~~Phase 2: Transformations pipeline~~ ✓ Done.
 3. ~~Phase 3: POST/PUT + request bodies~~ ✓ Done.
 4. ~~Phase 4: `DatetimeBasedCursor.step` window slicing~~ ✓ Done.
 5. ~~Phase 5: `CustomTransformation` + `CustomRecordExtractor` via registry~~ ✓ Done.
+6. **Phase 6 (in flight)**: `DynamicDeclarativeStream` full codegen — runtime
+   resolver helper + per-source codegen path. Unblocks mailchimp, notion,
+   chargebee-shaped per-resource streams, ~8 stubbed manifests.
+7. **Phase 7 (todo)**: `HTTPAPIBudget` + `MovingWindowCallRatePolicy` — client
+   side rate limiting. Unblocks the largest single bucket (26 + 25 manifests).
+8. **Phase 8 (todo)**: `AsyncRetriever` — create-job → poll-status → fetch-
+   result loop. Unblocks google-ads / bing-ads / amazon-* / sendgrid.
 
-Remaining 63 broken manifests need `HTTPAPIBudget`, `CustomAuthenticator`,
-`CustomPartitionRouter`, `AsyncRetriever`, or dynamic-stream features —
-most are out of scope under rule-5 constraints.
+Remaining 63 broken manifests are mostly waiting on Phase 6–8 above. The only
+true ceiling now is the rule-5 skip list: Python custom classes that need
+hand ports, GraphQL sources, gRPC-only vendors, and vendor-SDK-only connectors.
+With Phases 6–8 done, projected coverage is ~98%; the residual ~2% is the
+rule-5 skip set.
 
-After 4–5 plus the `ManifestParser.validate()` $ref-string fix (frees 11
-otherwise-stubbed manifests), the working bucket goes from 432 → ~510 / 549
-≈ **~93%**. The remaining ~39 manifests need `AsyncRetriever`, vendor-SDK-backed
-custom components, or `DynamicSchemaLoader` / `PropertiesFromEndpoint` /
-`ConfigComponentsResolver` — out of scope per rule 5 and the no-async
-directive. **The realistic ceiling under current constraints is ~93%, not 100%.**
+### Connectors that will not work without a rule-5 lift
 
-### Connectors that will not work without lifting a constraint
-
-`source_google_ads.yaml`, `source-bing-ads.yaml`, `source-amazon-ads.yaml`,
-`source-amazon-seller-partner.yaml`, `source-hubspot.yaml`,
-`source-pinterest.yaml`, `source-linkedin-ads.yaml`, `source-stripe.yaml`,
-`source-google-search-console.yaml`, `source_mixpanel.yaml`,
-`source-sendgrid.yaml` — each needs `AsyncRetriever`, vendor SDKs, or
-non-Sheets dynamic streams. Do not promise these without raising the
-constraint first.
+`source-hubspot.yaml`, `source-stripe.yaml`, `source_mixpanel.yaml` —
+each currently uses Python custom classes that need explicit Java ports via
+`CustomComponentRegistry`. The vendor APIs are HTTP, so a port is in scope —
+it just hasn't been written yet. Promise them only after the relevant
+`Custom*` class has a Java implementation registered.
