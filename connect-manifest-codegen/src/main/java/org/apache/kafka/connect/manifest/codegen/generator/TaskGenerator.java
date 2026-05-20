@@ -562,7 +562,8 @@ public class TaskGenerator {
             body.beginControlFlow("try");
             body.addStatement("all.addAll($L())", pollMethod);
             body.nextControlFlow("catch ($T _se)", CONNECT_EXCEPTION);
-            body.addStatement("$T.err.println(\"[WARN] stream $L skipped: \" + _se.getMessage())",
+            body.addStatement("$T.err.println(\"[WARN] stream $L skipped: \" + _se.getMessage()"
+                + " + (_se.getCause() != null ? \" cause=\" + _se.getCause() : \"\"))",
                 System.class, stream.getName());
             body.endControlFlow();
         }
@@ -668,7 +669,7 @@ public class TaskGenerator {
         // Guard: skip streams whose URL path depends on optional config keys that aren't set.
         emitOptionalPathConfigGuards(body, path, ClassName.get("java.util", "List"), SOURCE_RECORD);
         body.add(buildUrlBlock(baseUrl, path, requestParams, paginator, hasPagination, auth,
-            incrementalSync, cursorVar));
+            incrementalSync, cursorVar, stream));
         body.beginControlFlow("try");
         boolean bodyUsesStreamInterval = requester.getRequestBodyJson() != null
             && requester.getRequestBodyJson().values().stream()
@@ -701,7 +702,7 @@ public class TaskGenerator {
             body.add(buildFieldPathNav(fieldPath, hasPagination));
         }
         body.add(buildNormalizeAndCollect(hasPagination, paginator, cursorVar,
-            isIncremental ? incrementalSync.getCursorField() : null,
+            isIncremental ? expandStreamParams(incrementalSync.getCursorField(), stream) : null,
             pipelineFieldName(streamName), incrementalSync));
         body.nextControlFlow("catch ($T e)", InterruptedException.class);
         body.addStatement("$T.currentThread().interrupt()", Thread.class);
@@ -1408,7 +1409,8 @@ public class TaskGenerator {
         boolean hasPagination,
         AuthenticatorSpec auth,
         IncrementalSyncSpec incrementalSync,
-        String cursorVarName
+        String cursorVarName,
+        StreamSpec stream
     ) {
         CodeBlock.Builder b = CodeBlock.builder();
 
@@ -1485,7 +1487,7 @@ public class TaskGenerator {
         // DatetimeBasedCursor: inject start / end date range as query params.
         // _windowEnd (for step-based cursors) is declared before this block by the caller.
         if (incrementalSync != null && incrementalSync.isDatetimeBased()) {
-            hasParams = appendIncrementalSyncParams(b, incrementalSync, hasParams, cursorVarName);
+            hasParams = appendIncrementalSyncParams(b, incrementalSync, hasParams, cursorVarName, stream);
         }
 
         if (!hasPagination || paginator == null) return b.build();
@@ -1624,22 +1626,24 @@ public class TaskGenerator {
      * The {@code until} value is always the current epoch-second timestamp.
      */
     private boolean appendIncrementalSyncParams(
-        CodeBlock.Builder b, IncrementalSyncSpec sync, boolean hasParams, String cursorVarName
+        CodeBlock.Builder b, IncrementalSyncSpec sync, boolean hasParams, String cursorVarName,
+        StreamSpec stream
     ) {
         IncrementalSyncSpec.TimeOptionSpec startOpt = sync.getStartTimeOption();
         if (startOpt != null && startOpt.getFieldName() != null) {
             String sep = hasParams ? "&" : "?";
+            String startField = expandStreamParams(startOpt.getFieldName(), stream);
             if (cursorVarName != null) {
                 // Use the in-memory cursor variable (epoch seconds or ISO string).
                 b.addStatement("urlBuilder.append($S + $T.encode($L, $T.UTF_8))",
-                    sep + startOpt.getFieldName() + "=",
+                    sep + startField + "=",
                     ClassName.get("java.net", "URLEncoder"), cursorVarName,
                     ClassName.get("java.nio.charset", "StandardCharsets"));
             } else {
                 IncrementalSyncSpec.DatetimeSpec startDt = sync.getStartDatetime();
                 if (startDt != null && startDt.getDatetime() != null) {
                     b.addStatement("urlBuilder.append($S + $T.encode($T.valueOf($L), $T.UTF_8))",
-                        sep + startOpt.getFieldName() + "=",
+                        sep + startField + "=",
                         ClassName.get("java.net", "URLEncoder"),
                         ClassName.get(String.class), interpolateTemplate(startDt.getDatetime()),
                         ClassName.get("java.nio.charset", "StandardCharsets"));
@@ -1650,10 +1654,11 @@ public class TaskGenerator {
         IncrementalSyncSpec.TimeOptionSpec endOpt = sync.getEndTimeOption();
         if (endOpt != null && endOpt.getFieldName() != null) {
             String sep = hasParams ? "&" : "?";
+            String endField = expandStreamParams(endOpt.getFieldName(), stream);
             if (sync.hasStep()) {
                 // Window slicing — use the precomputed _windowEnd (already URL-safe ISO string).
                 b.addStatement("urlBuilder.append($S + $T.encode(_windowEnd, $T.UTF_8))",
-                    sep + endOpt.getFieldName() + "=",
+                    sep + endField + "=",
                     ClassName.get("java.net", "URLEncoder"),
                     ClassName.get("java.nio.charset", "StandardCharsets"));
             } else {
@@ -1666,7 +1671,7 @@ public class TaskGenerator {
                         ? sync.getDatetimeFormat() : parseFmt;
                     b.addStatement(
                         "urlBuilder.append($S + $T.encode($T.formatDate($T.parseDate(render($L, jinjaCtx()), $S), $S), $T.UTF_8))",
-                        sep + endOpt.getFieldName() + "=",
+                        sep + endField + "=",
                         ClassName.get("java.net", "URLEncoder"),
                         DATETIME_WINDOW_HELPER, DATETIME_WINDOW_HELPER,
                         interpolateTemplate(endDt.getDatetime()),
@@ -1675,7 +1680,7 @@ public class TaskGenerator {
                 } else {
                     // Epoch seconds fallback — some APIs (e.g. Delighted) expect integer timestamps.
                     b.addStatement("urlBuilder.append($S + $T.valueOf($T.currentTimeMillis() / 1000))",
-                        sep + endOpt.getFieldName() + "=",
+                        sep + endField + "=",
                         String.class, System.class);
                 }
             }
@@ -3314,7 +3319,57 @@ public class TaskGenerator {
             return Collections.emptyList();
         }
         List<String> fp = selector.getExtractor().getFieldPath();
-        return fp == null ? Collections.emptyList() : fp;
+        if (fp == null) {
+            return Collections.emptyList();
+        }
+        List<String> expanded = new ArrayList<>(fp.size());
+        for (String seg : fp) {
+            expanded.add(expandStreamParams(seg, stream));
+        }
+        return expanded;
+    }
+
+    /**
+     * Substitutes {@code {{ parameters['x'] }}}, {@code {{ parameters["x"] }}},
+     * {@code {{ parameters.get('x') }}}, {@code {{ parameters.get("x") }}}, and
+     * {@code {{ parameters.x }}} references with the stream's {@code $parameters}
+     * value at codegen time.
+     *
+     * <p>Needed when these references appear in identifiers that the codegen embeds as
+     * literal Java strings (map keys, URL fragments, field names) rather than as
+     * Jinja templates rendered at runtime. Airbyte's runtime renders both with the
+     * same templating engine, but we can only render runtime-rendered strings via
+     * {@code render(...)}; literal-key sites need the value baked in.</p>
+     *
+     * <p>If a referenced parameter is missing or the value is non-scalar, the original
+     * substring is left in place — codegen consumers that depended on the literal
+     * Jinja fragment (none currently) continue to work.</p>
+     */
+    private static String expandStreamParams(String template, StreamSpec stream) {
+        if (template == null || template.isEmpty() || !template.contains("{{")) {
+            return template;
+        }
+        Map<String, Object> params = stream.getParameters();
+        if (params == null || params.isEmpty()) {
+            return template;
+        }
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile(
+            "\\{\\{\\s*parameters(?:\\[['\"]([^'\"]+)['\"]\\]"
+                + "|\\.get\\(['\"]([^'\"]+)['\"]\\)"
+                + "|\\.([A-Za-z_][A-Za-z0-9_]*))\\s*\\}\\}");
+        java.util.regex.Matcher m = p.matcher(template);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            String key = m.group(1) != null ? m.group(1)
+                : m.group(2) != null ? m.group(2) : m.group(3);
+            Object val = params.get(key);
+            String replacement = (val instanceof String || val instanceof Number || val instanceof Boolean)
+                ? String.valueOf(val)
+                : m.group();
+            m.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(out);
+        return out.toString();
     }
 
     private static String toJavaName(String streamName) {
