@@ -50,6 +50,60 @@ public class ManifestParser {
     private static final int MAX_REF_PASSES = 8;
 
     /**
+     * Default component types keyed by {@code <ParentType>.<fieldName>}. Mirrors Python's
+     * {@code DEFAULT_MODEL_TYPES} in
+     * {@code airbyte_cdk/sources/declarative/parsers/manifest_component_transformer.py:12-70}.
+     *
+     * <p>When the parser visits a node that lacks an explicit {@code type:} field, it looks
+     * up the entry for {@code <parent_type>.<field_name>}. If found, the type is set on the
+     * node so that subsequent {@code $parameters} propagation treats it as a real component
+     * (and applies inherited parameters as fields). Without this, e.g. mailchimp's typeless
+     * {@code requester:} block never picks up the stream's {@code $parameters.path}.
+     */
+    private static final java.util.Map<String, String> DEFAULT_MODEL_TYPES = defaultModelTypes();
+
+    private static java.util.Map<String, String> defaultModelTypes() {
+        java.util.Map<String, String> m = new java.util.HashMap<>();
+        m.put("CompositeErrorHandler.error_handlers", "DefaultErrorHandler");
+        m.put("CursorPagination.decoder", "JsonDecoder");
+        m.put("DatetimeBasedCursor.end_datetime", "MinMaxDatetime");
+        m.put("DatetimeBasedCursor.end_time_option", "RequestOption");
+        m.put("DatetimeBasedCursor.start_datetime", "MinMaxDatetime");
+        m.put("DatetimeBasedCursor.start_time_option", "RequestOption");
+        m.put("DeclarativeSource.check", "CheckStream");
+        m.put("DeclarativeSource.spec", "Spec");
+        m.put("DeclarativeSource.streams", "DeclarativeStream");
+        m.put("DeclarativeStream.retriever", "SimpleRetriever");
+        m.put("DeclarativeStream.schema_loader", "JsonFileSchemaLoader");
+        m.put("DynamicDeclarativeStream.stream_template", "DeclarativeStream");
+        m.put("DynamicDeclarativeStream.components_resolver", "ConfigComponentResolver");
+        m.put("HttpComponentsResolver.retriever", "SimpleRetriever");
+        m.put("HttpComponentsResolver.components_mapping", "ComponentMappingDefinition");
+        m.put("ConfigComponentsResolver.stream_config", "StreamConfig");
+        m.put("ConfigComponentsResolver.components_mapping", "ComponentMappingDefinition");
+        m.put("DefaultErrorHandler.response_filters", "HttpResponseFilter");
+        m.put("DefaultPaginator.decoder", "JsonDecoder");
+        m.put("DefaultPaginator.page_size_option", "RequestOption");
+        m.put("DpathExtractor.decoder", "JsonDecoder");
+        m.put("DpathExtractor.record_expander", "RecordExpander");
+        m.put("HttpRequester.error_handler", "DefaultErrorHandler");
+        m.put("ListPartitionRouter.request_option", "RequestOption");
+        m.put("ParentStreamConfig.request_option", "RequestOption");
+        m.put("ParentStreamConfig.stream", "DeclarativeStream");
+        m.put("RecordSelector.extractor", "DpathExtractor");
+        m.put("RecordSelector.record_filter", "RecordFilter");
+        m.put("SimpleRetriever.paginator", "NoPagination");
+        m.put("SimpleRetriever.record_selector", "RecordSelector");
+        m.put("SimpleRetriever.requester", "HttpRequester");
+        m.put("SubstreamPartitionRouter.parent_stream_configs", "ParentStreamConfig");
+        m.put("AddFields.fields", "AddedFieldDefinition");
+        m.put("CustomPartitionRouter.parent_stream_configs", "ParentStreamConfig");
+        m.put("DynamicSchemaLoader.retriever", "SimpleRetriever");
+        m.put("SchemaTypeIdentifier.types_map", "TypesMap");
+        return java.util.Collections.unmodifiableMap(m);
+    }
+
+    /**
      * Parse a manifest from a file.
      *
      * @throws ManifestParseException if the file cannot be read or does not conform to the expected structure
@@ -225,24 +279,37 @@ public class ManifestParser {
         if (!(root instanceof ObjectNode)) {
             return;
         }
-        propagateParams(root, java.util.Collections.emptyMap());
+        propagateParams(root, null, java.util.Collections.emptyMap());
     }
 
-    private static void propagateParams(JsonNode node, java.util.Map<String, JsonNode> parentParams) {
+    private static void propagateParams(
+            JsonNode node, String parentFieldIdentifier, java.util.Map<String, JsonNode> parentParams) {
         if (node instanceof ArrayNode arr) {
-            arr.forEach(el -> propagateParams(el, parentParams));
+            arr.forEach(el -> propagateParams(el, parentFieldIdentifier, parentParams));
             return;
         }
         if (!(node instanceof ObjectNode obj) || isJsonSchemaObject(obj)) {
             return;
         }
+        // Default-type lookup: when a node lacks `type` but its position under a typed parent
+        // maps to a known default model type, set that type. Mirrors Python's
+        // ManifestComponentTransformer (manifest_component_transformer.py:107-117). This is
+        // what makes typeless `requester:` blocks behave as `HttpRequester`, typeless
+        // `record_selector:` behave as `RecordSelector`, etc. — so `$parameters` set on the
+        // enclosing stream (e.g. `path: automations`) propagate down as fields.
+        if (!obj.has("type") && parentFieldIdentifier != null) {
+            String defaultType = DEFAULT_MODEL_TYPES.get(parentFieldIdentifier);
+            if (defaultType != null) {
+                obj.put("type", defaultType);
+            }
+        }
         java.util.Map<String, JsonNode> current = mergeParams(parentParams, obj.get("$parameters"));
         if (!obj.has("type")) {
-            // Typeless node: not a declarative component (e.g. SelectiveAuthenticator.authenticators
-            // map, or the bare definitions container). Do not inject parameters as fields here —
-            // doing so corrupts value-maps. Recurse into nested components only (Python:
-            // _process_nested_components — manifest_component_transformer.py:198-222).
-            recurseIntoNestedComponents(obj, current);
+            // Still typeless after default lookup: not a declarative component (e.g.
+            // SelectiveAuthenticator.authenticators map, or the bare definitions container).
+            // Do not inject parameters as fields here — doing so corrupts value-maps. Recurse
+            // into nested components only (Python: _process_nested_components — lines 198-222).
+            recurseIntoNestedComponents(obj, parentFieldIdentifier, current);
             return;
         }
         applyParamsAsFields(obj, current);
@@ -251,9 +318,12 @@ public class ManifestParser {
 
     /**
      * Recurses into children that are themselves declarative components (objects with a
-     * {@code type:} field) or arrays. Mirrors Python {@code _process_nested_components}.
+     * {@code type:} field) or arrays. Mirrors Python {@code _process_nested_components}: the
+     * parent field identifier is passed through unchanged so typed grandchildren can still
+     * benefit from default-type lookup against the original position.
      */
-    private static void recurseIntoNestedComponents(ObjectNode obj, java.util.Map<String, JsonNode> scope) {
+    private static void recurseIntoNestedComponents(
+            ObjectNode obj, String parentFieldIdentifier, java.util.Map<String, JsonNode> scope) {
         java.util.List<String> childFields = new java.util.ArrayList<>();
         obj.fieldNames().forEachRemaining(childFields::add);
         for (String fieldName : childFields) {
@@ -264,18 +334,18 @@ public class ManifestParser {
             if (child instanceof ObjectNode childObj && childObj.has("type")) {
                 JsonNode excluded = scope.remove(fieldName);
                 try {
-                    propagateParams(child, scope);
+                    propagateParams(child, parentFieldIdentifier, scope);
                 } finally {
                     if (excluded != null) {
                         scope.put(fieldName, excluded);
                     }
                 }
             } else if (child instanceof ArrayNode) {
-                propagateParams(child, scope);
+                propagateParams(child, parentFieldIdentifier, scope);
             } else if (child instanceof ObjectNode childObj) {
                 // Typeless nested object (e.g. a map of components like authenticators):
                 // descend so we can still reach typed grandchildren.
-                propagateParams(childObj, scope);
+                propagateParams(childObj, parentFieldIdentifier, scope);
             }
         }
     }
@@ -302,8 +372,12 @@ public class ManifestParser {
      * Recurses into each child field of {@code obj}. When descending into a child whose key
      * matches an in-scope parameter, that parameter is temporarily removed from the scope so
      * that the propagation does not produce {@code requester.requester} cycles or similar.
+     *
+     * <p>The parent's resolved {@code type} is used to form {@code <type>.<field>} identifiers
+     * for each child — that's the key into {@link #DEFAULT_MODEL_TYPES}.
      */
     private static void recurseIntoChildren(ObjectNode obj, java.util.Map<String, JsonNode> scope) {
+        String parentType = obj.get("type").asText();
         java.util.List<String> childFields = new java.util.ArrayList<>();
         obj.fieldNames().forEachRemaining(childFields::add);
         for (String fieldName : childFields) {
@@ -312,7 +386,7 @@ public class ManifestParser {
             }
             JsonNode excluded = scope.remove(fieldName);
             try {
-                propagateParams(obj.get(fieldName), scope);
+                propagateParams(obj.get(fieldName), parentType + "." + fieldName, scope);
             } finally {
                 if (excluded != null) {
                     scope.put(fieldName, excluded);
