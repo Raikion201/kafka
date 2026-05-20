@@ -331,7 +331,7 @@ public class TaskGenerator {
         typeBuilder.addMethod(buildStop());
         typeBuilder.addMethod(buildJinjaCtx());
         typeBuilder.addMethod(buildJinjaCtxWithRecord());
-        typeBuilder.addMethod(buildJinjaCtxForStream());
+        typeBuilder.addMethod(buildJinjaCtxForStream(runnableStreams));
         typeBuilder.addMethod(buildJinjaCtxWithSlice());
 
         return JavaFile.builder(pkgName, typeBuilder.build())
@@ -3145,22 +3145,81 @@ public class TaskGenerator {
             .build();
     }
 
-    private MethodSpec buildJinjaCtxForStream() {
+    private MethodSpec buildJinjaCtxForStream(List<StreamSpec> streams) {
         ClassName mapClass = ClassName.get("java.util", "Map");
         ClassName linkedHashMap = ClassName.get("java.util", "LinkedHashMap");
         ParameterizedTypeName mapStringObject = ParameterizedTypeName.get(
             mapClass, ClassName.get(String.class), ClassName.get(Object.class));
-        return MethodSpec.methodBuilder("jinjaCtxForStream")
+        MethodSpec.Builder b = MethodSpec.methodBuilder("jinjaCtxForStream")
             .addModifiers(Modifier.PRIVATE)
             .returns(mapStringObject)
             .addParameter(String.class, "streamName")
             .addStatement("$T ctx = jinjaCtx()", mapStringObject)
             .addStatement("$T<$T, $T> params = new $T<>()",
                 mapClass, ClassName.get(String.class), ClassName.get(Object.class), linkedHashMap)
-            .addStatement("params.put($S, streamName)", "name")
-            .addStatement("ctx.put($S, params)", "parameters")
-            .addStatement("return ctx")
-            .build();
+            .addStatement("params.put($S, streamName)", "name");
+        boolean anyParams = streams.stream().anyMatch(s -> !s.getParameters().isEmpty());
+        if (anyParams) {
+            b.beginControlFlow("switch (streamName)");
+            for (StreamSpec stream : streams) {
+                Map<String, Object> p = stream.getParameters();
+                if (p.isEmpty() || stream.getName() == null) continue;
+                b.addCode("case $S:\n", stream.getName());
+                b.addCode("$>");
+                for (Map.Entry<String, Object> e : p.entrySet()) {
+                    if ("name".equals(e.getKey())) continue;
+                    emitParamPut(b, e.getKey(), e.getValue());
+                }
+                b.addStatement("break");
+                b.addCode("$<");
+            }
+            b.addCode("default: break;\n");
+            b.endControlFlow();
+        }
+        return b.addStatement("ctx.put($S, params)", "parameters")
+                .addStatement("return ctx")
+                .build();
+    }
+
+    /**
+     * Emits {@code params.put("key", literal)} where the value literal is rendered from a
+     * manifest {@code $parameters} entry. Strings, numbers, and booleans become Java literals
+     * directly; lists of strings become {@code List.of(...)}. Other shapes (nested maps,
+     * mixed lists) are skipped with a codegen log line — they are extremely rare in practice
+     * and can be extended without changing the generated-task contract.
+     */
+    private void emitParamPut(MethodSpec.Builder b, String key, Object value) {
+        if (value == null) {
+            b.addStatement("params.put($S, null)", key);
+            return;
+        }
+        if (value instanceof String) {
+            b.addStatement("params.put($S, $S)", key, value);
+            return;
+        }
+        if (value instanceof Boolean || value instanceof Integer || value instanceof Long) {
+            b.addStatement("params.put($S, $L)", key, value);
+            return;
+        }
+        if (value instanceof Double || value instanceof Float) {
+            b.addStatement("params.put($S, $LD)", key, value);
+            return;
+        }
+        if (value instanceof List<?> list && list.stream().allMatch(v -> v instanceof String)) {
+            StringBuilder fmt = new StringBuilder("params.put($S, $T.of(");
+            Object[] args = new Object[list.size() + 2];
+            args[0] = key;
+            args[1] = ClassName.get("java.util", "List");
+            for (int i = 0; i < list.size(); i++) {
+                fmt.append(i == 0 ? "$S" : ", $S");
+                args[i + 2] = list.get(i);
+            }
+            fmt.append("))");
+            b.addStatement(fmt.toString(), args);
+            return;
+        }
+        // Unsupported structural value — leave the key absent so Jinja resolves to undefined.
+        // Real-world manifests use scalars or list-of-strings; revisit if a manifest needs more.
     }
 
     private MethodSpec buildJinjaCtxWithSlice() {

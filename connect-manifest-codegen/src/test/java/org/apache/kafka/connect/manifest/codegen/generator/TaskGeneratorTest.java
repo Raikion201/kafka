@@ -277,6 +277,33 @@ public class TaskGeneratorTest {
         assertGeneratedCodeCompiles(load("source_google_ads.yaml"), tmpDir);
     }
 
+    @Test
+    void mailchimp_jinjaCtxForStream_bindsParametersPerStream() throws Exception {
+        JavaFile file = generator.generate(load("source-mailchimp.yaml"), PKG);
+        String src = file.toString();
+        // The switch on streamName must populate stream-specific parameter values that
+        // mailchimp's base_incremental_stream Jinja templates ({{ parameters['cursor_field'] }},
+        // {{ parameters.get('data_field') }}) need at render time.
+        assertTrue(src.contains("switch (streamName)"),
+            "jinjaCtxForStream must switch on streamName to bind per-stream $parameters");
+        assertTrue(src.contains("case \"automations\":"),
+            "Expected case branch for automations stream");
+        assertTrue(src.contains("params.put(\"cursor_field\", \"create_time\")"),
+            "Expected automations.cursor_field = create_time in params");
+        assertTrue(src.contains("params.put(\"data_field\", \"automations\")"),
+            "Expected automations.data_field = automations in params");
+        assertTrue(src.contains("case \"list_members\":"),
+            "Expected case branch for list_members stream");
+        // list_members.primary_key is declared as a YAML list — must render as List.of(...)
+        assertTrue(src.contains("params.put(\"primary_key\", List.of(\"id\", \"list_id\"))"),
+            "Expected list_members.primary_key emitted as List.of(\"id\", \"list_id\")");
+    }
+
+    @Test
+    void mailchimp_generatedSourceCompiles(@TempDir Path tmpDir) throws Exception {
+        assertGeneratedCodeCompiles(load("source-mailchimp.yaml"), tmpDir);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /**

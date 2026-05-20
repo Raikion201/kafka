@@ -21,7 +21,9 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Models a single stream entry inside the {@code streams} list of a manifest.
@@ -54,6 +56,22 @@ public class StreamSpec {
     private IncrementalSyncSpec incrementalSync;
 
     private List<TransformationSpec> transformations = Collections.emptyList();
+
+    /**
+     * Raw {@code $parameters} block as deserialized. Retained after the parser's
+     * propagation pass so the generated task can bind {@code parameters['x']} in
+     * the Jinja context against the values declared in the manifest.
+     */
+    @JsonProperty("$parameters")
+    private Map<String, Object> parameters = new LinkedHashMap<>();
+
+    public Map<String, Object> getParameters() {
+        return parameters == null ? Collections.emptyMap() : parameters;
+    }
+
+    public void setParameters(Map<String, Object> parameters) {
+        this.parameters = parameters == null ? new LinkedHashMap<>() : parameters;
+    }
 
     /**
      * Marker set by ManifestSpec when this stream was synthesised from a top-level
