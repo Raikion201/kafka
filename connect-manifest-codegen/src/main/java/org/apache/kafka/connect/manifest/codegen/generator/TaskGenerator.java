@@ -251,6 +251,9 @@ public class TaskGenerator {
             .orElse(null);
         AuthenticatorSpec auth = authSource == null
             ? null : authSource.getRetriever().getRequester().getAuthenticator();
+        if (auth != null && auth.isSelective()) {
+            auth = auth.resolveEffectiveLeaf();
+        }
 
         ParameterizedTypeName mapStringString = ParameterizedTypeName.get(
             ClassName.get("java.util", "Map"),

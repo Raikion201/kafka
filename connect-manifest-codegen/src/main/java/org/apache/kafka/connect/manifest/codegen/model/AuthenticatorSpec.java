@@ -424,6 +424,35 @@ public class AuthenticatorSpec {
         return null;
     }
 
+    /**
+     * Unwraps a {@code SelectiveAuthenticator} to a single leaf authenticator that the
+     * regular task codegen knows how to emit (Bearer / Basic / ApiKey / SessionToken / JWT).
+     *
+     * <p>Python's {@code SelectiveAuthenticator.__new__} picks the branch matching
+     * {@code config[authenticator_selection_path]} at runtime. Our codegen doesn't yet emit
+     * runtime branch selection, so we pick the apikey-style branch at codegen time —
+     * that's the path our credentialing model uses (`apikey=...` flat property). OAuth-only
+     * manifests already go through {@code DynamicStreamTaskGenerator.selectiveOAuth()}.</p>
+     *
+     * <p>Selection order: a branch whose key contains "apikey" or "api_key" first; else
+     * the first non-OAuth branch; else null (leave the SelectiveAuthenticator as-is —
+     * other codegen paths handle it).</p>
+     */
+    public AuthenticatorSpec resolveEffectiveLeaf() {
+        if (!isSelective()) return this;
+        Map<String, AuthenticatorSpec> branches = getAuthenticators();
+        for (Map.Entry<String, AuthenticatorSpec> e : branches.entrySet()) {
+            String k = e.getKey() == null ? "" : e.getKey().toLowerCase(java.util.Locale.ROOT);
+            if (e.getValue() != null && (k.contains("apikey") || k.contains("api_key"))) {
+                return e.getValue();
+            }
+        }
+        for (AuthenticatorSpec v : branches.values()) {
+            if (v != null && !v.isOAuth()) return v;
+        }
+        return this;
+    }
+
     // ── inner classes ─────────────────────────────────────────────────────────
 
     /** Describes where to inject a value (header, query param, path, etc.). */
