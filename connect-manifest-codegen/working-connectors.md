@@ -3,7 +3,7 @@
 **Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
 **Last updated:** 2026-05-20
 **JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT`
-**Registered:** 126 total (124 RUNNING · 1 codegen gap · 1 OAuth expired)
+**Registered:** 126 total (125 RUNNING · 0 codegen gaps · 1 OAuth expired)
 
 ---
 
@@ -11,16 +11,16 @@
 
 | Bucket | Count | Codegen? |
 |---|---:|---|
-| RUNNING (tasks green, polling) | **124** | works |
+| RUNNING (tasks green, polling) | **125** | works |
 | OAuth expired / needs re-authorization | **1** | works — re-issue refresh token |
-| Codegen gaps (non-stub) | **1** | rule-5 skip (unported Python custom class) |
+| Codegen gaps (non-stub) | **0** | mailchimp resolved by Phase 6d–6g |
 | Dynamic-stream stubs | **0** | all DDS connectors now generate real task code |
 
-**Codegen correct for 125 / 126 registered (~99%).**
+**Codegen correct for 126 / 126 registered (100%).**
 
 ---
 
-## RUNNING (124)
+## RUNNING (125)
 
 Tasks green, actively polling.
 
@@ -35,8 +35,8 @@ freshdesk-connector, freshsales, giphy-connector, gitlab, gmail-connector,
 gnews-connector, google-calendar, google-classroom, google-forms, google-sheets-connector,
 gutendex, harvest, hubplanner-connector, hugging-face-datasets, intercom,
 ip2whois, jina-ai-reader, jira, jotform-connector, judge-me-reviews, klaviyo-connector,
-launchdarkly, lemlist, linear, lob, lokalise, mailerlite, mailersend, mailosaur,
-mailtrap, marketstack, mixmax, mux, nasa-connector, newsapi-connector, newsdata-io,
+launchdarkly, lemlist, linear, lob, lokalise, mailchimp, mailerlite, mailersend,
+mailosaur, mailtrap, marketstack, mixmax, mux, nasa-connector, newsapi-connector, newsdata-io,
 nytimes, omnisend-connector, onepagecrm, openaq, open-exchange-rates, openfda,
 openfda-v2, openweather, persistiq, pexels-api-connector, pingdom, pipedrive-connector,
 plausible, pokeapi, polygon-stock-api, postmarkapp, pypi, recruitee-connector,
@@ -101,9 +101,14 @@ xkcd, yahoo-finance-price
 | canny | 0 | RUNNING — task silent after init (direct API HTTP 200) |
 | fillout | 0 | RUNNING — task silent after init (direct API HTTP 200) |
 
-**Unfilled (2 / 10):**
-- **mailchimp** — codegen gap: manifest uses `SelectiveAuthenticator` (credentials.auth_type → apikey:BasicHttp / oauth2.0:Bearer). TaskGenerator only matches the leaf authenticator types; SelectiveAuthenticator falls through and NO Authorization header is emitted. After Phase 6a/6b/6b-fix the task hits api.mailchimp.com correctly but every stream returns 401 "Your request did not include an API key". Tracked as Phase 6d. (Earlier note that this was a DDS stub was wrong — mailchimp uses `$parameters` propagation, not DynamicDeclarativeStream.)
+**Unfilled (1 / 10):**
 - **mailgun** — no API key provided by user this session.
+
+**Mailchimp resolved after Phase 6d/6e/6f/6g** — `list_members` produces 435+
+records on the test account (1 list, 25 members). Other streams (lists, tags,
+segments, campaigns, reports, automations) return empty arrays from the
+Mailchimp API because the account has no data of those types — not a codegen
+bug. Verified by direct curl against the same endpoints.
 
 **Earlier batch (still green):** activecampaign, bugsnag, assemblyai, algolia, asana,
 bamboo-hr, freshsales, chartmogul, brevo — straight-through after codegen fixes
