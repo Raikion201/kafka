@@ -2981,15 +2981,16 @@ public class TaskGenerator {
         body.endControlFlow();
         body.beginControlFlow("if (action == $T.FAIL)", RESPONSE_ACTION);
         body.addStatement(
-            "throw new $T(resolution.errorMessage() != null ? resolution.errorMessage()"
-                + " : \"Request failed with status \" + resp.statusCode())",
+            "throw new $T((resolution.errorMessage() != null ? resolution.errorMessage()"
+                + " : \"Request failed with status \" + resp.statusCode())"
+                + " + \" url=\" + request.uri())",
             CONNECT_EXCEPTION);
         body.endControlFlow();
         body.beginControlFlow("if (attempt >= retryPolicy.maxRetries() || $T.currentTimeMillis() >= deadline)",
             System.class);
         body.addStatement(
             "throw new $T(\"Exhausted retries (\" + (attempt + 1) + \" attempts) for status \" "
-                + "+ resp.statusCode())",
+                + "+ resp.statusCode() + \" url=\" + request.uri())",
             CONNECT_EXCEPTION);
         body.endControlFlow();
         body.addStatement("$T sleepMs = backoffStrategy.backoffMillis(resp, attempt)", Long.class);
