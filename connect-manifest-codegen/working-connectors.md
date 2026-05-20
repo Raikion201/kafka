@@ -102,7 +102,7 @@ xkcd, yahoo-finance-price
 | fillout | 0 | RUNNING — task silent after init (direct API HTTP 200) |
 
 **Unfilled (2 / 10):**
-- **mailchimp** — codegen gap: `Mailchimp` is a DDS rule-5 stub (`Dynamic-stream codegen not yet supported for connector 'SourceMailchimpSource'`). Will FAIL on start. Same bucket as public-apis and notion's `NotionUserTransformation`.
+- **mailchimp** — codegen gap: manifest uses `SelectiveAuthenticator` (credentials.auth_type → apikey:BasicHttp / oauth2.0:Bearer). TaskGenerator only matches the leaf authenticator types; SelectiveAuthenticator falls through and NO Authorization header is emitted. After Phase 6a/6b/6b-fix the task hits api.mailchimp.com correctly but every stream returns 401 "Your request did not include an API key". Tracked as Phase 6d. (Earlier note that this was a DDS stub was wrong — mailchimp uses `$parameters` propagation, not DynamicDeclarativeStream.)
 - **mailgun** — no API key provided by user this session.
 
 **Earlier batch (still green):** activecampaign, bugsnag, assemblyai, algolia, asana,
