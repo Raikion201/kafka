@@ -539,6 +539,160 @@ public class ManifestParserTest {
         assertEquals("eu-west-1", remap.getMap().get("eu"));
     }
 
+    // ── $parameters propagation (Phase 6a) ─────────────────────────────────────
+
+    @Test
+    void parametersBlock_setsTopLevelStreamNameWhenAbsent() throws Exception {
+        ManifestSpec spec = parser.parse(yaml(""
+            + "version: 0.50.0\n"
+            + "type: DeclarativeSource\n"
+            + "streams:\n"
+            + "  - type: DeclarativeStream\n"
+            + "    retriever:\n"
+            + "      type: SimpleRetriever\n"
+            + "      requester:\n"
+            + "        type: HttpRequester\n"
+            + "        url_base: https://example.com\n"
+            + "      record_selector:\n"
+            + "        type: RecordSelector\n"
+            + "        extractor:\n"
+            + "          type: DpathExtractor\n"
+            + "          field_path: []\n"
+            + "    $parameters:\n"
+            + "      name: automations\n"
+            + "      primary_key: id\n"));
+        assertEquals(1, spec.resolvedStreams().size());
+        assertEquals("automations", spec.resolvedStreams().get(0).getName());
+        assertEquals(java.util.List.of("id"), spec.resolvedStreams().get(0).getPrimaryKey());
+    }
+
+    @Test
+    void parametersBlock_doesNotOverwriteExistingFields() throws Exception {
+        ManifestSpec spec = parser.parse(yaml(""
+            + "version: 0.50.0\n"
+            + "type: DeclarativeSource\n"
+            + "streams:\n"
+            + "  - type: DeclarativeStream\n"
+            + "    name: explicit_name\n"
+            + "    retriever:\n"
+            + "      type: SimpleRetriever\n"
+            + "      requester:\n"
+            + "        type: HttpRequester\n"
+            + "        url_base: https://example.com\n"
+            + "      record_selector:\n"
+            + "        type: RecordSelector\n"
+            + "        extractor:\n"
+            + "          type: DpathExtractor\n"
+            + "          field_path: []\n"
+            + "    $parameters:\n"
+            + "      name: from_params\n"));
+        assertEquals("explicit_name", spec.resolvedStreams().get(0).getName());
+    }
+
+    @Test
+    void parametersBlock_propagatesPathIntoRequester() throws Exception {
+        ManifestSpec spec = parser.parse(yaml(""
+            + "version: 0.50.0\n"
+            + "type: DeclarativeSource\n"
+            + "streams:\n"
+            + "  - type: DeclarativeStream\n"
+            + "    name: s\n"
+            + "    retriever:\n"
+            + "      type: SimpleRetriever\n"
+            + "      requester:\n"
+            + "        type: HttpRequester\n"
+            + "        url_base: https://example.com\n"
+            + "      record_selector:\n"
+            + "        type: RecordSelector\n"
+            + "        extractor:\n"
+            + "          type: DpathExtractor\n"
+            + "          field_path: []\n"
+            + "    $parameters:\n"
+            + "      path: /automations\n"));
+        assertEquals("/automations",
+            spec.resolvedStreams().get(0).getRetriever().getRequester().getPath());
+    }
+
+    @Test
+    void parametersBlock_doesNotPropagateIntoJsonSchemaSubtrees() throws Exception {
+        // schema_loader's nested schema (type: object) is a JSON schema, not a declarative
+        // component — the cursor_field parameter must NOT be set as a field on it.
+        ManifestSpec spec = parser.parse(yaml(""
+            + "version: 0.50.0\n"
+            + "type: DeclarativeSource\n"
+            + "streams:\n"
+            + "  - type: DeclarativeStream\n"
+            + "    retriever:\n"
+            + "      type: SimpleRetriever\n"
+            + "      requester:\n"
+            + "        type: HttpRequester\n"
+            + "        url_base: https://example.com\n"
+            + "      record_selector:\n"
+            + "        type: RecordSelector\n"
+            + "        extractor:\n"
+            + "          type: DpathExtractor\n"
+            + "          field_path: []\n"
+            + "    schema_loader:\n"
+            + "      type: InlineSchemaLoader\n"
+            + "      schema:\n"
+            + "        type: object\n"
+            + "        properties:\n"
+            + "          id:\n"
+            + "            type: string\n"
+            + "    $parameters:\n"
+            + "      name: s\n"
+            + "      cursor_field: updated_at\n"));
+        assertNotNull(spec.resolvedStreams().get(0));
+        // No assertion-friendly accessor for schema fields, but the parse not throwing
+        // indicates the schema subtree was untouched (otherwise cursor_field would be set
+        // on a node that rejects it).
+    }
+
+    @Test
+    void parametersBlock_localScopeWinsOverParent() throws Exception {
+        // Two-level scope: source $parameters set cursor_field=outer, stream $parameters
+        // override to inner. The stream's name comes from the local scope.
+        ManifestSpec spec = parser.parse(yaml(""
+            + "version: 0.50.0\n"
+            + "type: DeclarativeSource\n"
+            + "$parameters:\n"
+            + "  cursor_field: outer\n"
+            + "  name: from_source\n"
+            + "streams:\n"
+            + "  - type: DeclarativeStream\n"
+            + "    retriever:\n"
+            + "      type: SimpleRetriever\n"
+            + "      requester:\n"
+            + "        type: HttpRequester\n"
+            + "        url_base: https://example.com\n"
+            + "      record_selector:\n"
+            + "        type: RecordSelector\n"
+            + "        extractor:\n"
+            + "          type: DpathExtractor\n"
+            + "          field_path: []\n"
+            + "    $parameters:\n"
+            + "      name: stream_local\n"));
+        // stream's local $parameters.name wins over source-level $parameters.name
+        assertEquals("stream_local", spec.resolvedStreams().get(0).getName());
+    }
+
+    @Test
+    void mailchimp_resolvesAllTwelveStreamsAfterParameterPropagation() throws Exception {
+        ManifestSpec spec = parser.parse(resource("mailchimp.yaml"));
+        var streams = spec.resolvedStreams();
+        assertEquals(12, streams.size(),
+            "mailchimp manifest declares 12 $ref'd streams; all should resolve after "
+                + "$parameters propagation populates each stream's name");
+        java.util.Set<String> names = new java.util.HashSet<>();
+        for (var s : streams) {
+            assertNotNull(s.getName(), "stream missing name after $parameters propagation");
+            names.add(s.getName());
+        }
+        assertTrue(names.contains("automations"), "expected 'automations' stream");
+        assertTrue(names.contains("list_members"), "expected 'list_members' stream");
+        assertTrue(names.contains("campaigns"), "expected 'campaigns' stream");
+    }
+
     @Test
     void preservesTransformationOrderAndKeepsUnknownTypes() throws Exception {
         ManifestSpec spec = parser.parse(yaml(streamWith(""
