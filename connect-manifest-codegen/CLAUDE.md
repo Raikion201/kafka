@@ -123,6 +123,37 @@ This applies to Phase 2 of the Google Ads work and to any future connector
 that has an "official Java SDK" — we re-implement against the underlying
 HTTP API, same way the Airbyte Python source does it.
 
+## 6. Track unfillable connectors after every credentialing session
+
+When the user asks for N connectors to credential and registration of one or
+more fails, never lose that information. At the end of the session, write up
+exactly which connectors did not get filled and why, so the next session
+doesn't repeat the same dead-end suggestions.
+
+Reasons a connector is "unfillable" include:
+- Vendor signup requires a US mobile number, business email, or credit card
+- Free tier doesn't expose the data the manifest expects (paid-only streams)
+- OAuth flow needs a redirect URI we can't host / a domain we don't own
+- The connector isn't in our codegen manifest set at all (no source-<x>.yaml)
+- Codegen gap: DDS, AsyncRetriever, CustomAuthenticator, etc. — rule-5 skip
+- The credentials registered fine but the task is silent — vendor-config issue
+
+What to do:
+
+1. Before suggesting a connector for credentialing, verify it exists in
+   `src/test/resources/manifests/` (a `find -iname "source-<name>*"` is
+   enough). Do not suggest connectors that aren't in our manifest set.
+2. At the end of any session that registered new connectors, update
+   `working-connectors.md` with a per-connector outcome:
+   - record count (or 0 if quiet) for RUNNING ones
+   - the specific reason any requested connector wasn't filled
+3. In the session's commit message, do NOT include diagnostic colour like
+   "RUNNING but quiet — task silent after init". The user has asked for
+   commit messages to stay neutral; keep the diagnostics in the doc body,
+   not in git history.
+4. If the user requested 10 and only 9 succeeded, call it out explicitly in
+   your end-of-session report — do not silently drop the missing one.
+
 ## What this means in practice
 
 A typical change loop:
