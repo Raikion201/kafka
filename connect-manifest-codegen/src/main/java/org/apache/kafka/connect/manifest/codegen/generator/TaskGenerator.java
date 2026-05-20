@@ -982,7 +982,14 @@ public class TaskGenerator {
         body.addStatement("$T nextCursor = null", String.class);
 
         body.beginControlFlow("do");
-        body.addStatement("$T urlBuilder = new $T($S)", StringBuilder.class, StringBuilder.class, joinUrl(baseUrl, path));
+        String fullParentUrl = joinUrl(baseUrl, path);
+        if (containsJinja(fullParentUrl)) {
+            body.addStatement("$T urlBuilder = new $T($L)",
+                StringBuilder.class, StringBuilder.class, interpolateTemplate(fullParentUrl));
+        } else {
+            body.addStatement("$T urlBuilder = new $T($S)",
+                StringBuilder.class, StringBuilder.class, fullParentUrl);
+        }
 
         // Append cursor pagination token if present (not RequestPath).
         if (parentPaginator != null && parentPaginator.isCursor()
