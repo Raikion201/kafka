@@ -877,17 +877,18 @@ public class TaskGenerator {
             // For RequestPath cursor, the cursor itself is the full URL for page 2+.
             // For the first page, build the URL from base + path.
             if (noPartitionVar) {
-                b.addStatement("$T url = (nextCursor != null) ? nextCursor : $S",
-                    String.class, joinUrl(baseUrl, rawPath));
+                String full = joinUrl(baseUrl, rawPath);
+                if (containsJinja(full)) {
+                    b.addStatement("$T url = (nextCursor != null) ? nextCursor : $L",
+                        String.class, interpolateTemplate(full));
+                } else {
+                    b.addStatement("$T url = (nextCursor != null) ? nextCursor : $S",
+                        String.class, full);
+                }
             } else {
                 String before = rawPath.substring(0, m.start());
                 String after  = rawPath.substring(m.end());
-                b.addStatement(
-                    "$T _baseUrl = $S + $T.encode(_partitionKey, $T.UTF_8) + $S",
-                    String.class, joinUrl(baseUrl, before),
-                    ClassName.get("java.net", "URLEncoder"),
-                    ClassName.get("java.nio.charset", "StandardCharsets"),
-                    after);
+                emitSubstreamBaseUrlDecl(b, "_baseUrl", joinUrl(baseUrl, before), after);
                 b.addStatement("$T url = (nextCursor != null) ? nextCursor : _baseUrl", String.class);
             }
             return b.build();
@@ -895,18 +896,18 @@ public class TaskGenerator {
 
         // Standard urlBuilder path.
         if (noPartitionVar) {
-            b.addStatement("$T urlBuilder = new $T($S)",
-                StringBuilder.class, StringBuilder.class, joinUrl(baseUrl, rawPath));
+            String full = joinUrl(baseUrl, rawPath);
+            if (containsJinja(full)) {
+                b.addStatement("$T urlBuilder = new $T($L)",
+                    StringBuilder.class, StringBuilder.class, interpolateTemplate(full));
+            } else {
+                b.addStatement("$T urlBuilder = new $T($S)",
+                    StringBuilder.class, StringBuilder.class, full);
+            }
         } else {
             String before = rawPath.substring(0, m.start());
             String after  = rawPath.substring(m.end());
-            b.addStatement(
-                "$T urlBuilder = new $T($S + $T.encode(_partitionKey, $T.UTF_8) + $S)",
-                StringBuilder.class, StringBuilder.class,
-                joinUrl(baseUrl, before),
-                ClassName.get("java.net", "URLEncoder"),
-                ClassName.get("java.nio.charset", "StandardCharsets"),
-                after);
+            emitSubstreamUrlBuilderDecl(b, joinUrl(baseUrl, before), after);
         }
 
         // Inject parent_stream_configs[].request_option (Python substream_partition_router.py
@@ -1550,6 +1551,62 @@ public class TaskGenerator {
         }
         b.addStatement("$T urlBuilder = new $T($L)",
             StringBuilder.class, StringBuilder.class, interpolateTemplate(combined));
+    }
+
+    private static boolean containsJinja(String s) {
+        return s != null && (s.contains("{{") || s.contains("{%"));
+    }
+
+    /**
+     * Emits a {@code StringBuilder urlBuilder = new StringBuilder(<before> + URLEncoder.encode(_partitionKey,UTF_8) + <after>)}
+     * declaration. {@code before} and {@code after} are URL segments that may contain Jinja
+     * templates (e.g. {@code https://{{ config['data_center'] }}.api.mailchimp.com/3.0/lists/})
+     * — when they do, they're routed through {@code render(...)} so runtime config values
+     * (apikey datacenter suffixes, subdomains) get substituted.
+     */
+    private void emitSubstreamUrlBuilderDecl(CodeBlock.Builder b, String before, String after) {
+        if (!containsJinja(before) && !containsJinja(after)) {
+            b.addStatement(
+                "$T urlBuilder = new $T($S + $T.encode(_partitionKey, $T.UTF_8) + $S)",
+                StringBuilder.class, StringBuilder.class,
+                before,
+                ClassName.get("java.net", "URLEncoder"),
+                ClassName.get("java.nio.charset", "StandardCharsets"),
+                after);
+            return;
+        }
+        b.addStatement(
+            "$T urlBuilder = new $T($L + $T.encode(_partitionKey, $T.UTF_8) + $L)",
+            StringBuilder.class, StringBuilder.class,
+            containsJinja(before) ? interpolateTemplate(before) : CodeBlock.of("$S", before),
+            ClassName.get("java.net", "URLEncoder"),
+            ClassName.get("java.nio.charset", "StandardCharsets"),
+            containsJinja(after) ? interpolateTemplate(after) : CodeBlock.of("$S", after));
+    }
+
+    /**
+     * Like {@link #emitSubstreamUrlBuilderDecl} but emits a {@code String <name> = ...} for the
+     * RequestPath paginator path where the result is later guarded by a {@code nextCursor !=
+     * null} check.
+     */
+    private void emitSubstreamBaseUrlDecl(CodeBlock.Builder b, String varName, String before, String after) {
+        if (!containsJinja(before) && !containsJinja(after)) {
+            b.addStatement(
+                "$T $L = $S + $T.encode(_partitionKey, $T.UTF_8) + $S",
+                String.class, varName,
+                before,
+                ClassName.get("java.net", "URLEncoder"),
+                ClassName.get("java.nio.charset", "StandardCharsets"),
+                after);
+            return;
+        }
+        b.addStatement(
+            "$T $L = $L + $T.encode(_partitionKey, $T.UTF_8) + $L",
+            String.class, varName,
+            containsJinja(before) ? interpolateTemplate(before) : CodeBlock.of("$S", before),
+            ClassName.get("java.net", "URLEncoder"),
+            ClassName.get("java.nio.charset", "StandardCharsets"),
+            containsJinja(after) ? interpolateTemplate(after) : CodeBlock.of("$S", after));
     }
 
     /**
