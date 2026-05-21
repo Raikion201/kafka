@@ -182,6 +182,35 @@ What to do:
 4. If the user requested 10 and only 9 succeeded, call it out explicitly in
    your end-of-session report — do not silently drop the missing one.
 
+## 7. Only register connectors to the broker when explicitly asked
+
+Do not start the Kafka broker, start Kafka Connect, or POST connector configs
+to `localhost:8083` on your own initiative — not at session start, not after a
+codegen change, not as a "let me just verify" step. The broker and Connect
+runtime stay stopped by default; storage stays cleared between sessions.
+
+Only bring them up when the user explicitly asks to register new connectors
+or add more connectors in this session (e.g. "register N more", "add
+<connector>", "credential X"). When that ask comes:
+
+1. Start the broker (KRaft) and Kafka Connect.
+2. Register **only the connectors the user named**, using the Makefile's
+   `ONLY=` filter — never bulk-register the whole credentials directory.
+   Use `make -f Makefile.connect register ONLY=foo,bar` (or `register-all
+   ONLY=foo,bar` if you also want to seed from manifests). Plain
+   `make register` / `make register-all` with no `ONLY=` iterates every
+   credentialed properties file and is forbidden in normal sessions —
+   that's a "register everything" command, not what the user asked for.
+3. When the session ends — or when the user says "stop" / "clear storage" —
+   shut Connect and the broker back down and clear `/tmp/kraft-*` data
+   directories. Do not leave them running across sessions.
+
+End-to-end verification of codegen changes (rule 3's "e2e check") still
+requires a running broker, but only do it when the user has asked for that
+verification or for new connector registration in the current session. A
+codegen-only change that the user has not asked to verify end-to-end should
+stop at `compileJava` + tests.
+
 ## What this means in practice
 
 A typical change loop:
