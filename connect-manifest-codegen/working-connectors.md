@@ -139,6 +139,7 @@ discovered.
 | Connector | Reason | Discovered |
 |---|---|---|
 | pagerduty | Free 14-day trial requires credit card / business email to reach the API tokens page; not a self-serve free tier. | 2026-05-21 |
+| delighted | Free trial requires credit card / business gating to reach the API key page; not a self-serve free tier. | 2026-05-21 |
 
 ---
 
