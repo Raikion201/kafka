@@ -170,11 +170,16 @@ What to do:
 
 1. Before suggesting a connector for credentialing, verify it exists in
    `src/test/resources/manifests/` (a `find -iname "source-<name>*"` is
-   enough). Do not suggest connectors that aren't in our manifest set.
+   enough), **and** check that it is not listed in the `## UNFILLABLE`
+   section of `working-connectors.md`. Do not suggest connectors that
+   aren't in our manifest set or that are already known unfillable.
 2. At the end of any session that registered new connectors, update
    `working-connectors.md` with a per-connector outcome:
    - record count (or 0 if quiet) for RUNNING ones
    - the specific reason any requested connector wasn't filled
+   - **append a row to the `## UNFILLABLE` table** for any connector that
+     turned out to need a credit card, business gating, US phone, or other
+     non-self-serve barrier — so we don't suggest it again next round
 3. In the session's commit message, do NOT include diagnostic colour like
    "RUNNING but quiet — task silent after init". The user has asked for
    commit messages to stay neutral; keep the diagnostics in the doc body,

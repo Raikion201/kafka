@@ -104,11 +104,6 @@ xkcd, yahoo-finance-price
 **Unfilled (1 / 10):**
 - **mailgun** — no API key provided by user this session.
 
-**Unfillable — do not re-suggest:**
-- **pagerduty** — free 14-day trial requires a credit card / business email to
-  reach the API tokens page; not a self-serve free tier. Skip on future
-  credentialing rounds.
-
 **Mailchimp resolved after Phase 6d/6e/6f/6g** — `list_members` produces 435+
 records on the test account (1 list, 25 members). Other streams (lists, tags,
 segments, campaigns, reports, automations) return empty arrays from the
@@ -131,6 +126,19 @@ bamboo-hr, freshsales, chartmogul, brevo — straight-through after codegen fixe
 |---|---|---|
 | google-analytics-data-api | Task FAILED | OAuth refresh token expired — re-issue via Google Cloud Console. Codegen is correct. |
 | notion | Task FAILED | `NotionUserTransformation` custom Python class not yet ported. Rule-5 skip. |
+
+---
+
+## UNFILLABLE
+
+Connectors known to be unfillable without paid plans, business gating, or
+infrastructure we don't have. Per CLAUDE.md rule 6, do **not** re-suggest
+these in future credentialing rounds. Append new rows here as they're
+discovered.
+
+| Connector | Reason | Discovered |
+|---|---|---|
+| pagerduty | Free 14-day trial requires credit card / business email to reach the API tokens page; not a self-serve free tier. | 2026-05-21 |
 
 ---
 
