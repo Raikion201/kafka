@@ -1,9 +1,9 @@
 # Working Connectors — Standalone Kafka Connect
 
-**Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
-**Last updated:** 2026-05-20
+**Connect endpoint:** `http://localhost:8084` (group `connect-cluster`)
+**Last updated:** 2026-05-21
 **JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT`
-**Registered:** 126 total (125 RUNNING · 0 codegen gaps · 1 OAuth expired)
+**Registered:** 132 total (130 RUNNING · 0 codegen gaps · 1 OAuth expired · 1 rule-5 stub)
 
 ---
 
@@ -11,16 +11,17 @@
 
 | Bucket | Count | Codegen? |
 |---|---:|---|
-| RUNNING (tasks green, polling) | **125** | works |
+| RUNNING (tasks green, polling) | **130** | works |
 | OAuth expired / needs re-authorization | **1** | works — re-issue refresh token |
+| Rule-5 Python-custom-class stub | **1** | monday — needs `MondayGraphqlRequester` Java port |
 | Codegen gaps (non-stub) | **0** | mailchimp resolved by Phase 6d–6g |
 | Dynamic-stream stubs | **0** | all DDS connectors now generate real task code |
 
-**Codegen correct for 126 / 126 registered (100%).**
+**Codegen correct for 131 / 132 registered (99.2%).** Monday is the single rule-5 hold-out.
 
 ---
 
-## RUNNING (125)
+## RUNNING (130)
 
 Tasks green, actively polling.
 
@@ -44,7 +45,7 @@ revenuecat, rollbar, rss, savvycal, scryfall, sentry-connector, shippo, shortcut
 spacex-api, square, statuspage, stockdata, the-guardian-api-connector, ticketmaster,
 tmdb, todoist-connector, toggl-connector, trello-connector, tvmaze-schedule, typeform,
 us-census-connector, watchmode, weatherstack, whisky-hunter, wikipedia-pageviews,
-xkcd, yahoo-finance-price
+xkcd, yahoo-finance-price, gitbook, statsig, strava, vercel, dropbox-sign
 
 **New connectors credentialed this session (2026-05-18 evening):**
 
@@ -103,6 +104,17 @@ xkcd, yahoo-finance-price
 
 **Unfilled (1 / 10):**
 - **mailgun** — no API key provided by user this session.
+
+**Re-verified this session (2026-05-21) — JAR rebuild + redeploy:**
+
+| Connector | Records | Notes |
+|---|---:|---|
+| vercel | 2,823 | 4 streams: auth_tokens 1412 · teams_member 708 · user 700 · teams 3 |
+| statsig | 1,387 | 4 streams: audit_logs 532 · metrics 525 · users 257 · tags 73. Required new CONSOLE-tier key (the SERVER key returns 403 on `/console/v1/*`). Stale-JAR `end_date` Unix-epoch bug fixed by redeploy — new code formats via `DatetimeWindowHelper`. |
+| gitbook | 824 | 4 streams: users 257 · org_members 191 · organizations 190 · content 186. `insights_traffic` 404s on `free_2024` plan; per-stream isolation absorbs it. Original config had `space_id=<org_id>` — switched to real space id from `/v1/orgs/{org_id}/spaces`. |
+| strava | 80 | `athlete_stats` only. `activities` requires `activity:read_all` scope; user's token has `read` only and Strava UI exposes no scope picker for issued tokens. Per-stream isolation keeps the task RUNNING. |
+| dropbox-sign | 0 | Task healthy; account is empty (0 templates, 0 signature requests). Confirmed by direct curl. |
+| monday | 0 | Rule-5 stub — `MondayGraphqlRequester` Python class needs Java port. All 6 streams emit `[WARN] stream X skipped: No Java implementation registered`. See UNFILLABLE row. |
 
 **Mailchimp resolved after Phase 6d/6e/6f/6g** — `list_members` produces 435+
 records on the test account (1 list, 25 members). Other streams (lists, tags,
