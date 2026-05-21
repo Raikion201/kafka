@@ -141,6 +141,7 @@ discovered.
 | pagerduty | Free 14-day trial requires credit card / business email to reach the API tokens page; not a self-serve free tier. | 2026-05-21 |
 | delighted | Free trial requires credit card / business gating to reach the API key page; not a self-serve free tier. | 2026-05-21 |
 | rentcast | Free tier requires credit card / business gating to reach the API key page; not a self-serve free tier. | 2026-05-21 |
+| reddit | Reddit's Responsible Builder Policy (post-2023 API changes) requires API-access registration / approval even for personal-use script apps; can't create a working dev app self-serve. | 2026-05-21 |
 
 ---
 
