@@ -104,6 +104,11 @@ xkcd, yahoo-finance-price
 **Unfilled (1 / 10):**
 - **mailgun** — no API key provided by user this session.
 
+**Unfillable — do not re-suggest:**
+- **pagerduty** — free 14-day trial requires a credit card / business email to
+  reach the API tokens page; not a self-serve free tier. Skip on future
+  credentialing rounds.
+
 **Mailchimp resolved after Phase 6d/6e/6f/6g** — `list_members` produces 435+
 records on the test account (1 list, 25 members). Other streams (lists, tags,
 segments, campaigns, reports, automations) return empty arrays from the
