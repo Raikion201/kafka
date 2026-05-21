@@ -147,6 +147,7 @@ discovered.
 | n8n | Self-serve signup blocked in 2026-05-21 round; user could not reach API key page without gating. | 2026-05-21 |
 | smaily | Self-serve signup blocked in 2026-05-21 round; user could not reach API key page without gating. | 2026-05-21 |
 | paystack | Self-serve signup blocked in 2026-05-21 round; user could not reach API key page without gating. | 2026-05-21 |
+| monday | Rule-5 Python-custom-class skip. `source-monday/components.py` (472 LoC) defines 6 classes — `MondayGraphqlRequester` (recursive schema-walking GraphQL builder, 5 special builders for boards/items/teams/activity_logs), `MondayIncrementalItemsExtractor` (dpath with fallback), `MondayActivityExtractor` (nested-JSON extraction), `MondayTransformation`, `ItemPaginationStrategy` + `ItemCursorPaginationStrategy` (need codegen-level custom-pagination dispatch), `MondayStateMigration`. Codegen emits a valid `MondaySourceTask` but every stream throws `ConnectException: No Java implementation registered for class_name 'MondayGraphqlRequester'` at start. Full port is multi-phase work; deferred. | 2026-05-21 |
 
 ---
 
