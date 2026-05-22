@@ -116,6 +116,15 @@ workflowmax, xkcd, yahoo-finance-price, zenefits, zenloop, dropbox-sign, gitbook
 | dropbox-sign | 0 | Task healthy; account is empty (0 templates, 0 signature requests). Confirmed by direct curl. |
 | monday | 0 | Rule-5 stub — `MondayGraphqlRequester` Python class needs Java port. All 6 streams emit `[WARN] stream X skipped: No Java implementation registered`. See UNFILLABLE row. |
 
+**New connectors credentialed this session (2026-05-22) — restart from scratch + fixes:**
+
+| Connector | Records | Notes |
+|---|---:|---|
+| grafana | 1,100+ | 3 of 5 streams active (dashboards 460KB · datasources 552KB · folders 23KB). Stream `users` fails 403 (needs `org.users:read` scope); stream `teams` not yet polled. Task RUNNING, partial data. |
+| stripe | 1 | `balance_transactions` stream only. Task RUNNING, lightweight data. Other streams not yet polled. |
+| customer-io | 0 | Task RUNNING and polling successfully from EU endpoint (api-eu.customer.io/v1) after manifest patch. Account has 0 campaigns and 0 newsletters — no data to sync. Codegen works correctly; account is empty. |
+| elasticemail | 0 | All API keys provided (original, second, third) returned "APIKey Expired" or 400 Access Denied. Account credentials are no longer valid. Requires fresh API key generation from vendor. |
+
 **Mailchimp resolved after Phase 6d/6e/6f/6g** — `list_members` produces 435+
 records on the test account (1 list, 25 members). Other streams (lists, tags,
 segments, campaigns, reports, automations) return empty arrays from the
@@ -159,6 +168,7 @@ discovered.
 | n8n | Self-serve signup blocked in 2026-05-21 round; user could not reach API key page without gating. | 2026-05-21 |
 | smaily | Self-serve signup blocked in 2026-05-21 round; user could not reach API key page without gating. | 2026-05-21 |
 | paystack | Self-serve signup blocked in 2026-05-21 round; user could not reach API key page without gating. | 2026-05-21 |
+| elasticemail | Free tier account does not support API access. Three freshly-created API keys all returned "APIKey Expired" or "Access Denied" on free plan. Elasticemail API access requires paid plan tier. | 2026-05-22 |
 | monday | Rule-5 Python-custom-class skip. `source-monday/components.py` (472 LoC) defines 6 classes — `MondayGraphqlRequester` (recursive schema-walking GraphQL builder, 5 special builders for boards/items/teams/activity_logs), `MondayIncrementalItemsExtractor` (dpath with fallback), `MondayActivityExtractor` (nested-JSON extraction), `MondayTransformation`, `ItemPaginationStrategy` + `ItemCursorPaginationStrategy` (need codegen-level custom-pagination dispatch), `MondayStateMigration`. Codegen emits a valid `MondaySourceTask` but every stream throws `ConnectException: No Java implementation registered for class_name 'MondayGraphqlRequester'` at start. Full port is multi-phase work; deferred. | 2026-05-21 |
 
 ---
