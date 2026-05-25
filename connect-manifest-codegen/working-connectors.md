@@ -129,15 +129,15 @@ workflowmax, xkcd, yahoo-finance-price, zenefits, zenloop, dropbox-sign, gitbook
 
 | Connector | Status | Notes |
 |---|---|---|
-| slack | RUNNING | Rule-5 stub on custom classes — `source_declarative_manifest.components.ChannelsRetriever`, `MessagesAndThreadsHttpRequester` not ported. Streams `channels`, `channel_messages`, `threads` skipped; other streams also hit missing implementations. |
+| slack | RUNNING (Rule-5) | Custom Python classes `ChannelsRetriever`, `MessagesAndThreadsHttpRequester` not ported. Streams `channels`, `channel_messages`, `threads` skipped; other streams also hit missing implementations. See UNFILLABLE row. |
 | zendesk-support | RUNNING | OAuth token expired. Error: `invalid_token` — "access token provided is expired, revoked, malformed or invalid for other reasons". Codegen works correctly; token needs refresh. |
 | auth0 | RUNNING | OAuth2 format error. Bearer token header format rejected by Auth0 API (`Bad HTTP authentication header format`). Needs OAuth2 `access_token` in Bearer header, not `credentials` object format. Codegen works; auth flow incomplete. |
 
-**Missing manifests in codegen (6 of 9):**
-- **github** — exists in Airbyte, not in our codegen manifest set; add `source-github.yaml` to enable
+**Missing / unfillable (6 of 9):**
+- **github** — Rule-5 skip: uses GraphQL (`source_github/graphql.py`) and extensive custom Python classes (`streams.py`, `backoff_strategies.py`, `errors_handlers.py`).
+- **shopify** — Rule-5 skip: uses GraphQL (entire `shopify_graphql/` folder) and extensive custom Python classes (`auth.py`, `http_request.py`, `transform.py`, `streams/`).
 - **discord** — no official Airbyte connector available
-- **supabase** — uses PostgreSQL connector (not a dedicated Supabase source in Airbyte)
-- **shopify** — exists in Airbyte, not in our codegen manifest set; add `source-shopify.yaml` to enable
+- **supabase** — uses PostgreSQL connector (not a dedicated Supabase source in Airbyte); non-HTTP / out of scope
 - **heroku** — no official Airbyte connector available
 - **figma** — no official Airbyte connector available
 
@@ -191,8 +191,9 @@ discovered.
 | supabase | Supabase is accessed via PostgreSQL connector in Airbyte; no dedicated `source-supabase` connector exists. Use PostgreSQL connector instead. | 2026-05-25 |
 | heroku | No official Airbyte connector available. Not in Airbyte connector catalog. | 2026-05-25 |
 | figma | No official Airbyte connector available. Not in Airbyte connector catalog. | 2026-05-25 |
-| github | Exists in Airbyte but not in our codegen manifest set. Add `source-github.yaml` to `src/test/resources/manifests/` to enable. | 2026-05-25 |
-| shopify | Exists in Airbyte but not in our codegen manifest set. Add `source-shopify.yaml` to `src/test/resources/manifests/` to enable. | 2026-05-25 |
+| slack | Rule-5 skip: `source_slack/components.py` defines `ChannelsRetriever`, `MessagesAndThreadsHttpRequester` custom Python classes. Task RUNNING but `channels`, `channel_messages`, `threads` streams skip with `No Java implementation registered`. Needs custom-class port via `CustomComponentRegistry`. | 2026-05-25 |
+| github | Rule-5 skip: `source_github/graphql.py` (GraphQL) + custom Python classes in `streams.py`, `backoff_strategies.py`, `errors_handlers.py`. Not a declarative-manifest source. | 2026-05-25 |
+| shopify | Rule-5 skip: entire `shopify_graphql/` folder (GraphQL) + custom Python classes `auth.py`, `http_request.py`, `transform.py`, `streams/`. Not a declarative-manifest source. | 2026-05-25 |
 
 ---
 
