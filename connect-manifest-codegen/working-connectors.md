@@ -188,6 +188,7 @@ discovered.
 | mailgun | Free trial requires credit card / business email to reach the API key page; not a self-serve free tier. | 2026-05-25 |
 | mailjet-mail | Self-serve signup blocked in 2026-05-25 round; user could not reach API key page without gating. | 2026-05-25 |
 | mailjet-sms | Same Mailjet account gating as mailjet-mail. | 2026-05-25 |
+| datadog | Free 14-day trial requires credit card / business gating to reach the API key page; not a self-serve free tier. | 2026-05-25 |
 | monday | Rule-5 Python-custom-class skip. `source-monday/components.py` (472 LoC) defines 6 classes — `MondayGraphqlRequester` (recursive schema-walking GraphQL builder, 5 special builders for boards/items/teams/activity_logs), `MondayIncrementalItemsExtractor` (dpath with fallback), `MondayActivityExtractor` (nested-JSON extraction), `MondayTransformation`, `ItemPaginationStrategy` + `ItemCursorPaginationStrategy` (need codegen-level custom-pagination dispatch), `MondayStateMigration`. Codegen emits a valid `MondaySourceTask` but every stream throws `ConnectException: No Java implementation registered for class_name 'MondayGraphqlRequester'` at start. Full port is multi-phase work; deferred. | 2026-05-21 |
 | discord | No official Airbyte connector available. Custom Discord connectors exist but not in standard Airbyte catalog. Codegen has no source-discord.yaml manifest. | 2026-05-25 |
 | supabase | Supabase is accessed via PostgreSQL connector in Airbyte; no dedicated `source-supabase` connector exists. Use PostgreSQL connector instead. | 2026-05-25 |
