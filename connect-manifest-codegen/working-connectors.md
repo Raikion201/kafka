@@ -3,7 +3,7 @@
 **Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
 **Last updated:** 2026-05-25
 **JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT`
-**Registered:** 155 total (152 RUNNING · 1 OAuth token invalid · 1 auth error · 1 rule-5 stub)
+**Registered:** 169 total (164 RUNNING · 1 OAuth token invalid · 1 auth error · 1 rule-5 stub)
 
 ---
 
@@ -11,26 +11,26 @@
 
 | Bucket | Count | Codegen? |
 |---|---:|---|
-| RUNNING (tasks green, polling) | **150** | works |
+| RUNNING (tasks green, polling) | **164** | works |
 | OAuth expired / needs re-authorization | **1** | works — re-issue refresh token |
 | Rule-5 Python-custom-class stub | **1** | monday — needs `MondayGraphqlRequester` Java port |
 | Codegen gaps (non-stub) | **0** | mailchimp resolved by Phase 6d–6g |
 | Dynamic-stream stubs | **0** | all DDS connectors now generate real task code |
 
-**Codegen correct for 151 / 152 registered (99.3%).** Monday is the single rule-5 hold-out.
+**Codegen correct for 165 / 166 registered (99.4%).** Monday is the single rule-5 hold-out.
 
 ---
 
-## RUNNING (150)
+## RUNNING (164)
 
 Tasks green, actively polling.
 
-activecampaign, airtable, akeneo-connector, algolia, alpha-vantage, amplitude, appfollow,
-apptivo, asana, assemblyai, aviationstack-connector, babelforce, bamboo-hr, basecamp, beamer,
-bigmailer, bitly-connector, boldsign, box-connector, breezy-hr, brevo, bugsnag, buildkite,
-buzzsprout, cal-com-connector, calendly-connector, canny, chargebee, chartmogul, coda-connector,
+activecampaign, airtable, akeneo-connector, algolia, alpha-vantage, amazon-ads, amazon-seller-partner,
+amplitude, appfollow, apptivo, asana, assemblyai, aviationstack-connector, babelforce, bamboo-hr,
+basecamp, beamer, bigmailer, bitly-connector, boldsign, box-connector, breezy-hr, brevo, bugsnag,
+buildkite, buzzsprout, cal-com-connector, calendly-connector, canny, chargebee, chartmogul, coda-connector,
 clockify-connector, close-com-connector, coingecko-coins-connector, coinmarketcap-connector,
-configcat-connector, convertkit, defillama, dockerhub, easypost, emailoctopus, eventbrite,
+configcat-connector, convertkit, defillama, dockerhub, drift, easypost, emailoctopus, eventbrite,
 exchange-rates, fillout, finnhub, formbricks, freshdesk-connector, freshsales, fulcrum,
 gainsight-px, giphy-connector, gitlab, gmail-connector, gnews-connector, google-calendar,
 google-classroom, google-forms, google-sheets-connector, gutendex, harvest, hibob,
@@ -39,13 +39,14 @@ jina-ai-reader, jira, jotform-connector, judge-me-reviews, klarna, klaviyo-conne
 launchdarkly, lemlist, linear, lob, lokalise, mailchimp, mailerlite, mailersend, mailosaur,
 mailtrap, marketo, marketstack, microsoft-teams, mixmax, mux, nasa-connector, newsapi-connector,
 newsdata-io, nytimes, omnisend-connector, onepagecrm, openaq, open-exchange-rates, openfda,
-openfda-v2, openweather, partnerize, persistiq, pexels-api-connector, pingdom, pipedrive-connector,
-plausible, pokeapi, polygon-stock-api, posthog, postmarkapp, pypi, recruitee-connector, reply-io,
-revenuecat, rollbar, rss, savvycal, scryfall, sentry-connector, shippo, shortcut, sigma-computing,
-spacex-api, square, statsig, statuspage, stockdata, strava, survicate, the-guardian-api-connector,
-ticketmaster, tmdb, todoist-connector, toggl-connector, trello-connector, tvmaze-schedule, typeform,
-us-census-connector, uservoice, vercel, watchmode, weatherstack, whisky-hunter, wikipedia-pageviews,
-workflowmax, xkcd, yahoo-finance-price, zenefits, zenloop, dropbox-sign, gitbook
+openfda-v2, openweather, onesignal, partnerize, persistiq, pexels-api-connector, pingdom, pipedrive-connector,
+plaid, plausible, pokeapi, polygon-stock-api, posthog, postmarkapp, pypi, recruitee-connector, reply-io,
+revenuecat, rollbar, rss, savvycal, scryfall, sendgrid, sentry-connector, shippo, shortcut, sigma-computing,
+simfin, snapchat-marketing, spacex-api, sparkpost, square, statsig, statuspage, stockdata, strava, survicate,
+svix, the-guardian-api-connector, ticketmaster, tiktok-marketing, tmdb, todoist-connector, toggl-connector,
+trello-connector, tvmaze-schedule, typeform, us-census-connector, uservoice, vantage, vercel, watchmode,
+weatherstack, whisky-hunter, wikipedia-pageviews, workflowmax, wufoo, xkcd, yahoo-finance-price, zenefits,
+zenloop, zapsign, dropbox-sign, gitbook
 
 **New connectors credentialed this session (2026-05-18 evening):**
 
