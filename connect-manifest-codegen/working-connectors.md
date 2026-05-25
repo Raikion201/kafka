@@ -1,9 +1,9 @@
 # Working Connectors — Standalone Kafka Connect
 
-**Connect endpoint:** `http://localhost:8084` (group `connect-cluster`)
-**Last updated:** 2026-05-21
+**Connect endpoint:** `http://localhost:8083` (group `connect-cluster`)
+**Last updated:** 2026-05-25
 **JAR:** `connect-manifest-codegen-4.4.0-SNAPSHOT`
-**Registered:** 152 total (150 RUNNING · 0 codegen gaps · 1 OAuth expired · 1 rule-5 stub)
+**Registered:** 155 total (152 RUNNING · 1 OAuth token invalid · 1 auth error · 1 rule-5 stub)
 
 ---
 
@@ -125,6 +125,22 @@ workflowmax, xkcd, yahoo-finance-price, zenefits, zenloop, dropbox-sign, gitbook
 | customer-io | 0 | Task RUNNING and polling successfully from EU endpoint (api-eu.customer.io/v1) after manifest patch. Account has 0 campaigns and 0 newsletters — no data to sync. Codegen works correctly; account is empty. |
 | elasticemail | 0 | All API keys provided (original, second, third) returned "APIKey Expired" or 400 Access Denied. Account credentials are no longer valid. Requires fresh API key generation from vendor. |
 
+**New connectors credentialed this session (2026-05-25) — 3 of 9 have manifests:**
+
+| Connector | Status | Notes |
+|---|---|---|
+| slack | RUNNING | Rule-5 stub on custom classes — `source_declarative_manifest.components.ChannelsRetriever`, `MessagesAndThreadsHttpRequester` not ported. Streams `channels`, `channel_messages`, `threads` skipped; other streams also hit missing implementations. |
+| zendesk-support | RUNNING | OAuth token expired. Error: `invalid_token` — "access token provided is expired, revoked, malformed or invalid for other reasons". Codegen works correctly; token needs refresh. |
+| auth0 | RUNNING | OAuth2 format error. Bearer token header format rejected by Auth0 API (`Bad HTTP authentication header format`). Needs OAuth2 `access_token` in Bearer header, not `credentials` object format. Codegen works; auth flow incomplete. |
+
+**Missing manifests in codegen (6 of 9):**
+- **github** — exists in Airbyte, not in our codegen manifest set; add `source-github.yaml` to enable
+- **discord** — no official Airbyte connector available
+- **supabase** — uses PostgreSQL connector (not a dedicated Supabase source in Airbyte)
+- **shopify** — exists in Airbyte, not in our codegen manifest set; add `source-shopify.yaml` to enable
+- **heroku** — no official Airbyte connector available
+- **figma** — no official Airbyte connector available
+
 **Mailchimp resolved after Phase 6d/6e/6f/6g** — `list_members` produces 435+
 records on the test account (1 list, 25 members). Other streams (lists, tags,
 segments, campaigns, reports, automations) return empty arrays from the
@@ -171,6 +187,12 @@ discovered.
 | elasticemail | Free tier account does not support API access. Three freshly-created API keys all returned "APIKey Expired" or "Access Denied" on free plan. Elasticemail API access requires paid plan tier. | 2026-05-22 |
 | mailgun | Free trial requires credit card / business email to reach the API key page; not a self-serve free tier. | 2026-05-25 |
 | monday | Rule-5 Python-custom-class skip. `source-monday/components.py` (472 LoC) defines 6 classes — `MondayGraphqlRequester` (recursive schema-walking GraphQL builder, 5 special builders for boards/items/teams/activity_logs), `MondayIncrementalItemsExtractor` (dpath with fallback), `MondayActivityExtractor` (nested-JSON extraction), `MondayTransformation`, `ItemPaginationStrategy` + `ItemCursorPaginationStrategy` (need codegen-level custom-pagination dispatch), `MondayStateMigration`. Codegen emits a valid `MondaySourceTask` but every stream throws `ConnectException: No Java implementation registered for class_name 'MondayGraphqlRequester'` at start. Full port is multi-phase work; deferred. | 2026-05-21 |
+| discord | No official Airbyte connector available. Custom Discord connectors exist but not in standard Airbyte catalog. Codegen has no source-discord.yaml manifest. | 2026-05-25 |
+| supabase | Supabase is accessed via PostgreSQL connector in Airbyte; no dedicated `source-supabase` connector exists. Use PostgreSQL connector instead. | 2026-05-25 |
+| heroku | No official Airbyte connector available. Not in Airbyte connector catalog. | 2026-05-25 |
+| figma | No official Airbyte connector available. Not in Airbyte connector catalog. | 2026-05-25 |
+| github | Exists in Airbyte but not in our codegen manifest set. Add `source-github.yaml` to `src/test/resources/manifests/` to enable. | 2026-05-25 |
+| shopify | Exists in Airbyte but not in our codegen manifest set. Add `source-shopify.yaml` to `src/test/resources/manifests/` to enable. | 2026-05-25 |
 
 ---
 
