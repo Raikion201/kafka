@@ -169,6 +169,7 @@ discovered.
 | smaily | Self-serve signup blocked in 2026-05-21 round; user could not reach API key page without gating. | 2026-05-21 |
 | paystack | Self-serve signup blocked in 2026-05-21 round; user could not reach API key page without gating. | 2026-05-21 |
 | elasticemail | Free tier account does not support API access. Three freshly-created API keys all returned "APIKey Expired" or "Access Denied" on free plan. Elasticemail API access requires paid plan tier. | 2026-05-22 |
+| mailgun | Free trial requires credit card / business email to reach the API key page; not a self-serve free tier. | 2026-05-25 |
 | monday | Rule-5 Python-custom-class skip. `source-monday/components.py` (472 LoC) defines 6 classes — `MondayGraphqlRequester` (recursive schema-walking GraphQL builder, 5 special builders for boards/items/teams/activity_logs), `MondayIncrementalItemsExtractor` (dpath with fallback), `MondayActivityExtractor` (nested-JSON extraction), `MondayTransformation`, `ItemPaginationStrategy` + `ItemCursorPaginationStrategy` (need codegen-level custom-pagination dispatch), `MondayStateMigration`. Codegen emits a valid `MondaySourceTask` but every stream throws `ConnectException: No Java implementation registered for class_name 'MondayGraphqlRequester'` at start. Full port is multi-phase work; deferred. | 2026-05-21 |
 
 ---
