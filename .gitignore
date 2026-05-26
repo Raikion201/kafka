@@ -62,8 +62,3 @@ docker/test/report_*.html
 kafka.Kafka
 __pycache__
 
-# Local-only Airbyte manifest catalog used for codegen iteration tests.
-# Kept on disk for local testing; not pushed to remote.
-connect-manifest-codegen/src/test/resources/manifests/source-*.yaml
-connect-manifest-codegen/src/test/resources/manifests/source_*.yaml
-connect-manifest-codegen/src/test/resources/manifests/google_sheets.yaml
